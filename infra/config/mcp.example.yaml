@@ -1,0 +1,29 @@
+# =====================================================================
+# mcp.yaml — registered MCP servers (stdio transport)
+# =====================================================================
+servers:
+  database:
+    command: mcp-server-database
+    args: []
+    env:
+      EAIDE_DB_DSN_ORDERS_PG: "postgresql://readonly@db-1.internal:5432/orders?readonly=1"
+      EAIDE_DB_DSN_BILLING_MY: "mysql://readonly@db-2.internal:3306/billing?readonly=1"
+
+  rest:
+    command: mcp-server-rest
+    args: []
+    env:
+      EAIDE_REST_ALLOWED_HOSTS: '["api.internal.example.com","jira.internal.example.com"]'
+      EAIDE_REST_ALLOWED_METHODS_BY_HOST: '{"jira.internal.example.com":["GET","POST"]}'
+
+  ssh:
+    command: mcp-server-ssh
+    args: []
+    env:
+      EAIDE_SSH_ALLOWED_HOSTS: '["bastion.internal.example.com"]'
+
+  rpa:
+    command: mcp-server-rpa
+    args: []
+    env:
+      EAIDE_RPA_ALLOWED_DOMAINS: '["crm.internal.example.com"]'

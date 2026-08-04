@@ -1,0 +1,49 @@
+{
+  "$schema": "https://schema.tauri.app/config/2.0.0",
+  "productName": "Enterprise AI IDE",
+  "version": "0.1.0",
+  "identifier": "com.eaide.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build",
+    "devUrl": "http://127.0.0.1:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Enterprise AI IDE",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 640,
+        "resizable": true,
+        "decorations": true,
+        "transparent": false,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:8765; worker-src blob:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "nsis",
+    "icon": [
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "resources/*": "./",
+      "../../../config/driver/*": "./config/driver/"
+    },
+    "category": "DeveloperTool",
+    "shortDescription": "Enterprise AI IDE",
+    "longDescription": "Local AI IDE for querying & orchestrating enterprise systems via natural language.",
+    "windows": {
+      "nsis": {
+        "installerHooks": "hooks/eaide-hooks.nsh"
+      }
+    }
+  }
+}

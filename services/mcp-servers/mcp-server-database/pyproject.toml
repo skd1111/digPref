@@ -1,0 +1,24 @@
+[project]
+name = "mcp-server-database"
+version = "0.1.0"
+description = "MCP server — SQL databases (MySQL/Postgres/SQLite) with safety guards"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "mcp>=1.0",
+    "sqlglot>=25",
+    "pydantic>=2.7",
+    "asyncpg>=0.29",
+    "aiomysql>=0.2.0",
+    "aiosqlite>=0.20",
+    "shared-protocol",
+]
+
+[project.scripts]
+mcp-server-database = "mcp_server_database.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcp_server_database"]

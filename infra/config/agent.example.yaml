@@ -1,0 +1,45 @@
+# =====================================================================
+# agent.yaml — copied to ~/.eaide/agent.yaml on first run
+# =====================================================================
+
+server:
+  host: 127.0.0.1
+  port: 8765
+
+llm:
+  routing:
+    simple: ollama           # intent classification, repair — local
+    complex: private         # planning, synthesis — cloud/private
+  ollama:
+    base_url: http://127.0.0.1:11434
+    model: qwen2.5:14b
+  private:
+    # Internal enterprise LLM — OpenAI-compatible chat completions.
+    # Override via env: EAIDE_PRIVATE_LLM_BASE_URL / _API_KEY / _MODEL
+    base_url: http://172.1.0.134:8000/v1
+    api_key: internal-no-auth          # replace with real auth in prod
+    model: DeepSeek-RD-Llama-70B-Int8
+
+mcp:
+  config_path: mcp.yaml
+
+audit:
+  db_path: audit.sqlite
+  # Optional: ship a daily copy to a SIEM over SFTP/HTTPS
+  shipper: null
+
+limits:
+  tool_timeout_sec: 10
+  row_limit: 50
+  context_max_tokens: 8000
+
+hitl:
+  require_for_write: true
+  approval_timeout_sec: 1800
+
+safety:
+  redact_secrets_in_logs: true
+  redact_patterns:
+    - "(?i)password\\s*[:=]\\s*\\S+"
+    - "(?i)api[_-]?key\\s*[:=]\\s*\\S+"
+    - "-----BEGIN [A-Z ]+PRIVATE KEY-----[\\s\\S]+?-----END [A-Z ]+PRIVATE KEY-----"

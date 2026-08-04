@@ -1,0 +1,1 @@
+"""MCP client — multi-server registry + invocation helpers."""

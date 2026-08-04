@@ -1,0 +1,15 @@
+{
+  "name": "@eaide/shared-protocol",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/ts/index.ts",
+  "types": "./src/ts/index.ts",
+  "exports": {
+    ".": "./src/ts/index.ts"
+  },
+  "scripts": {
+    "lint": "eslint . --max-warnings=0",
+    "test": "vitest run"
+  }
+}

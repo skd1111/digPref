@@ -1,0 +1,194 @@
+"""AgentState —— LangGraph 状态机的唯一真相源。
+
+每个节点都通过这个 TypedDict 读写。我们用 Annotated reducer，让 list 字段
+在节点切换时能正确累积。"""
+from __future__ import annotations
+
+from operator import add
+from typing import Annotated, Any, Literal, TypedDict
+
+from langgraph.graph.message import add_messages
+
+
+# ---- Literal types --------------------------------------------------------
+
+Intent = Literal["query", "mutate", "orchestrate", "chitchat"]
+ApprovalDecision = Literal["approve", "reject"]
+NodeName = Literal[
+    "intent", "planner", "decompose", "tool_orchestrator",
+    "tool_runner", "hitl_gate", "repair", "responder",
+    # Phase 4 V0
+    "vision_understand",
+    # Phase 4 V1
+    "local_intent", "rag_retrieve",
+    # Phase 18 双框架
+    "mode_router",
+]
+StepStatus = Literal["running", "ok", "fail", "skipped"]
+
+
+# ---- AgentState ------------------------------------------------------------
+
+class AgentState(TypedDict, total=False):
+    """LangGraph state — every node reads & returns a partial update."""
+
+    # ---- Conversation ----
+    messages: Annotated[list, add_messages]
+    # ^ messages is auto-merged: langgraph's add_messages reducer handles
+    #   both new BaseMessage and {role, content} dict formats.
+    run_id: str | None                          # 本次运行的 thread/run id（子 Agent 关联用）
+
+    # ---- User intent & planning ----
+    user_prompt: str                          # the original user message
+    intent: Intent | None
+    plan: list[dict]                          # ordered tool calls
+    plan_explanation: str | None              # why this plan
+
+    # ---- Phase 12 V2 自动多智能体（Agent 自动判断，非用户手动选择）----
+    multi_agent: bool                         # 本次运行是否使用了多智能体
+    decompose_decision: Any | None            # 自动分解判定结果（含 reason / sub_tasks）
+    sub_agent_reports: Annotated[list[dict], add]  # 子 Agent 回报（自动派生后汇总）
+
+    # ---- 动态工具加载与调用（2026-08-03）----
+    load_stage: str                           # SUMMARY_ONLY | CANDIDATE_REGISTERED | FULL_REGISTERED
+    full_toolset_loaded: bool                 # 是否已全量注册工具
+    registered_tools: list[dict]              # 已注册工具的完整定义（可调用）
+    tool_results: list[dict]                  # 工具执行结果（循环累积）
+    tool_turn_count: int                      # 动态工具循环轮次
+    tool_loop_active: bool                    # 循环内 HITL 审批后路由回循环的标志
+
+    # ---- Loop bookkeeping ----
+    current_step_index: int                   # index into plan[]
+    pending_tool_call: dict | None
+    tool_result: Any | None
+    tool_error: str | None
+    retry_count: int                          # total repair attempts across this run
+
+    # ---- HITL ----
+    approval_id: str | None
+    approval_decision: ApprovalDecision | None
+    approval_decided_at: str | None
+    awaiting_approval: bool                   # signal to SSE adapter
+    approval_options: dict | None             # Phase 18：推荐选项（options/recommended/reason）
+
+    # ---- Trace ----
+    trace: Annotated[list[dict], add]         # append-only trace events
+    step_started_at: str | None
+
+    # ---- Final ----
+    final_answer: str | None
+    sources: list[str]                        # tool results referenced
+    truncated_any: bool
+
+    # ---- Phase 2D V0 Skill 路由 ----
+    active_skill_id: str | None
+    active_skill_name: str | None
+    skill_routing: Any | None                   # SkillRoutingResult (avoid import cycle)
+
+    # ---- Phase 4 V0 本地端侧模型 ----
+    inference_mode: str                         # "normal" | "performance"（默认 normal）
+    screenshot: str | None                      # base64 编码截图
+    vision_question: str | None                 # 截图理解问题（可选）
+    vision_result: str | None                   # 视觉模型输出文字
+
+    # ---- Phase 4 V1 RAG 检索增强 ----
+    rag_context: Any | None                     # RAGContext 实例（含 results + formatted_prompt）
+    system_prompt_addon: str                    # 拼入 system prompt 的片段（来自 RAG）
+
+    # ---- Phase 18 双框架（Coding Agent vs Work Agent）----
+    work_mode: str                              # "full"|"operator"|"auditor"|"analyst"（前端 WorkMode 透传）
+    autonomy: str                               # "interactive"|"auto"（会话级自主性）
+    routing: str | None                         # "coding"|"work"|"mixed"（ModeRouter 判定）
+    routing_overridden: bool                    # 路由结果偏离当前模式默认
+    routing_declaration: str | None             # 偏离声明文案（responder 引用）
+    execution_policies: list[dict]              # 子任务级 ExecutionPolicy（含 framework 标签）
+    error_feedback: list[dict]                  # Auto-Repair 反馈栈（attempt/error/files）
+    repair_attempt: int                         # 当前 repair 次数
+    needs_human_intervention: bool              # repair 达上限后移交人工
+    dual_rules_addon: str                       # Code/Work 双模式执行纪律（注入工具循环 prompt）
+
+
+# ---- Helpers ---------------------------------------------------------------
+
+def empty_state(prompt: str) -> dict:
+    """返回新运行的初始状态（所有字段均为默认值）。
+
+    使用 datetime.timezone.utc 而非 datetime.UTC，兼容 Python 3.10+。
+    """
+    from datetime import datetime, timezone
+    return {
+        "messages": [{"role": "user", "content": prompt}],
+        "run_id": None,
+        "user_prompt": prompt,
+        "intent": None,
+        "plan": [],
+        "plan_explanation": None,
+        "multi_agent": False,
+        "decompose_decision": None,
+        "sub_agent_reports": [],
+        "load_stage": "SUMMARY_ONLY",
+        "full_toolset_loaded": False,
+        "registered_tools": [],
+        "tool_results": [],
+        "tool_turn_count": 0,
+        "tool_loop_active": False,
+        "current_step_index": 0,
+        "pending_tool_call": None,
+        "tool_result": None,
+        "tool_error": None,
+        "retry_count": 0,
+        "approval_id": None,
+        "approval_decision": None,
+        "approval_decided_at": None,
+        "awaiting_approval": False,
+        "approval_options": None,
+        "trace": [],
+        "step_started_at": datetime.now(timezone.utc).isoformat(),
+        "final_answer": None,
+        "sources": [],
+        "truncated_any": False,
+        # Phase 4 V0
+        "inference_mode": "normal",
+        "screenshot": None,
+        "vision_question": None,
+        "vision_result": None,
+        # Phase 4 V1
+        "rag_context": None,
+        "system_prompt_addon": "",
+        # Phase 18 双框架
+        "work_mode": "full",
+        "autonomy": "interactive",
+        "routing": None,
+        "routing_overridden": False,
+        "routing_declaration": None,
+        "execution_policies": [],
+        "error_feedback": [],
+        "repair_attempt": 0,
+        "needs_human_intervention": False,
+        "dual_rules_addon": "",
+    }
+
+
+def next_step(state: AgentState) -> dict | None:
+    """Return the next pending tool call in the plan, or None if done."""
+    plan = state.get("plan") or []
+    idx = state.get("current_step_index", 0)
+    if idx >= len(plan):
+        return None
+    return plan[idx]
+
+
+def advance(state: AgentState) -> dict:
+    return {"current_step_index": state.get("current_step_index", 0) + 1}
+
+
+def record_trace(node: NodeName, status: StepStatus, **meta: Any) -> dict:
+    """构建一条 trace 记录 —— 节点返回此字典作为状态更新的一部分。"""
+    from datetime import datetime, timezone
+    entry: dict[str, Any] = {
+        "node": node,
+        "status": status,
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+    entry.update(meta)
+    return entry

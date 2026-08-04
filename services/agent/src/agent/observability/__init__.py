@@ -1,0 +1,1 @@
+"""Tracing & observability — wraps LangSmith + structured logs."""

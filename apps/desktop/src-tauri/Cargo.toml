@@ -1,0 +1,68 @@
+[package]
+name = "eaide-desktop"
+version = "0.1.0"
+description = "Enterprise AI IDE — desktop shell"
+authors = ["EAIDE Team"]
+edition = "2021"
+rust-version = "1.78"
+
+[lib]
+name = "eaide_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dependencies]
+tauri = { version = "2.0", features = ["devtools"] }
+tauri-plugin-log = "2.0"
+tauri-plugin-os = "2.0"
+tauri-plugin-dialog = "2.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["stream", "json", "blocking"] }
+reqwest-eventsource = "0.6"
+futures-util = "0.3"
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+regex = "1"
+# Phase 1B V1.5 (2026-07-31): builtin hash + base64 工具所需
+sha2 = "0.10"
+base64 = "0.22"
+# Phase 1B V2 (2026-07-31): 高危工具 + hash 算法扩展 + glob crate 真支持
+md-5 = "0.10"
+sha1 = "0.10"
+blake2 = "0.10"
+glob = "0.3"
+# Phase 2F+ V1.5 (2026-07-31): tail -f 文件监控
+notify = { version = "6", features = ["macos_kqueue"] }
+# Phase 2F+ V2 (2026-07-31): GBK 编码支持（中文企业日志）
+encoding_rs = "0.8"
+# Phase 15 V0 (2026-08-03): 前端实时预览引擎 —— 预览 URL 校验
+url = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security", "Win32_System_Console"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+panic = "unwind"
+codegen-units = 1
+lto = true
+incremental = false
+opt-level = "s"
+strip = true

@@ -1,0 +1,1 @@
+"""FastAPI routers — one per logical endpoint group."""

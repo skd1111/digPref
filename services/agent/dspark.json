@@ -1,0 +1,7 @@
+{
+  "draft_model_path": "D:/models/qwen3.5-0.8b.gguf",
+  "context_size": 8192,
+  "gpu_layers": 16,
+  "enable_global": true,
+  "short_output_threshold": 20
+}

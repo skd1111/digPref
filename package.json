@@ -1,0 +1,23 @@
+{
+  "name": "enterprise-ai-ide",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Enterprise Local AI IDE Agent — pnpm workspace root",
+  "packageManager": "pnpm@9.0.0",
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=9"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @eaide/desktop tauri dev",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "format": "pnpm -r format"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/node": "^20.12.0",
+    "prettier": "^3.3.0"
+  }
+}

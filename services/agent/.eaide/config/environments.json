@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "active": "prod",
+  "environments": [
+    {
+      "environment": "dev",
+      "label": "开发",
+      "description": "开发环境（首次启动自动 seed，可删除 / 重命名）",
+      "databases": [],
+      "api_gateways": [],
+      "mcp_servers": [],
+      "target_servers": []
+    },
+    {
+      "environment": "test",
+      "label": "测试",
+      "description": "测试环境（首次启动自动 seed）",
+      "databases": [],
+      "api_gateways": [],
+      "mcp_servers": [],
+      "target_servers": []
+    },
+    {
+      "environment": "staging",
+      "label": "准生产",
+      "description": "准生产环境（首次启动自动 seed）",
+      "databases": [],
+      "api_gateways": [],
+      "mcp_servers": [],
+      "target_servers": []
+    },
+    {
+      "environment": "prod",
+      "label": "生产",
+      "description": "生产环境（首次启动自动 seed）",
+      "databases": [],
+      "api_gateways": [],
+      "mcp_servers": [],
+      "target_servers": []
+    }
+  ]
+}

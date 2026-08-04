@@ -1,0 +1,26 @@
+{
+  "size_gb": 0.002,
+  "big_file": {
+    "op": "generate_and_hash",
+    "size_bytes": 2147483,
+    "elapsed_sec": 0.004,
+    "throughput_mbps": 547.8,
+    "hash_prefix": "d46d5bd136cda40f"
+  },
+  "round_trip": {
+    "op": "write_move_delete_round_trip",
+    "payload_bytes": 1048576,
+    "write_sec": 0.012,
+    "move_sec": 0.005,
+    "delete_sec": 0.002
+  },
+  "glob": {
+    "op": "glob_1000_files",
+    "matches": 1000,
+    "elapsed_sec": 0.006
+  },
+  "shell": {
+    "op": "shell_echo",
+    "elapsed_sec": 0.031
+  }
+}

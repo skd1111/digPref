@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+    /* VSCode 默认用 Segoe UI Variable；这里给一个系统级 fallback */
+    font-family: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system,
+      BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    font-size: 12px;
+    color: theme('colors.vscode.editor-fg');
+    background-color: theme('colors.vscode.editor-bg');
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    user-select: none;
+  }
+
+  /* 输入框、textarea 允许文本选择 */
+  input, textarea, [contenteditable="true"] {
+    user-select: text;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(121, 121, 121, 0.4) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: rgba(121, 121, 121, 0.4);
+    border-radius: 0;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(100, 100, 100, 0.7);
+  }
+  .scrollbar-thin::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+}
+
+/* Phase 2F 代码导航跳转高亮闪烁 */
+@keyframes codenav-flash {
+  0%   { background-color: rgba(255, 220, 100, 0.45); }
+  100% { background-color: transparent; }
+}
+.codenav-flash-highlight {
+  animation: codenav-flash 0.6s ease-out;
+}

@@ -1,0 +1,112 @@
+# =========================
+# OS / IDE
+# =========================
+.DS_Store
+Thumbs.db
+nul
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.swp
+*.swo
+.claude/
+CLAUDE.md
+AGENTS.md
+docs/
+
+# =========================
+# Secrets (NEVER COMMIT)
+# =========================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+credentials/
+vault/
+
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.uv-cache/
+dist/
+build/
+*.egg-info/
+
+# =========================
+# Node / pnpm
+# =========================
+node_modules/
+.pnpm-store/
+.pnpm-debug.log*
+yarn-error.log*
+.npm/
+*.tsbuildinfo
+.next/
+out/
+
+# =========================
+# Rust / Tauri
+# =========================
+target/
+**/target/
+**/*.rs.bk
+Cargo.lock.bak
+src-tauri/target/
+**/src-tauri/gen/
+
+# =========================
+# Build artifacts
+# =========================
+*.app
+*.dmg
+*.exe
+*.msi
+*.deb
+*.rpm
+*.AppImage
+release/
+dist/
+
+# =========================
+# Local DB / Audit logs
+# =========================
+*.sqlite
+*.sqlite-journal
+*.db
+audit/
+logs/
+*.log
+
+# =========================
+# Local tool configs / caches
+# =========================
+.claude/
+.qoder/
+
+# =========================
+# Offline DB driver bundle (regenerated from wheels)
+# =========================
+config/driver/_site/
+config/driver/*.whl
+
+# =========================
+# Tauri generated
+# =========================
+**/src-tauri/gen/

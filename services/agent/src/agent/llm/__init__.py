@@ -1,0 +1,1 @@
+"""LLM model router — abstracts over Ollama (local) and private LLM (cloud)."""

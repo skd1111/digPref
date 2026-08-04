@@ -1,0 +1,274 @@
+"""Phase 7 V1 · Schema 链接 —— 向量检索选 3-5 张最相关表。
+
+安全红线（CLAUDE.md §2）：
+  - 走 LMRouter task='schema_link'（_LOCAL_ONLY_TASKS，强制本地）
+  - 表结构 + 字段注释可能含敏感信息，永不出云
+
+架构师红线（design §4.1）：
+  - 金融系统几百张表、几千字段，绝不把全量 Schema 塞给大模型
+  - 强制裁剪到 3-5 张最相关表（含中文注释）
+
+V1 升级：
+  - 本地 embedding（走 LMRouter task='schema_link'）+ 余弦相似度向量检索
+  - 降级策略：embedding 不可用时退回关键字评分（V0 逻辑）
+  - few-shot 动态选取：从 analysis_tasks 按相似度选 top-3 历史 SQL
+"""
+from __future__ import annotations
+
+import logging
+import math
+from typing import Any
+
+from agent.dataexpert.models import TableSchema
+
+logger = logging.getLogger(__name__)
+
+# 最大选表数（红线：不超过 5 张）
+MAX_TABLES = 5
+
+
+async def select_tables(
+    question: str,
+    schema_cache: list[dict],
+    *,
+    max_tables: int = MAX_TABLES,
+    llm_router: Any = None,
+) -> list[TableSchema]:
+    """向量检索选 3-5 张最相关表（含中文注释）。
+
+    V1 策略：
+      1. 优先走向量检索（LMRouter task='schema_link'，本地 embedding）
+      2. 降级：embedding 不可用时退回关键字评分（V0 逻辑）
+
+    Args:
+        question: 用户自然语言问题。
+        schema_cache: 数据源的表结构缓存（list[dict]）。
+        max_tables: 最大返回表数（默认 5，红线不超过 5）。
+        llm_router: LMRouter 实例（可选，用于 embedding）。
+
+    Returns:
+        最相关的 TableSchema 列表（≤ max_tables）。
+    """
+    max_tables = min(max_tables, MAX_TABLES)
+
+    if not schema_cache:
+        return []
+
+    # 尝试向量检索
+    if llm_router is not None:
+        try:
+            scored = await _vector_rank(question, schema_cache, llm_router)
+            if scored:
+                return _to_schemas(scored[:max_tables])
+        except Exception as e:
+            logger.warning("向量检索失败，降级到关键字评分: %s", e)
+
+    # 降级：关键字评分（V0 逻辑）
+    scored = _keyword_rank(question, schema_cache)
+    return _to_schemas(scored[:max_tables])
+
+
+async def _vector_rank(
+    question: str,
+    schema_cache: list[dict],
+    llm_router: Any,
+) -> list[tuple[float, dict]]:
+    """向量检索排序：本地 embedding + 余弦相似度。
+
+    走 LMRouter task='schema_link'（_LOCAL_ONLY_TASKS 强制本地）。
+    """
+    # 构建每张表的文本表示（表名 + 注释 + 字段名/注释拼接）
+    table_texts: list[str] = []
+    for tbl in schema_cache:
+        parts = [
+            tbl.get("name", ""),
+            tbl.get("comment", ""),
+        ]
+        for col in tbl.get("columns", []):
+            parts.append(col.get("name", ""))
+            parts.append(col.get("comment", ""))
+        table_texts.append(" ".join(p for p in parts if p))
+
+    # 调用本地 embedding（task='schema_link' 强制本地）
+    q_emb = await _get_embedding(question, llm_router)
+    if q_emb is None:
+        return []
+
+    t_embs = await _get_embeddings_batch(table_texts, llm_router)
+    if not t_embs:
+        return []
+
+    # 余弦相似度排序
+    scored: list[tuple[float, dict]] = []
+    for i, t_emb in enumerate(t_embs):
+        sim = _cosine_similarity(q_emb, t_emb)
+        scored.append((sim, schema_cache[i]))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return scored
+
+
+async def _get_embedding(text: str, llm_router: Any) -> list[float] | None:
+    """获取单条文本的 embedding（走本地模型）。"""
+    try:
+        result = await llm_router.route(
+            prompt=text,
+            kind="schema_link",  # _LOCAL_ONLY_TASKS，强制本地
+            mode="embedding",
+        )
+        if isinstance(result, list):
+            return result
+        return None
+    except Exception:
+        return None
+
+
+async def _get_embeddings_batch(texts: list[str], llm_router: Any) -> list[list[float]] | None:
+    """批量获取 embedding（走本地模型）。"""
+    try:
+        result = await llm_router.route(
+            prompt=texts,
+            kind="schema_link",
+            mode="embedding_batch",
+        )
+        if isinstance(result, list) and len(result) == len(texts):
+            return result
+        return None
+    except Exception:
+        return None
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """余弦相似度。"""
+    if len(a) != len(b) or not a:
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+def _keyword_rank(question: str, schema_cache: list[dict]) -> list[tuple[float, dict]]:
+    """V0 关键字评分（降级策略）。"""
+    scored: list[tuple[float, dict]] = []
+    question_lower = question.lower()
+    question_chars = set(question_lower)
+
+    for tbl in schema_cache:
+        score = 0.0
+        tbl_name = (tbl.get("name") or "").lower()
+        tbl_comment = (tbl.get("comment") or "").lower()
+
+        # 表名匹配
+        if tbl_name and tbl_name in question_lower:
+            score += 10.0
+        # 表注释匹配
+        if tbl_comment:
+            overlap = sum(1 for c in tbl_comment if c in question_chars)
+            score += overlap * 0.5
+
+        # 字段名/注释匹配
+        for col in tbl.get("columns", []):
+            col_name = (col.get("name") or "").lower()
+            col_comment = (col.get("comment") or "").lower()
+            if col_name and col_name in question_lower:
+                score += 3.0
+            if col_comment:
+                overlap = sum(1 for c in col_comment if c in question_chars)
+                score += overlap * 0.2
+
+        scored.append((score, tbl))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return scored
+
+
+def _to_schemas(scored: list[tuple[float, dict]]) -> list[TableSchema]:
+    """将评分结果转换为 TableSchema 列表。"""
+    from agent.dataexpert.models import ColumnSchema
+
+    result: list[TableSchema] = []
+    for _, tbl in scored:
+        columns = [
+            ColumnSchema(
+                name=c.get("name", ""),
+                dtype=c.get("type", c.get("dtype", "")),
+                comment=c.get("comment", ""),
+            )
+            for c in tbl.get("columns", [])
+        ]
+        result.append(TableSchema(
+            name=tbl.get("name", ""),
+            comment=tbl.get("comment", ""),
+            columns=columns,
+        ))
+    return result
+
+
+# ---- Few-shot 动态选取 -------------------------------------------------------
+
+async def select_few_shot(
+    question: str,
+    history_tasks: list[dict],
+    *,
+    max_cases: int = 3,
+    llm_router: Any = None,
+) -> list[dict]:
+    """从历史分析任务中动态选取最相似的 few-shot 案例。
+
+    V1 策略：
+      1. 优先走向量相似度（embedding）
+      2. 降级：关键字重叠度
+
+    Args:
+        question: 用户问题。
+        history_tasks: 历史任务列表（含 name/query_sql 字段）。
+        max_cases: 最多返回案例数。
+        llm_router: LMRouter 实例。
+
+    Returns:
+        最相似的案例列表（含 question + sql）。
+    """
+    if not history_tasks:
+        return []
+
+    # 过滤有效案例（必须有 SQL）
+    valid = [t for t in history_tasks if t.get("query_sql")]
+    if not valid:
+        return []
+
+    # 向量相似度
+    if llm_router is not None:
+        try:
+            q_emb = await _get_embedding(question, llm_router)
+            if q_emb:
+                task_texts = [t.get("name", "") for t in valid]
+                t_embs = await _get_embeddings_batch(task_texts, llm_router)
+                if t_embs:
+                    scored = [
+                        (_cosine_similarity(q_emb, t_embs[i]), valid[i])
+                        for i in range(len(valid))
+                    ]
+                    scored.sort(key=lambda x: x[0], reverse=True)
+                    return [
+                        {"question": t.get("name", ""), "sql": t.get("query_sql", "")}
+                        for _, t in scored[:max_cases]
+                    ]
+        except Exception as e:
+            logger.warning("few-shot 向量选取失败，降级: %s", e)
+
+    # 降级：关键字重叠
+    question_chars = set(question.lower())
+    scored_kw: list[tuple[float, dict]] = []
+    for t in valid:
+        name = (t.get("name") or "").lower()
+        overlap = sum(1 for c in name if c in question_chars)
+        scored_kw.append((overlap, t))
+    scored_kw.sort(key=lambda x: x[0], reverse=True)
+
+    return [
+        {"question": t.get("name", ""), "sql": t.get("query_sql", "")}
+        for _, t in scored_kw[:max_cases]
+    ]

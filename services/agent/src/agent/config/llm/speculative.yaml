@@ -1,0 +1,30 @@
+# Phase 13: DSpark 推测解码策略配置
+#
+# 4 档 mode 预设（来自设计文档 §2.2 置信度阈值对照表）：
+#   aggressive:   K=8,  threshold=0.75  (SQL/代码 - 高度结构化)
+#   standard:     K=4,  threshold=0.85  (日志分析/代码解释)
+#   conservative: K=2,  threshold=0.90  (自然语言对话)
+#   off:          K=1,  threshold=1.00  (强制关闭)
+#
+# 铁律（不可绕过）：
+#   - _LOCAL_ONLY_TASKS (intent/repair/skill_router/data_summary) 永远 off
+#     即便此处配了 aggressive 也被 decision 层强制覆盖
+#   - max_tokens < short_output_threshold(20) 时自动跳过
+#   - draft_model_path 为空时全局禁用
+
+profiles:
+  # 复杂任务（保守）
+  - mode: "conservative"
+    task_categories: [plan, summarise, chat_qa]
+
+  # 标准（自然语言分析等）
+  - mode: "standard"
+    task_categories: [log_analysis, code_explanation, toolspec]
+
+  # 激进（DSpark 黄金场景）
+  - mode: "aggressive"
+    task_categories: [sql_generation, code_completion]
+
+  # 强制关闭（即便下面有同名 category 也无效 —— decision 层硬编码）
+  - mode: "off"
+    task_categories: [intent, repair, skill_router, data_summary]

@@ -1,0 +1,274 @@
+/**
+ * QueryEditor —— 数据专家中栏：SQL / Python / 对话 三模式编辑器 + AI 助手。
+ *
+ * V1 实现：Monaco Editor（SQL/Python 语法高亮 + 自动补全 + 智能缩进）。
+ * 只读铁律：SQL 含写操作时禁用「执行」并给出安全提示（前端演示；后端 guard 硬拦截）。
+ */
+import { useCallback } from 'react';
+import Editor from '@monaco-editor/react';
+import { useDataStore, isReadOnlySql, type EditorMode } from '@/store/dataStore';
+
+const MODES: Array<{ id: EditorMode; label: string; icon: string }> = [
+  { id: 'sql', label: 'SQL', icon: '⌘' },
+  { id: 'python', label: 'Python', icon: '🐍' },
+  { id: 'chat', label: '对话', icon: '💬' },
+];
+
+export function QueryEditor(): JSX.Element {
+  const mode = useDataStore((s) => s.editorMode);
+  const setMode = useDataStore((s) => s.setEditorMode);
+
+  return (
+    <div className="flex h-full flex-col overflow-hidden" style={{ backgroundColor: '#ffffff' }}>
+      {/* 模式切换 tab */}
+      <div className="flex flex-shrink-0 items-center gap-1 border-b px-2 py-1.5" style={{ borderColor: '#d0d0d0' }}>
+        {MODES.map((m) => {
+          const active = m.id === mode;
+          return (
+            <button
+              key={m.id}
+              type="button"
+              onClick={() => setMode(m.id)}
+              className="rounded px-3 py-1 text-ui font-semibold transition-all"
+              style={{
+                color: active ? '#ffffff' : '#6e6e6e',
+                backgroundColor: active ? '#0e639c' : 'transparent',
+              }}
+            >
+              <span className="mr-1" aria-hidden>{m.icon}</span>
+              {m.label} 模式
+            </button>
+          );
+        })}
+      </div>
+
+      {/* 主体 */}
+      <div className="flex-1 overflow-hidden">
+        {mode === 'sql' && <SqlPane />}
+        {mode === 'python' && <PythonPane />}
+        {mode === 'chat' && <ChatPane />}
+      </div>
+    </div>
+  );
+}
+
+// ---- SQL 模式（Monaco）------------------------------------------------------
+
+function SqlPane(): JSX.Element {
+  const sql = useDataStore((s) => s.sqlText);
+  const setSql = useDataStore((s) => s.setSql);
+  const running = useDataStore((s) => s.running);
+  const runQuery = useDataStore((s) => s.runQuery);
+  const readOnly = isReadOnlySql(sql);
+
+  const handleChange = useCallback(
+    (value: string | undefined) => setSql(value ?? ''),
+    [setSql],
+  );
+
+  const handleMount = useCallback((editor: unknown, monaco: unknown) => {
+    // 注册 SQL 自动补全（表名/关键字）
+    const m = monaco as { languages: { registerCompletionItemProvider: Function } };
+    m.languages.registerCompletionItemProvider('sql', {
+      provideCompletionItems: () => {
+        const keywords = [
+          'SELECT', 'FROM', 'WHERE', 'JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'INNER JOIN',
+          'GROUP BY', 'ORDER BY', 'HAVING', 'LIMIT', 'OFFSET', 'AS', 'ON', 'AND', 'OR',
+          'NOT', 'IN', 'BETWEEN', 'LIKE', 'IS NULL', 'IS NOT NULL', 'COUNT', 'SUM',
+          'AVG', 'MAX', 'MIN', 'DISTINCT', 'UNION', 'ALL', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END',
+        ];
+        const suggestions = keywords.map((kw) => ({
+          label: kw,
+          kind: 17, // CompletionItemKind.Keyword
+          insertText: kw,
+          detail: 'SQL 关键字',
+        }));
+        return { suggestions };
+      },
+    });
+    // Ctrl+Enter 执行
+    const ed = editor as { addCommand: Function; getModifiedEditor?: Function };
+    ed.addCommand(2048 | 3, () => { // KeyMod.CtrlCmd | KeyCode.Enter
+      if (readOnly) runQuery();
+    });
+  }, [readOnly, runQuery]);
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex-1 overflow-hidden">
+        <Editor
+          language="sql"
+          value={sql}
+          onChange={handleChange}
+          onMount={handleMount}
+          theme="vs-light"
+          options={{
+            minimap: { enabled: false },
+            fontSize: 13,
+            lineNumbers: 'on',
+            scrollBeyondLastLine: false,
+            wordWrap: 'on',
+            tabSize: 2,
+            padding: { top: 12 },
+            renderLineHighlight: 'line',
+            automaticLayout: true,
+            suggestOnTriggerCharacters: true,
+            quickSuggestions: true,
+          }}
+        />
+      </div>
+      <RunBar
+        running={running}
+        canRun={readOnly}
+        onRun={runQuery}
+        note={
+          readOnly
+            ? '🔒 只读查询 · Ctrl+Enter 执行 · 涉及多表 JOIN 需确认（HITL）'
+            : '⛔ 检测到写操作（UPDATE/DELETE/DROP…），数据专家模式只读，已禁用执行'
+        }
+        noteColor={readOnly ? '#616161' : '#cd3131'}
+      />
+    </div>
+  );
+}
+
+// ---- Python 模式（Monaco）---------------------------------------------------
+
+function PythonPane(): JSX.Element {
+  const py = useDataStore((s) => s.pythonText);
+  const setPython = useDataStore((s) => s.setPython);
+  const running = useDataStore((s) => s.running);
+  const runPython = useDataStore((s) => s.runPython);
+
+  const handleChange = useCallback(
+    (value: string | undefined) => setPython(value ?? ''),
+    [setPython],
+  );
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex-1 overflow-hidden">
+        <Editor
+          language="python"
+          value={py}
+          onChange={handleChange}
+          theme="vs-light"
+          options={{
+            minimap: { enabled: false },
+            fontSize: 13,
+            lineNumbers: 'on',
+            scrollBeyondLastLine: false,
+            wordWrap: 'on',
+            tabSize: 4,
+            padding: { top: 12 },
+            renderLineHighlight: 'line',
+            automaticLayout: true,
+          }}
+        />
+      </div>
+      <RunBar
+        running={running}
+        canRun
+        onRun={runPython}
+        note="🧪 受限沙箱执行 · 白名单 pandas/numpy · 内存 2GB / 超时 30s · 禁系统调用"
+        noteColor="#616161"
+      />
+    </div>
+  );
+}
+
+// ---- 对话模式 --------------------------------------------------------------
+
+function ChatPane(): JSX.Element {
+  const chat = useDataStore((s) => s.chat);
+  const draft = useDataStore((s) => s.chatDraft);
+  const setDraft = useDataStore((s) => s.setChatDraft);
+  const send = useDataStore((s) => s.sendChat);
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex-1 space-y-3 overflow-auto px-4 py-3">
+        {chat.map((m, i) => (
+          <div key={i} className={m.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
+            <div
+              className="max-w-[80%] rounded-lg px-3 py-2 text-ui"
+              style={{
+                backgroundColor: m.role === 'user' ? '#0e639c' : '#ececec',
+                color: m.role === 'user' ? '#ffffff' : '#1f1f1f',
+                lineHeight: 1.55,
+              }}
+            >
+              <div className="mb-0.5 text-2xs" style={{ color: m.role === 'user' ? '#cfe6ff' : '#059669' }}>
+                {m.role === 'user' ? '👤 我' : '🤖 数据助手'}
+              </div>
+              {m.content}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="flex flex-shrink-0 items-end gap-2 border-t p-2" style={{ borderColor: '#d0d0d0' }}>
+        <textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              send();
+            }
+          }}
+          rows={2}
+          placeholder="用自然语言提问，例如：对比上月各分行坏账率…（Enter 发送）"
+          className="flex-1 resize-none rounded px-3 py-2 text-ui outline-none"
+          style={{ backgroundColor: '#ececec', color: '#1f1f1f' }}
+        />
+        <button
+          type="button"
+          onClick={send}
+          className="rounded px-4 py-2 text-ui font-semibold transition-all hover:brightness-110"
+          style={{ backgroundColor: '#059669', color: '#ffffff' }}
+        >
+          发送
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---- 执行栏 ----------------------------------------------------------------
+
+function RunBar({
+  running,
+  canRun,
+  onRun,
+  note,
+  noteColor,
+}: {
+  running: boolean;
+  canRun: boolean;
+  onRun: () => void;
+  note: string;
+  noteColor: string;
+}): JSX.Element {
+  return (
+    <div
+      className="flex flex-shrink-0 items-center justify-between border-t px-3 py-2"
+      style={{ borderColor: '#d0d0d0', backgroundColor: '#f3f3f3' }}
+    >
+      <span className="text-2xs" style={{ color: noteColor }}>{note}</span>
+      <button
+        type="button"
+        disabled={!canRun || running}
+        onClick={onRun}
+        className="rounded px-4 py-1.5 text-ui font-semibold transition-all"
+        style={{
+          backgroundColor: canRun ? '#059669' : '#ececec',
+          color: canRun ? '#1e1e1e' : '#616161',
+          cursor: canRun && !running ? 'pointer' : 'not-allowed',
+          opacity: running ? 0.6 : 1,
+        }}
+      >
+        {running ? '执行中…' : '▶ 执行'}
+      </button>
+    </div>
+  );
+}

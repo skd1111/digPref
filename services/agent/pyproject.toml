@@ -1,0 +1,73 @@
+[project]
+name = "agent"
+version = "0.1.0"
+description = "Enterprise AI IDE — control layer (LangGraph + FastAPI)"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "sse-starlette>=2.1",
+    "websockets>=12",
+    "httpx>=0.27",
+    "langgraph>=0.2",
+    "langchain>=0.2",
+    "langchain-ollama>=0.1",
+    "langchain-openai>=0.1",
+    "mcp>=1.0",
+    "sqlglot>=25",
+    "aiosqlite>=0.20",
+    "redis>=5.0",
+    "structlog>=24.1",
+    "tenacity>=8.3",
+    "shared-protocol",
+    # Phase 2F: 代码导航
+    "tree-sitter>=0.23",
+    "tree-sitter-java>=0.23",
+    "tree-sitter-python>=0.23",
+    "tree-sitter-typescript>=0.23",
+    "watchfiles>=1.0",
+    # Phase 5 V1 RSA 签名
+    "cryptography>=41",
+    # Phase 15 V0: 前端实时预览引擎（Vite 子进程内存监控）
+    "psutil>=5.9",
+]
+
+[project.optional-dependencies]
+# Phase 7: 数据库驱动（主流 + 国产/信创）
+# 安装: pip install agent[db-all] 或按需安装单个组
+db-mysql = ["aiomysql>=0.2.0"]                      # MySQL / TiDB / OceanBase / GBase
+db-postgres = ["asyncpg>=0.29"]                    # PostgreSQL / KingbaseES / GaussDB / openGauss / HighGo
+db-oracle = ["oracledb>=2.0"]                      # Oracle
+db-sqlserver = ["aioodbc>=0.5", "pyodbc>=5.0"]     # SQL Server
+db-clickhouse = ["clickhouse-connect>=0.7"]        # ClickHouse
+db-dm = ["dmPython>=2.8"]                          # 达梦(DM) —— 需从达梦官网下载驱动
+db-all = [
+    "aiomysql>=0.2.0",
+    "asyncpg>=0.29",
+    "oracledb>=2.0",
+    "aioodbc>=0.5",
+    "pyodbc>=5.0",
+    "clickhouse-connect>=0.7",
+    "pandas>=2.0",
+]
+
+[project.scripts]
+eaide-agent = "agent.main:run"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=0.21",
+    "httpx>=0.27",
+    "mypy>=2.3.0",
+    "types-psutil>=5.9",
+]

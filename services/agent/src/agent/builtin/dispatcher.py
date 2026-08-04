@@ -1,0 +1,582 @@
+"""Phase 1B · ToolDispatcher —— 统一调度内置工具。
+
+V2 职责（2026-07-31）：
+  1. 路由：call['server'] == 'builtin' 走 builtin；否则返回 None 让上游走 mcp
+  2. 工具分类：Python 工具走本地执行；Rust 工具（stat_file/mkdir/delete_file/...）
+     通过 tauri_bridge 调 Rust 端 Tauri Command（V2 已 9/9 实现）
+  3. 风险评估：复用 safety/policy.py::policy_for()
+  4. HITL 前置闸门：needs_hitl 且未审批 → 不执行、返 awaiting_approval=True，
+     由 hitl_gate_node 发起审批；审批通过（approval_decision=approve）后再执行
+  5. 执行：Rust 桥 → 不可用时 3 高危工具（delete/move/shell）走 Python 原生兜底，
+     其余 6 工具返 not_implemented（Agent 独立运行场景）
+  6. 审计：双写 audit(action='builtin_tool', payload={...}) + tool_calls 结构化表
+  7. SSE 三处同步：emit builtin_tool_started / done / denied
+  8. 返 AgentState 增量
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import time
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from agent.builtin.models import ToolResult, is_rust_tool
+from agent.builtin.registry import get_default_registry
+
+
+# 兼容 V0 import（外部代码 `from agent.builtin.dispatcher import dispatcher` 不变）
+__all__ = ["ToolDispatcher", "dispatcher", "reset_default_dispatcher"]
+
+
+class ToolDispatcher:
+    """内置工具统一调度器。
+
+    流程（V2）：
+      1. 路由：call['server'] == 'builtin' 走 builtin；否则返 None
+      2. 工具分类：Rust 工具 → Tauri IPC（V2 9/9）；Python 工具 → 本地执行
+      3. 风险评估：policy_for() → approve / needs_hitl
+      4. HITL 前置闸门：未审批不执行 → hitl_gate_node 发起审批 → 通过后执行
+      5. SSE emit：started → execute → done/denied
+      6. 审计：双写 audit() + tool_calls 结构化表
+      7. 返 AgentState 增量
+    """
+
+    def __init__(self, registry=None) -> None:
+        self._registry = registry or get_default_registry()
+
+    async def _exec_python_fallback(self, name: str, args: dict) -> ToolResult:
+        """Rust 工具的 Python 原生兜底（3 高危 + 5 只读）。"""
+        if name == "delete_file":
+            from agent.builtin.files import builtin_delete_file
+            return await builtin_delete_file(**args)
+        if name == "move_file":
+            from agent.builtin.files import builtin_move_file
+            return await builtin_move_file(**args)
+        if name == "shell":
+            from agent.builtin.shell import builtin_shell
+            return await builtin_shell(**args)
+        if name == "stat_file":
+            from agent.builtin.fallbacks import builtin_stat_file_py
+            return await asyncio.to_thread(builtin_stat_file_py, **args)
+        if name == "find":
+            from agent.builtin.fallbacks import builtin_find_py
+            return await asyncio.to_thread(builtin_find_py, **args)
+        if name == "glob":
+            from agent.builtin.fallbacks import builtin_glob_py
+            return await asyncio.to_thread(builtin_glob_py, **args)
+        if name == "hash":
+            from agent.builtin.fallbacks import builtin_hash_py
+            return await asyncio.to_thread(builtin_hash_py, **args)
+        if name == "base64":
+            from agent.builtin.fallbacks import builtin_base64_py
+            return await asyncio.to_thread(builtin_base64_py, **args)
+        if name == "mkdir":
+            from agent.builtin.fallbacks import builtin_mkdir_py
+            return await asyncio.to_thread(builtin_mkdir_py, **args)
+        return ToolResult(
+            ok=False,
+            error=f"no_python_fallback: {name}",
+            risk_level="high",
+        )
+
+    async def dispatch(self, call: dict, state: dict) -> dict | None:
+        """统一调度内置工具。
+
+        Args:
+            call: {"server": "builtin", "name": "read_file", "args": {...}}
+            state: AgentState（用于 retry_count / run_id）
+
+        Returns:
+            None if call 不是 builtin（上游应走 mcp）
+            dict: AgentState 增量（tool_result / tool_error / trace / needs_hitl）
+        """
+        if call.get("server") != "builtin":
+            return None
+
+        name = call.get("name") or ""
+        args = call.get("args") or {}
+        run_id = state.get("run_id") if isinstance(state, dict) else None
+        operator = state.get("operator") if isinstance(state, dict) else None
+
+        # 调用标识（一次调度 = 一个 UUID；HITL resume 用同一 call_id 关联）
+        call_id = call.get("call_id") or uuid.uuid4().hex
+
+        # ---- 1. 工具存在性（含 Rust 占位）----
+        # 先识别 Rust 工具（占位 — dispatcher 不需要 registry 收录也能跑通路径）
+        is_rust = is_rust_tool(name)
+        if not is_rust and not self._registry.has(name):
+            return {
+                "pending_tool_call": call,
+                "tool_result": None,
+                "tool_error": f"unknown_builtin_tool: {name}",
+                "trace": [_trace_entry("builtin_tool", "fail", name=name, error="unknown_tool")],
+            }
+
+        risk_level = self._registry.risk_level(name)
+        needs_hitl = await _evaluate_hitl(call, risk_level, state)
+        approved = bool(state.get("approval_decision") == "approve") if isinstance(state, dict) else False
+
+        # ---- 2. SSE started（before execution）----
+        started_ts = time.monotonic()
+        await _emit_started(
+            tool_name=name,
+            args=args,
+            risk_level=risk_level,
+            needs_hitl=needs_hitl,
+            call_id=call_id,
+        )
+
+        # ---- 2.5 HITL 前置闸门：未审批的写 / 高危调用不执行，等 hitl_gate_node ----
+        # 真实 HITL interrupt（V2）：返回 awaiting_approval=True 且不 advance，
+        # 审批通过后 tool_runner 重新进入本 dispatch（approval_decision=approve）。
+        if needs_hitl and not approved:
+            return {
+                "pending_tool_call": call,
+                "tool_result": None,
+                "tool_error": None,
+                "awaiting_approval": True,
+                "approval_id": None,
+                "trace": [_trace_entry(
+                    "builtin_tool", "running",
+                    name=name,
+                    risk_level=risk_level,
+                    needs_hitl=True,
+                    reason="awaiting_hitl",
+                    call_id=call_id,
+                )],
+            }
+
+        # ---- 3. 执行（Rust 工具 V1 占位 / V1.5 已实现的 6 工具通过 IPC 远端调用）----
+        # Phase 16：写操作先捕获修改前内容（用于 unified diff 计算）
+        trace_before: str | None = None
+        if name in ("write_file", "edit_file"):
+            from agent.trace.collector import read_text_best_effort
+
+            trace_before = read_text_best_effort(str(args.get("path") or "")) or ""
+
+        if is_rust:
+            from agent.builtin.tauri_bridge import (
+                has_python_fallback,
+                invoke_rust_tool_sync,
+            )
+            bridge_result = await invoke_rust_tool_sync(
+                tool_name=name,
+                args=args,
+                risk_level=risk_level,
+                require_hitl=not approved,
+            )
+            if bridge_result is not None:
+                result = bridge_result
+            elif has_python_fallback(name):
+                # V2：Agent 独立运行（无 Tauri 注入）→ 3 高危工具走 Python 原生兜底
+                try:
+                    result = await self._exec_python_fallback(name, args)
+                except Exception as exc:  # noqa: BLE001
+                    result = ToolResult.from_exception(exc, risk_level=risk_level)
+                    result.error = f"exec_failed: {type(exc).__name__}: {exc}"
+            else:
+                # bridge 不可用（无 Tauri runtime）且无 Python 兜底 → not_implemented
+                result = ToolResult(
+                    ok=False,
+                    error=(
+                        f"rust_tool_not_implemented: {name} "
+                        f"(no Tauri runtime injected; standalone agent has no "
+                        f"Rust path for {name})"
+                    ),
+                    hint="run inside the EAIDE desktop shell (Tauri) or inject runtime",
+                    risk_level=risk_level,
+                )
+        else:
+            fn = self._registry.get(name)
+            try:
+                # 工具函数可能是 sync 或 async；统一 asyncio.to_thread 包装
+                if asyncio.iscoroutinefunction(fn):
+                    result_obj = await fn(**args)
+                else:
+                    result_obj = await asyncio.to_thread(fn, **args)
+                if not isinstance(result_obj, ToolResult):
+                    # 防御性：万一工具返非 ToolResult（理论不应发生），包一层
+                    result = ToolResult(
+                        ok=bool(result_obj),
+                        content=result_obj,
+                        risk_level=risk_level,
+                    )
+                else:
+                    result = result_obj
+            except Exception as exc:  # noqa: BLE001
+                result = ToolResult.from_exception(exc, risk_level=risk_level)
+                result.error = f"exec_failed: {type(exc).__name__}: {exc}"
+
+        elapsed_ms = int((time.monotonic() - started_ts) * 1000)
+
+        # content_size 计算（content 是 str/int/list/dict/None）
+        content_size = _safe_content_size(result.content)
+
+        # ---- 4. SSE done ----
+        await _emit_done(
+            tool_name=name,
+            call_id=call_id,
+            ok=result.ok,
+            error=result.error,
+            elapsed_ms=elapsed_ms,
+            risk_level=risk_level,
+            content_size=content_size,
+            result_meta=result.meta,
+        )
+
+        # ---- 5. 审计（双写 audit() + tool_calls 表）----
+        await _audit_builtin_call(
+            call_id=call_id,
+            name=name,
+            args=args,
+            result=result,
+            risk_level=risk_level,
+            needs_hitl=needs_hitl,
+            run_id=run_id,
+            operator=operator,
+            elapsed_ms=elapsed_ms,
+            content_size=content_size,
+            approval_id=call.get("approval_id") if needs_hitl else None,
+        )
+
+        # ---- 5.5 Phase 16：文件操作追踪（read/write/edit/grep → 思维链）----
+        await _trace_file_operation(
+            name=name, args=args, result=result, state=state, before=trace_before
+        )
+
+        # ---- 6. 组装 AgentState 增量 ----
+        trace_status = "ok" if result.ok else "fail"
+        return {
+            "pending_tool_call": call,
+            "tool_result": result.to_dict(),
+            "tool_error": None if result.ok else result.error,
+            "trace": [_trace_entry(
+                "builtin_tool", trace_status,
+                name=name,
+                risk_level=risk_level,
+                needs_hitl=needs_hitl,
+                error=result.error if not result.ok else None,
+                elapsed_ms=elapsed_ms,
+                call_id=call_id,
+            )],
+            # 执行路径（含审批后放行）不再等待审批；同时消费掉 approval_decision，
+            # 防止同一个 approval_decision 放行后续其他高危调用
+            "awaiting_approval": False,
+            "approval_id": None,
+            "approval_decision": None,
+        }
+
+
+# ---- 内部辅助 ----------------------------------------------------------------
+
+async def _trace_file_operation(
+    *,
+    name: str,
+    args: dict,
+    result: ToolResult,
+    state: dict,
+    before: str | None,
+) -> None:
+    """Phase 16：把 builtin 文件工具调用写入思维链（best-effort）。
+
+    write_file：after = args['content']；edit_file：after = 回读文件。
+    后端不区分工作模式一律记录（金融合规审计）。
+    """
+    try:
+        from agent.config import settings
+
+        if not getattr(settings, "trace_enabled", True):
+            return
+        session_id = state.get("run_id") if isinstance(state, dict) else None
+        if not session_id:
+            return
+        from agent.trace.collector import extract_file_operation, get_collector
+
+        after: str | None = None
+        if name == "write_file" and result.ok:
+            after = str(args.get("content") or "")
+        op = extract_file_operation(
+            name, args, result.to_dict(), before=before, after=after
+        )
+        if op is None:
+            return
+        await get_collector().attach_file_operation(session_id, op)
+    except Exception:  # noqa: BLE001
+        pass  # best-effort
+
+
+async def _evaluate_hitl(call: dict, risk_level: str, state: dict) -> bool:
+    """risk ≥ medium 且 require_hitl_for_write=True 时返 True。
+
+    critical（shell）永远返 True —— 即使全局开关关闭也不能自动批准
+    （与 Rust 端 evaluate_hitl 严格镜像）。
+    """
+    if risk_level == "read":
+        return False
+    if risk_level == "critical":
+        return True
+    if risk_level in ("medium", "high", "critical"):
+        try:
+            from agent.config import settings
+            if settings.require_hitl_for_write:
+                return True
+        except Exception:
+            return True
+        return False
+    return False
+
+
+def _scrub_args(args: dict) -> dict:
+    """脱敏：路径字段只保留 basename + file size，避免泄漏敏感路径。"""
+    scrubbed: dict = {}
+    for k, v in args.items():
+        if k in ("path", "file", "file_path") and isinstance(v, str):
+            p = Path(v)
+            try:
+                size = p.stat().st_size if p.exists() else None
+            except OSError:
+                size = None
+            scrubbed[k] = {"basename": p.name, "size": size}
+        elif isinstance(v, str) and len(v) > 1000:
+            scrubbed[k] = v[:1000] + "..."
+        else:
+            scrubbed[k] = v
+    return scrubbed
+
+
+def _safe_content_size(content: Any) -> int:
+    """计算 content 体积（字节）。None / 异常 → 0。"""
+    if content is None:
+        return 0
+    try:
+        if isinstance(content, str):
+            return len(content.encode("utf-8"))
+        if isinstance(content, (int, float)):
+            return len(str(content).encode("utf-8"))
+        if isinstance(content, (list, dict, tuple)):
+            return len(json.dumps(content, default=str, ensure_ascii=False).encode("utf-8"))
+        return len(str(content).encode("utf-8"))
+    except Exception:
+        return 0
+
+
+async def _audit_builtin_call(
+    *,
+    call_id: str,
+    name: str,
+    args: dict,
+    result: ToolResult,
+    risk_level: str,
+    needs_hitl: bool,
+    run_id: str | None,
+    operator: str | None,
+    elapsed_ms: int,
+    content_size: int,
+    approval_id: str | None,
+) -> None:
+    """V1 双写：audit(action='builtin_tool', payload={...}) + tool_calls 结构化表。
+
+    两者任一失败不影响主流程；不抛异常（fire-and-forget 风格）。
+    """
+    safe_args = _scrub_args(args)
+    ts = datetime.now(timezone.utc).isoformat()
+    args_json = json.dumps(safe_args, default=str, ensure_ascii=False)
+
+    # ---- 1. audit() 通用表（向后兼容 + 已有索引）----
+    try:
+        from agent.audit.store import audit
+        await audit(
+            "builtin_tool",
+            {
+                "call_id": call_id,
+                "name": name,
+                "args": safe_args,
+                "ok": result.ok,
+                "error": result.error,
+                "risk_level": risk_level,
+                "needs_hitl": needs_hitl,
+                "elapsed_ms": elapsed_ms,
+                "content_size": content_size,
+                "approval_id": approval_id,
+                "meta": result.meta,
+            },
+            run_id=run_id,
+        )
+    except Exception:
+        pass  # best-effort
+
+    # ---- 2. tool_calls 结构化表（V1 新增）----
+    try:
+        await _write_tool_calls_row(
+            call_id=call_id,
+            tool_name=name,
+            risk_level=risk_level,
+            needs_hitl=1 if needs_hitl else 0,
+            ok=1 if result.ok else 0,
+            error=result.error,
+            args_json=args_json,
+            run_id=run_id,
+            operator=operator,
+            elapsed_ms=elapsed_ms,
+            content_size=content_size,
+            approval_id=approval_id,
+            ts=ts,
+        )
+    except Exception:
+        pass  # best-effort
+
+
+async def _write_tool_calls_row(
+    *,
+    call_id: str,
+    tool_name: str,
+    risk_level: str,
+    needs_hitl: int,
+    ok: int,
+    error: str | None,
+    args_json: str,
+    run_id: str | None,
+    operator: str | None,
+    elapsed_ms: int,
+    content_size: int,
+    approval_id: str | None,
+    ts: str,
+) -> None:
+    """写入 tool_calls 表（与 Rust 端 schema 完全镜像，CLAUDE.md §6）。
+
+    复用 audit.store 的 aiosqlite 连接（同一 audit.sqlite 文件）。
+    不导出新模块入口以保持 audit.store 公开 API 不变；通过 to_thread 避免阻塞事件循环。
+    """
+    import aiosqlite
+    from agent.audit.store import SCHEMA_CREATE_TABLE, SCHEMA_INDEXES
+    from agent.config import settings
+
+    target = settings.audit_db_path
+    Path(target).parent.mkdir(parents=True, exist_ok=True)
+
+    # tool_calls 表追加到 audit 通用 schema 后（CLAUDE.md §6 双 schema 同步）
+    extended_schema = SCHEMA_CREATE_TABLE + SCHEMA_INDEXES + """
+CREATE TABLE IF NOT EXISTS tool_calls (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    call_id         TEXT NOT NULL,
+    tool_name       TEXT NOT NULL,
+    risk_level      TEXT NOT NULL,
+    needs_hitl      INTEGER NOT NULL DEFAULT 0,
+    ok              INTEGER NOT NULL,
+    error           TEXT,
+    args_json       TEXT NOT NULL,
+    run_id          TEXT,
+    operator        TEXT,
+    elapsed_ms      INTEGER NOT NULL DEFAULT 0,
+    content_size    INTEGER NOT NULL DEFAULT 0,
+    approval_id     TEXT,
+    ts              TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_run    ON tool_calls(run_id);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_tool   ON tool_calls(tool_name);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_ts     ON tool_calls(ts);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_call   ON tool_calls(call_id);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_risk   ON tool_calls(risk_level, ts);
+"""
+
+    async with aiosqlite.connect(target) as db:
+        await db.executescript(extended_schema)
+        await db.execute(
+            """
+            INSERT INTO tool_calls (
+                call_id, tool_name, risk_level, needs_hitl, ok, error,
+                args_json, run_id, operator, elapsed_ms, content_size,
+                approval_id, ts
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                call_id, tool_name, risk_level, needs_hitl, ok, error,
+                args_json, run_id, operator, elapsed_ms, content_size,
+                approval_id, ts,
+            ),
+        )
+        await db.commit()
+
+
+async def _emit_started(
+    *,
+    tool_name: str,
+    args: dict,
+    risk_level: str,
+    needs_hitl: bool,
+    call_id: str,
+) -> None:
+    """SSE emit: builtin_tool_started."""
+    try:
+        from agent.builtin.events import emit_tool_started
+        await emit_tool_started(
+            tool_name=tool_name,
+            args=args,
+            risk_level=risk_level,
+            needs_hitl=needs_hitl,
+            call_id=call_id,
+        )
+    except Exception:
+        pass  # best-effort
+
+
+async def _emit_done(
+    *,
+    tool_name: str,
+    call_id: str,
+    ok: bool,
+    error: str | None,
+    elapsed_ms: int,
+    risk_level: str,
+    content_size: int,
+    result_meta: dict,
+) -> None:
+    """SSE emit: builtin_tool_done."""
+    try:
+        from agent.builtin.events import emit_tool_done
+        await emit_tool_done(
+            tool_name=tool_name,
+            call_id=call_id,
+            ok=ok,
+            error=error,
+            elapsed_ms=elapsed_ms,
+            risk_level=risk_level,
+            content_size=content_size,
+            result_meta=result_meta,
+        )
+    except Exception:
+        pass  # best-effort
+
+
+def _trace_entry(node: str, status: str, **extra: Any) -> dict:
+    """构造 trace 条目（与 graph/state.py::record_trace 字段一致）。"""
+    entry: dict[str, Any] = {
+        "node": node,
+        "status": status,
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+    entry.update(extra)
+    return entry
+
+
+# ---- 单例工厂（测试可重置）---------------------------------------------------
+
+_DISPATCHER: ToolDispatcher | None = None
+
+
+def dispatcher() -> ToolDispatcher:
+    """返回默认 dispatcher（单例）。"""
+    global _DISPATCHER
+    if _DISPATCHER is None:
+        _DISPATCHER = ToolDispatcher()
+    return _DISPATCHER
+
+
+def reset_default_dispatcher() -> None:
+    """测试 hook：重置单例。"""
+    global _DISPATCHER
+    _DISPATCHER = None

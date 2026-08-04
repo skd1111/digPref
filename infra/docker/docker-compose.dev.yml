@@ -1,0 +1,94 @@
+# =====================================================================
+# Local dev orchestration: Python Agent + 4 MCP servers.
+# Tauri desktop is run natively via `pnpm tauri dev` (not in Docker).
+# =====================================================================
+name: enterprise-ai-ide-dev
+
+services:
+  # ---------- Control layer ----------
+  agent:
+    build:
+      context: ../..
+      dockerfile: infra/docker/agent.Dockerfile
+    container_name: eaide-agent
+    ports:
+      - "127.0.0.1:8765:8765"     # FastAPI + SSE
+    environment:
+      EAIDE_ENV: dev
+      EAIDE_CONFIG: /app/config/agent.yaml
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+    volumes:
+      - ../../services/agent:/app/services/agent
+      - ../../packages:/app/packages
+      - ../../infra/config:/app/config:ro
+      - audit-data:/var/lib/eaide/audit
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8765/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ---------- Execution layer ----------
+  mcp-database:
+    build:
+      context: ../..
+      dockerfile: infra/docker/mcp.Dockerfile
+      args:
+        MCP_PACKAGE: services/mcp-servers/mcp-server-database
+    container_name: eaide-mcp-database
+    environment:
+      MCP_TRANSPORT: stdio
+      EAIDE_DB_READONLY_ENFORCE: "true"
+    volumes:
+      - ../../services/mcp-servers/mcp-server-database:/app
+      - audit-data:/var/lib/eaide/audit
+    profiles: ["full", "db"]
+
+  mcp-rest:
+    build:
+      context: ../..
+      dockerfile: infra/docker/mcp.Dockerfile
+      args:
+        MCP_PACKAGE: services/mcp-servers/mcp-server-rest
+    container_name: eaide-mcp-rest
+    environment:
+      MCP_TRANSPORT: stdio
+    volumes:
+      - ../../services/mcp-servers/mcp-server-rest:/app
+    profiles: ["full", "rest"]
+
+  mcp-ssh:
+    build:
+      context: ../..
+      dockerfile: infra/docker/mcp.Dockerfile
+      args:
+        MCP_PACKAGE: services/mcp-servers/mcp-server-ssh
+    container_name: eaide-mcp-ssh
+    environment:
+      MCP_TRANSPORT: stdio
+    volumes:
+      - ../../services/mcp-servers/mcp-server-ssh:/app
+      - ~/.ssh:/home/eaide/.ssh:ro
+    profiles: ["full", "ssh"]
+
+  mcp-rpa:
+    build:
+      context: ../..
+      dockerfile: infra/docker/mcp.Dockerfile
+      args:
+        MCP_PACKAGE: services/mcp-servers/mcp-server-rpa
+    container_name: eaide-mcp-rpa
+    environment:
+      MCP_TRANSPORT: stdio
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+    volumes:
+      - ../../services/mcp-servers/mcp-server-rpa:/app
+      - playwright-cache:/ms-playwright
+    profiles: ["full", "rpa"]
+
+volumes:
+  audit-data:
+  playwright-cache:

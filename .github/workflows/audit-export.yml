@@ -1,0 +1,36 @@
+name: Audit Export
+
+on:
+  schedule:
+    - cron: "0 2 * * *"          # 每日 02:00 UTC
+  workflow_dispatch:
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+
+      - name: Bootstrap audit DB
+        run: |
+          python infra/scripts/seed-audit-db.py --db /tmp/audit.sqlite
+          # 模拟产生昨日数据（实际应由生产数据库 export）
+          sqlite3 /tmp/audit.sqlite <<'SQL'
+          INSERT INTO audit(action, payload, ts)
+          VALUES ('agent.run.start', '{"prompt":"test"}', datetime('now','-1 day'));
+          SQL
+
+      - name: Export to JSONL
+        run: |
+          sqlite3 /tmp/audit.sqlite -json \
+            "SELECT action, payload, ts, operator, run_id FROM audit;" \
+            | gzip > audit-$(date -u +%F).jsonl.gz
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-export
+          path: audit-*.jsonl.gz
+          retention-days: 90

@@ -1,0 +1,45 @@
+{
+  "_comment": "Phase 18 混合任务拆解黄金集：期望每个子任务（按 plan 顺序）的 framework 标签序列",
+  "cases": [
+    {
+      "routing": "mixed",
+      "plan": [
+        {"server": "builtin", "name": "write_file", "description": "写个导出脚本"},
+        {"server": "database", "name": "run_sql", "description": "在数据库里跑报表"}
+      ],
+      "expected": ["coding", "work"]
+    },
+    {
+      "routing": "mixed",
+      "plan": [
+        {"server": "builtin", "name": "edit_file", "description": "修复导出脚本的 bug"},
+        {"server": "ssh", "name": "exec", "description": "部署到测试环境"}
+      ],
+      "expected": ["coding", "work"]
+    },
+    {
+      "routing": "mixed",
+      "plan": [
+        {"server": "builtin", "name": "write_file", "description": "重构报表生成代码并补测试"},
+        {"server": "database", "name": "run_sql", "description": "生成今天的报表"}
+      ],
+      "expected": ["coding", "work"]
+    },
+    {
+      "routing": "coding",
+      "plan": [
+        {"server": "builtin", "name": "write_file", "description": "实现函数"},
+        {"server": "builtin", "name": "run_tests", "description": "补测试"}
+      ],
+      "expected": ["coding", "coding"]
+    },
+    {
+      "routing": "work",
+      "plan": [
+        {"server": "database", "name": "run_sql", "description": "查询订单"},
+        {"server": "rest", "name": "request", "description": "发送通知"}
+      ],
+      "expected": ["work", "work"]
+    }
+  ]
+}

@@ -1,0 +1,77 @@
+# =====================================================================
+# Python workspace root — uses uv (https://docs.astral.sh/uv/)
+# Each service / mcp-server / agent is an independent package,
+# and uv workspace coordinates the lockfile.
+# =====================================================================
+[project]
+name = "enterprise-ai-ide"
+version = "0.1.0"
+description = "Enterprise Local AI IDE Agent — control layer + MCP servers"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "keyring>=25.7.0",
+    "tree-sitter>=0.26.0",
+    "tree-sitter-java>=0.23.5",
+    "tree-sitter-python>=0.25.0",
+    "tree-sitter-typescript>=0.23.2",
+    "watchfiles>=1.2.0",
+]
+
+[tool.uv]
+# 达梦驱动 dmPython 不在 PyPI 上（需从官网下载），排除出自动解析
+override-dependencies = ["dmPython>=0 ; python_version == '0'"]
+
+[tool.uv.workspace]
+members = [
+    "services/agent",
+    "services/mcp-servers/mcp-server-database",
+    "services/mcp-servers/mcp-server-rest",
+    "services/mcp-servers/mcp-server-ssh",
+    "services/mcp-servers/mcp-server-rpa",
+    "packages/shared-protocol",
+]
+
+[tool.uv.sources]
+# 内部包以 editable 模式互引
+agent = { workspace = true }
+mcp-server-database = { workspace = true }
+mcp-server-rest = { workspace = true }
+mcp-server-ssh = { workspace = true }
+mcp-server-rpa = { workspace = true }
+shared-protocol = { workspace = true }
+
+# ---------- Shared tooling ----------
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["**/migrations/**", "**/.venv/**"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "ASYNC", "RUF"]
+ignore = ["E501", "B008"]  # line-length handled by formatter; FastAPI Depends is fine
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**/*.py" = ["S101", "N802", "N803"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = [
+    "asyncio: 异步测试（pytest-asyncio）",
+]
+testpaths = ["services", "packages"]
+addopts = "-ra -q --strict-markers --strict-config"
+
+[tool.coverage.run]
+branch = true
+source = ["services", "packages"]
+
+[dependency-groups]
+dev = [
+    "pytest-asyncio>=1.4.0",
+    "pyinstaller>=6.0",
+]
