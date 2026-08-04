@@ -1,9 +1,11 @@
 """evidence_text → 文档实际位置（防幻觉偏移）。"""
+
 from __future__ import annotations
 
 import unicodedata
+from collections.abc import Sequence
 
-from agent.doc_review.models import ParsedDocument, Position
+from agent.doc_review.models import Block, ParsedDocument, Position
 
 
 def _normalize(s: str) -> str:
@@ -23,21 +25,23 @@ def _build_norm_map(full_text: str) -> tuple[str, list[int]]:
     return "".join(out), idx
 
 
-def _find_block(blocks_with_page: list[tuple[int, object]], orig_start: int) -> tuple[int, str] | None:
+def _find_block(
+    blocks_with_page: Sequence[tuple[int, Block]], orig_start: int
+) -> tuple[int, str] | None:
     for page_no, block in blocks_with_page:
         if block.start <= orig_start < block.end:
             return page_no, block.block_id
     return None
 
 
-def locate_positions(parsed: ParsedDocument, evidence_text: str, *, max_hits: int = 20) -> list[Position]:
+def locate_positions(
+    parsed: ParsedDocument, evidence_text: str, *, max_hits: int = 20
+) -> list[Position]:
     evidence = _normalize(evidence_text)
     if not evidence:
         return []
     norm, idx = _build_norm_map(parsed.full_text)
-    blocks_with_page = [
-        (page.page_no, block) for page in parsed.pages for block in page.blocks
-    ]
+    blocks_with_page = [(page.page_no, block) for page in parsed.pages for block in page.blocks]
     hits: list[Position] = []
     search = evidence
     while search:
@@ -51,7 +55,9 @@ def locate_positions(parsed: ParsedDocument, evidence_text: str, *, max_hits: in
             located = _find_block(blocks_with_page, orig_start)
             if located is not None:
                 page_no, block_id = located
-                hits.append(Position(page_no=page_no, block_id=block_id, start=orig_start, end=orig_end))
+                hits.append(
+                    Position(page_no=page_no, block_id=block_id, start=orig_start, end=orig_end)
+                )
             start = pos + 1
         if hits:
             break

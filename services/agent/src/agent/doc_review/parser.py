@@ -1,4 +1,5 @@
 """文档解析：PDF / DOCX / TXT / MD → ParsedDocument（页 / 块 / 全局偏移）。"""
+
 from __future__ import annotations
 
 import re
@@ -59,7 +60,7 @@ def _parse_pdf(path: Path) -> list[tuple[int, list[str]]]:
 
     try:
         reader = PdfReader(str(path))
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise DocParseError(f"PDF 解析失败: {exc}") from exc
     if not reader.pages:
         raise DocParseError("PDF 无页面")

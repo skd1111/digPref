@@ -1,4 +1,5 @@
 """规则扩展口子：V0 Noop，V1 接规则清单 / 制度文档。"""
+
 from __future__ import annotations
 
 from typing import Protocol

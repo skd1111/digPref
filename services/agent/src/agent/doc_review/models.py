@@ -1,8 +1,10 @@
 """文档风险合规审核 —— 数据模型。"""
+
 from __future__ import annotations
 
 import uuid
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -106,5 +108,5 @@ class AnalysisResult(BaseModel):
     overall_risk_level: RiskLevel
     summary: str = ""
     findings: list[Finding]
-    model: dict = Field(default_factory=dict)
+    model: dict[str, Any] = Field(default_factory=dict)
     created_at: str = ""
