@@ -258,6 +258,11 @@ def create_app() -> FastAPI:
 
     app.include_router(audit_api_router)
 
+    # 文档风险合规审核（审核专家 · 文档审核）
+    from agent.doc_review import doc_review_api_router
+
+    app.include_router(doc_review_api_router)
+
     # Phase 7 V0: 数据专家（sources + nl2sql + sql/run + python/run + chart + export + templates）
     from agent.dataexpert import data_api_router
 

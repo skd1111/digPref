@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from agent.doc_review.api import router as doc_review_api_router  # noqa: F401
 from agent.doc_review.models import (  # noqa: F401
     AnalysisResult,
     Block,
