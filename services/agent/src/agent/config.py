@@ -138,6 +138,20 @@ class Settings(BaseSettings):
     # 审核专家 SQLite 路径（与 audit / tool_calls / ssh / image_processing 等 db 物理隔离）
     audit_expert_db_path: str = "audit_expert.db"
 
+    # ---- 文档风险合规审核（审核专家 · 文档审核）----
+    # 文档审核 SQLite 路径（与 audit_expert / preview 等 db 物理隔离）
+    doc_review_db_path: str = "doc_review.db"
+    # 文档审核模型名（缺省取 ollama_model）
+    doc_review_model: str | None = None
+    # 分类阶段读取文档前 N 字符
+    doc_review_classify_max_chars: int = Field(default=4000, ge=500, le=20000)
+    # 分析分块大小（字符）与重叠
+    doc_review_chunk_max_chars: int = Field(default=8000, ge=1000, le=32000)
+    doc_review_chunk_overlap: int = Field(default=200, ge=0, le=2000)
+    # 文档审核 LLM 路由链（按序降级）：mock / ollama / private / cloud
+    # cloud 一环仅在「模型管理」存在已启用云端后端（router.db.llm_backends, type=cloud, enabled=1）时生效
+    doc_review_llm_chain: list[str] = Field(default_factory=lambda: ["ollama", "private", "cloud"])
+
     # ---- Phase 7 V0 数据专家模式 ----
     # 数据专家 SQLite 路径（与 audit / router / knowledge / ssh 等 db 物理隔离）
     data_expert_db_path: str = "data_expert.db"
