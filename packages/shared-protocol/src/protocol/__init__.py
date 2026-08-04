@@ -27,3 +27,16 @@ from protocol.dspark import (  # noqa: F401
     DSPARK_N_DRAFT_MIN,
     DSPARK_N_DRAFT_MAX,
 )
+from protocol.doc_review import (  # noqa: F401
+    DocBlock,
+    DocCategory,
+    DocDetail,
+    DocFinding,
+    DocFormat,
+    DocPage,
+    DocPosition,
+    DocRiskLevel,
+    DocRiskType,
+    DocRunStatus,
+    DocSummary,
+)

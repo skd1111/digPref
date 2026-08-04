@@ -9,6 +9,7 @@ export * from './approval';
 export * from './audit';
 export * from './mcp';
 export * from './dspark';
+export * from './doc-review';
 export * from './codenav';
 export * from './sub_agent';
 export * from './thinking';
