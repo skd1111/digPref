@@ -89,6 +89,12 @@ _CHANNEL_BY_KIND = {
     "audit_task_decided": "agent://audit_task_decided",
     "audit_evidence_added": "agent://audit_evidence_added",
     "audit_compliance_done": "agent://audit_compliance_done",
+    # 文档风险合规审核（审核专家 · 文档审核）SSE 三处同步（CLAUDE.md §4）
+    # started/classified/findings_ready/failed 四事件
+    "doc_review_started": "agent://doc_review_started",
+    "doc_review_classified": "agent://doc_review_classified",
+    "doc_review_findings_ready": "agent://doc_review_findings_ready",
+    "doc_review_failed": "agent://doc_review_failed",
     # Phase 7 V0：数据专家 SSE 三处同步（CLAUDE.md §4）
     # data_query_result/data_python_result/data_chart_ready/data_export_done 四事件
     "data_query_result": "agent://data_query_result",
@@ -181,6 +187,9 @@ async def stream_graph_events(
             # Phase 5 V0：消费 audit 后台事件并推到 SSE 流
             for evt in await _drain_audit_events():
                 yield evt
+            # 文档风险合规审核：消费 doc_review 后台事件并推到 SSE 流
+            for evt in await _drain_doc_review_events():
+                yield evt
             # Phase 12 V1.5：消费 orchestrator 子 Agent 事件 + HITL 反向 approval
             for evt in await _drain_orchestrator_events():
                 yield evt
@@ -210,6 +219,8 @@ async def stream_graph_events(
         for evt in await _drain_ssh_events():
             yield evt
         for evt in await _drain_audit_events():
+            yield evt
+        for evt in await _drain_doc_review_events():
             yield evt
         for evt in await _drain_orchestrator_events():
             yield evt
@@ -358,6 +369,24 @@ async def _drain_audit_events() -> list[dict]:
     events: list[dict] = []
     try:
         from agent.audit_expert.events import consume_events
+
+        raw = await consume_events(timeout_s=0.0)
+        for kind, payload in raw:
+            channel = _CHANNEL_BY_KIND.get(kind)
+            if channel:
+                events.append(
+                    {"event": channel, "data": json.dumps(payload, default=str, ensure_ascii=False)}
+                )
+    except Exception:
+        pass  # best-effort
+    return events
+
+
+async def _drain_doc_review_events() -> list[dict]:
+    """文档审核：从 doc_review.events in-process deque 拉事件转 SSE。"""
+    events: list[dict] = []
+    try:
+        from agent.doc_review.events import consume_events
 
         raw = await consume_events(timeout_s=0.0)
         for kind, payload in raw:

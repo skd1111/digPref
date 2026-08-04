@@ -86,6 +86,12 @@ mod channel {
     pub const AUDIT_EVIDENCE_ADDED: &str = "agent://audit_evidence_added";
     pub const AUDIT_COMPLIANCE_DONE: &str = "agent://audit_compliance_done";
 
+    // 文档风险合规审核 —— SSE 三处同步（CLAUDE.md §4）
+    pub const DOC_REVIEW_STARTED: &str = "agent://doc_review_started";
+    pub const DOC_REVIEW_CLASSIFIED: &str = "agent://doc_review_classified";
+    pub const DOC_REVIEW_FINDINGS_READY: &str = "agent://doc_review_findings_ready";
+    pub const DOC_REVIEW_FAILED: &str = "agent://doc_review_failed";
+
     // Phase 7 V0 数据专家 —— SSE 三处同步（CLAUDE.md §4）
     // data_query_result/data_python_result/data_chart_ready/data_export_done 四事件
     pub const DATA_QUERY_RESULT: &str = "agent://data_query_result";
@@ -397,6 +403,11 @@ fn map_event_to_channel(event_name: &str) -> &'static str {
         "audit_task_decided"    => channel::AUDIT_TASK_DECIDED,
         "audit_evidence_added"  => channel::AUDIT_EVIDENCE_ADDED,
         "audit_compliance_done"  => channel::AUDIT_COMPLIANCE_DONE,
+        // 文档风险合规审核 SSE 三处同步（CLAUDE.md §4）
+        "doc_review_started"        => channel::DOC_REVIEW_STARTED,
+        "doc_review_classified"     => channel::DOC_REVIEW_CLASSIFIED,
+        "doc_review_findings_ready" => channel::DOC_REVIEW_FINDINGS_READY,
+        "doc_review_failed"         => channel::DOC_REVIEW_FAILED,
         // Phase 7 V0：数据专家 SSE 三处同步（CLAUDE.md §4）
         "data_query_result"    => channel::DATA_QUERY_RESULT,
         "data_python_result"   => channel::DATA_PYTHON_RESULT,

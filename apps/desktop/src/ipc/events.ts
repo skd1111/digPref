@@ -123,6 +123,16 @@ export const EVT = {
   /** 合规检查完成 */
   AUDIT_COMPLIANCE_DONE: "agent://audit_compliance_done",
 
+  // 文档风险合规审核 —— SSE 三处同步（CLAUDE.md §4）
+  /** 文档分析任务开始 */
+  DOC_REVIEW_STARTED: "agent://doc_review_started",
+  /** 文档分类完成 */
+  DOC_REVIEW_CLASSIFIED: "agent://doc_review_classified",
+  /** 风险分析完成 */
+  DOC_REVIEW_FINDINGS_READY: "agent://doc_review_findings_ready",
+  /** 分析失败 */
+  DOC_REVIEW_FAILED: "agent://doc_review_failed",
+
   // Phase 7 V0 —— 数据专家 SSE 三处同步（CLAUDE.md §4）
   /** SQL 查询结果就绪 */
   DATA_QUERY_RESULT: "agent://data_query_result",
