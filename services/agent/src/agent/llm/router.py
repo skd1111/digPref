@@ -447,6 +447,14 @@ _LOCAL_ONLY_TASKS: frozenset[TaskKind] = frozenset({
 })
 
 
+_DOC_CLASSIFY_MOCK = '{"doc_category": "contract", "risk_types": ["compliance", "legal"], "reason": "mock"}'
+_DOC_ANALYZE_MOCK = '{"findings": []}'
+
+
+async def _async_text(value: str) -> str:
+    return value
+
+
 def _is_mock_mode() -> bool:
     """`EAIDE_LLM_BACKEND=mock` 走内置 mock 后端（不调外部 LLM）。
 
@@ -747,6 +755,9 @@ class LMRouter:
             return self.mock.plan(intent="query", user_prompt="", history=[], tool_specs=[])
         if kind == "summarise":
             return self.mock.summarise(intent="query", user_prompt="", plan=[], results=[])
+        if kind in ("doc_classify", "doc_analyze"):
+            value = _DOC_CLASSIFY_MOCK if kind == "doc_classify" else _DOC_ANALYZE_MOCK
+            return _async_text(value)
         raise ValueError(f"unknown kind: {kind}")
 
     # ---- "Raise" 包装：把客户端内部静默降级转换成异常 -----------------------
@@ -812,6 +823,58 @@ class LMRouter:
             results=[],
         )
         return result
+
+    async def generate_review(self, *, kind: TaskKind, prompt: str) -> str:
+        """文档审核生成：按 settings.doc_review_llm_chain 顺序调用。
+
+        支持后端：mock / ollama / private / cloud。
+        cloud 从「模型管理」注册表取已启用的云端后端（router.db.llm_backends）。
+        默认链 ["ollama", "private", "cloud"]；全失败抛 LLMBackendError。
+        """
+        if self._mock_mode:
+            return await self.mock_dispatch(kind)
+        errors: list[str] = []
+        for backend_name in settings.doc_review_llm_chain:
+            backend = None
+            if backend_name == "ollama":
+                backend = self.ollama
+            elif backend_name == "private":
+                backend = self.private
+            elif backend_name == "cloud":
+                backend = await self._build_cloud_client()
+            if backend is None:
+                errors.append(f"{backend_name}: not configured")
+                continue
+            try:
+                text, _ = await backend.summarise(
+                    intent="query", user_prompt=prompt, plan=[], results=[],
+                )
+                if text:
+                    return text
+            except Exception as exc:  # noqa: BLE001 —— 降级链逐级尝试
+                errors.append(f"{backend_name}: {exc}")
+        raise LLMBackendError(
+            f"doc_review generate_review failed: {'; '.join(errors) or 'empty chain'}"
+        )
+
+    async def _build_cloud_client(self):
+        """从模型管理注册表取已启用云端后端；无则返回 None。
+
+        注意：当前 llm_backends.api_key_ref 存的是明文 API Key（模型管理现状）。
+        若未来按 CLAUDE.md 切 keyring 占位符语义，此处必须先解析占位符再传入，
+        否则会静默变成认证失败。
+        """
+        from agent.llm.storage import list_backends
+
+        for backend in await list_backends(enabled_only=True):
+            if backend.type == "cloud":
+                return PrivateLLMClient(
+                    base_url=backend.base_url,
+                    api_key=backend.api_key_ref or "",
+                    model=backend.model_name,
+                    max_context=backend.max_context,
+                )
+        return None
 
     async def classify_intent(self, text: str) -> Intent:
         """向后兼容：返回最终值。降级过程静默（不抛异常）。

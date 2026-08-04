@@ -42,6 +42,9 @@ TaskKind = Literal[
     # Phase 7 预留 (2026-07-31): 数据专家敏感任务
     "schema_link",
     "chart_reco",
+    # 文档风险合规审核（2026-08-04）：文档分类 / 风险分析（路由链可配置，允许云端）
+    "doc_classify",
+    "doc_analyze",
     # mock 模式标记（非真实任务，不走 LLM 调度）
     "mock_mode",
 ]    # noqa: E501
