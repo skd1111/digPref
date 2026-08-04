@@ -15,6 +15,7 @@ pub mod skills;        // Phase 2D V0
 pub mod localai;       // Phase 4 V0
 pub mod builtin;       // Phase 1B V1.5
 pub mod audit_expert;  // Phase 5 V1
+pub mod doc_review;  // 文档风险合规审核
 pub mod dataexpert;    // Phase 7 V0
 pub mod sessions;      // Phase 6 V1.5
 pub mod trace;         // Phase 16 思维链可视化

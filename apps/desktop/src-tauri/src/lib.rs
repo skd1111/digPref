@@ -282,6 +282,7 @@ pub fn run() {
             commands::dataexpert::data_test_connection,
             // Phase 5 V1：审核专家工作台（13 操作经 _op 字段分发到 Python FastAPI）
             commands::audit_expert::audit_decide,
+            commands::doc_review::doc_review,
             // Phase 6 V1.5：会话管理 17 command（V0 5 + V1.5 12）
             commands::sessions::sessions_create,
             commands::sessions::sessions_list,
