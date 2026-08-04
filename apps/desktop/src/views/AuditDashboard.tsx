@@ -9,20 +9,23 @@
  *   │            │                      │ 资金影响   │
  *   └────────────┴──────────────────────┴────────────┘
  */
-import { useEffect } from 'react';
-import { useAuditStore } from '@/store/auditStore';
-import { useCollabStore } from '@/store/collabStore';
-import { ApprovalQueue } from '@/components/audit/ApprovalQueue';
-import { AuditApprovalCard } from '@/components/audit/AuditApprovalCard';
-import { DiffViewer } from '@/components/audit/DiffViewer';
-import { ApprovalActions } from '@/components/audit/ApprovalActions';
-import { EvidenceTimeline } from '@/components/audit/EvidenceTimeline';
-import { CompliancePanel } from '@/components/audit/CompliancePanel';
-import { CollabDrawer } from '@/components/collab/CollabDrawer';
+import { useEffect, useState } from "react";
+import { useAuditStore } from "@/store/auditStore";
+import { useCollabStore } from "@/store/collabStore";
+import { DocReviewDashboard } from "./DocReviewDashboard";
+import { ApprovalQueue } from "@/components/audit/ApprovalQueue";
+import { AuditApprovalCard } from "@/components/audit/AuditApprovalCard";
+import { DiffViewer } from "@/components/audit/DiffViewer";
+import { ApprovalActions } from "@/components/audit/ApprovalActions";
+import { EvidenceTimeline } from "@/components/audit/EvidenceTimeline";
+import { CompliancePanel } from "@/components/audit/CompliancePanel";
+import { CollabDrawer } from "@/components/collab/CollabDrawer";
 
-export function AuditDashboard(): JSX.Element {
+function AuditApprovalDashboard(): JSX.Element {
   const selectedTaskId = useAuditStore((s) => s.selectedTaskId);
-  const task = useAuditStore((s) => s.tasks.find((t) => t.id === selectedTaskId));
+  const task = useAuditStore((s) =>
+    s.tasks.find((t) => t.id === selectedTaskId),
+  );
   const collabContexts = useCollabStore((s) => s.contexts);
   const openDrawer = useCollabStore((s) => s.openDrawer);
   const closeDrawer = useCollabStore((s) => s.closeDrawer);
@@ -37,8 +40,7 @@ export function AuditDashboard(): JSX.Element {
     }
     const linkedCtx = collabContexts.find(
       (c) =>
-        c.anchor_type === 'approval_ticket' &&
-        c.related_ticket_id === task.id,
+        c.anchor_type === "approval_ticket" && c.related_ticket_id === task.id,
     );
     if (linkedCtx && linkedCtx.id !== drawerContextId) {
       openDrawer(linkedCtx.id);
@@ -50,12 +52,12 @@ export function AuditDashboard(): JSX.Element {
   return (
     <div
       className="audit-dashboard flex h-full"
-      style={{ backgroundColor: '#ffffff' }}
+      style={{ backgroundColor: "#ffffff" }}
     >
       {/* 左栏：审批工作台 240px */}
       <div
         className="flex-shrink-0 border-r"
-        style={{ width: 280, borderColor: '#d4d4d4' }}
+        style={{ width: 280, borderColor: "#d4d4d4" }}
       >
         <ApprovalQueue />
       </div>
@@ -78,7 +80,7 @@ export function AuditDashboard(): JSX.Element {
         ) : (
           <div
             className="flex flex-1 items-center justify-center text-ui"
-            style={{ color: '#616161' }}
+            style={{ color: "#616161" }}
           >
             ← 请从左侧选择审批任务
           </div>
@@ -88,7 +90,7 @@ export function AuditDashboard(): JSX.Element {
       {/* 右栏：审计与合规 320px */}
       <div
         className="flex flex-shrink-0 flex-col border-l"
-        style={{ width: 320, borderColor: '#d4d4d4' }}
+        style={{ width: 320, borderColor: "#d4d4d4" }}
       >
         {task ? (
           <>
@@ -100,7 +102,7 @@ export function AuditDashboard(): JSX.Element {
         ) : (
           <div
             className="flex flex-1 items-center justify-center p-4 text-center text-2xs"
-            style={{ color: '#616161' }}
+            style={{ color: "#616161" }}
           >
             选择任务后查看 Evidence Chain + 合规检查
           </div>
@@ -110,5 +112,53 @@ export function AuditDashboard(): JSX.Element {
       {/* Phase 9 协作抽屉：有 approval_ticket 锚点时自动打开 */}
       <CollabDrawer fallbackCreate />
     </div>
+  );
+}
+
+export function AuditDashboard(): JSX.Element {
+  const [docTab, setDocTab] = useState(false);
+  return (
+    <div className="flex h-full flex-col">
+      <div
+        className="flex flex-shrink-0 border-b"
+        style={{ borderColor: "#d4d4d4", backgroundColor: "#f3f3f3" }}
+      >
+        <TabButton
+          active={!docTab}
+          onClick={() => setDocTab(false)}
+          label="审批工作台"
+        />
+        <TabButton
+          active={docTab}
+          onClick={() => setDocTab(true)}
+          label="文档审核"
+        />
+      </div>
+      {docTab ? <DocReviewDashboard /> : <AuditApprovalDashboard />}
+    </div>
+  );
+}
+
+function TabButton({
+  active,
+  onClick,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="px-4 py-2 text-ui font-semibold"
+      style={{
+        color: active ? "#007acc" : "#616161",
+        borderBottom: active ? "2px solid #007acc" : "2px solid transparent",
+      }}
+    >
+      {label}
+    </button>
   );
 }
