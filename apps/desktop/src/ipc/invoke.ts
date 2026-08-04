@@ -12,6 +12,9 @@ import type {
   ThinkingStep,
   TraceFileDiffResponse,
   TraceSessionResponse,
+  DocDetail,
+  DocFinding,
+  DocSummary,
 } from "@eaide/shared-protocol";
 
 export async function invoke<T = unknown>(
@@ -138,11 +141,8 @@ export interface ScoringWeights {
 export const ipc = {
   startChat: (prompt: string) => invoke<void>("agent_chat", { prompt }),
   /** Phase 18：带模式/自主性透传的 chat 启动（workMode/autonomy 随请求进后端） */
-  startChatWithMode: (
-    prompt: string,
-    workMode: string,
-    autonomy: string,
-  ) => invoke<string>("agent_chat", { prompt, workMode, autonomy }),
+  startChatWithMode: (prompt: string, workMode: string, autonomy: string) =>
+    invoke<string>("agent_chat", { prompt, workMode, autonomy }),
   /** Phase 18：自动模式风险确认弹窗确认后写授权审计 */
   confirmAutonomy: (sessionId: string, workMode: string) =>
     invoke<{ ok: boolean }>("agent_autonomy_confirm", {
@@ -154,9 +154,12 @@ export const ipc = {
   getToolchain: () =>
     invoke<{ paths: Record<string, string> }>("agent_toolchain_get"),
   saveToolchain: (paths: Record<string, string>) =>
-    invoke<{ ok: boolean; paths: Record<string, string> }>("agent_toolchain_save", {
-      paths,
-    }),
+    invoke<{ ok: boolean; paths: Record<string, string> }>(
+      "agent_toolchain_save",
+      {
+        paths,
+      },
+    ),
   approve: (
     approvalId: string,
     decision: "approve" | "reject",
@@ -247,6 +250,44 @@ export const ipc = {
     }),
   auditStats: () =>
     invoke<Record<string, unknown>>("audit_decide", { _op: "stats" }),
+
+  // 文档风险合规审核（审核专家 · 文档审核）
+  docReviewRegister: (file_path: string) =>
+    invoke<{ doc_id: string; file_name: string; page_count: number }>(
+      "doc_review",
+      {
+        _op: "register",
+        file_path,
+      },
+    ),
+  docReviewList: () => invoke<DocSummary[]>("doc_review", { _op: "list" }),
+  docReviewGet: (doc_id: string) =>
+    invoke<DocDetail>("doc_review", { _op: "get", doc_id }),
+  docReviewAnalyze: (doc_id: string) =>
+    invoke<{ run_id: string; status: string }>("doc_review", {
+      _op: "analyze",
+      doc_id,
+    }),
+  docReviewFindings: (doc_id: string, run_id?: string) =>
+    invoke<{
+      doc_id: string;
+      run_id: string;
+      count: number;
+      findings: DocFinding[];
+    }>("doc_review", { _op: "findings", doc_id, run_id }),
+  docReviewStatus: (doc_id: string) =>
+    invoke<{ doc_id: string; run_id?: string; status: string; error?: string }>(
+      "doc_review",
+      {
+        _op: "status",
+        doc_id,
+      },
+    ),
+  docReviewDelete: (doc_id: string) =>
+    invoke<{ doc_id: string; deleted: boolean }>("doc_review", {
+      _op: "delete",
+      doc_id,
+    }),
 
   // Phase 2F V0: 代码导航
   codeNavJump: (body: {
