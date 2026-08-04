@@ -182,4 +182,4 @@ make build
 
 ## 8. License
 
-未开源许可 —— 保留所有权利（企业内部项目）。
+[MIT](LICENSE) © 2026 skd1111
