@@ -10,12 +10,26 @@ def _doc(texts: list[list[str]]) -> ParsedDocument:
     for pi, blocks in enumerate(texts, start=1):
         items = []
         for bi, text in enumerate(blocks, start=1):
-            items.append({"block_id": f"p{pi}b{bi}", "text": text, "start": offset, "end": offset + len(text)})
+            items.append(
+                {
+                    "block_id": f"p{pi}b{bi}",
+                    "text": text,
+                    "start": offset,
+                    "end": offset + len(text),
+                }
+            )
             all_text.append(text)
             offset += len(text) + 1
         pages.append({"page_no": pi, "blocks": items})
-    return ParsedDocument(doc_id="d", file_name="f", file_path="f", format="txt",
-                          page_count=len(pages), pages=pages, full_text="\n".join(all_text))
+    return ParsedDocument(
+        doc_id="d",
+        file_name="f",
+        file_path="f",
+        format="txt",
+        page_count=len(pages),
+        pages=pages,
+        full_text="\n".join(all_text),
+    )
 
 
 def test_exact_match_single():

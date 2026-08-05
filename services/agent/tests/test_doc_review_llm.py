@@ -1,6 +1,5 @@
 # services/agent/tests/test_doc_review_llm.py
 import pytest
-
 from agent.config import settings
 from agent.llm.fallback import LLMBackendError
 from agent.llm.models import LLMBackend
@@ -40,10 +39,17 @@ async def test_generate_review_uses_chain_order(monkeypatch):
 
 async def test_generate_review_uses_enabled_cloud_backend(monkeypatch):
     monkeypatch.setattr(settings, "doc_review_llm_chain", ["cloud"])
-    await upsert_backend(LLMBackend(
-        name="cloud-1", type="cloud", base_url="https://cloud.example.com/v1",
-        model_name="gpt-4o", api_key_ref="k", data_residency="cloud", enabled=True,
-    ))
+    await upsert_backend(
+        LLMBackend(
+            name="cloud-1",
+            type="cloud",
+            base_url="https://cloud.example.com/v1",
+            model_name="gpt-4o",
+            api_key_ref="k",
+            data_residency="cloud",
+            enabled=True,
+        )
+    )
     captured = {}
 
     class FakeCloud:

@@ -2,7 +2,6 @@
 from pathlib import Path
 
 import pytest
-
 from agent.doc_review.parser import DocParseError, parse_document
 
 
