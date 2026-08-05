@@ -47,7 +47,7 @@ async def register_document(req: RegisterRequest) -> dict[str, Any]:
     storage = get_default_storage()
     await storage.insert_document(parsed)
     try:
-        from agent.audit.store import audit  # type: ignore[import-untyped]
+        from agent.audit.store import audit
 
         await audit(
             "doc_review.document_imported",
