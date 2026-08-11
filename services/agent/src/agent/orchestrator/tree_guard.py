@@ -6,10 +6,10 @@
 
 不做白名单放宽。这条约束在 spec.py 也已经留好位，但实际校验在这里完成。
 """
+
 from __future__ import annotations
 
 from agent.orchestrator.spec import SubAgentSpec
-
 
 # 硬上限（V0 锁死，不读 config —— 设计文档明确禁止）
 MAX_DEPTH = 2
@@ -20,9 +20,7 @@ class TreeLimitExceeded(ValueError):
     """派生树超过硬上限（max_depth / total_nodes）。"""
 
     def __init__(self, reason: str, current: int, limit: int) -> None:
-        super().__init__(
-            f"派生树硬上限触发：{reason} 当前={current} 上限={limit}"
-        )
+        super().__init__(f"派生树硬上限触发：{reason} 当前={current} 上限={limit}")
         self.reason = reason
         self.current = current
         self.limit = limit

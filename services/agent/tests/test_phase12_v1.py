@@ -11,17 +11,15 @@ CLAUDE.md §1/§2/§6 红线：
 - 派生树硬上限（V0 已测；V1 不改）
 - 敏感任务本机（is_local_only_task 强制 ollama）
 """
+
 from __future__ import annotations
 
 import asyncio
 
 import pytest
-
-from agent.orchestrator.worker_pool import (
-    DLQEntry,
-    WorkerPool,
-    WorkerResult,
-    WorkerTask,
+from agent.orchestrator.hitl_bridge import (
+    HITLBridge,
+    HITLDecision,
 )
 from agent.orchestrator.locks import (
     DistributedLockManager,
@@ -32,13 +30,9 @@ from agent.orchestrator.token_bucket import (
     TokenBucket,
     TokenBucketManager,
 )
-from agent.orchestrator.hitl_bridge import (
-    HITLBridge,
-    HITLDecision,
-    HITLRequest,
-    reset_default_hitl_bridge,
+from agent.orchestrator.worker_pool import (
+    WorkerPool,
 )
-
 
 # ---- Worker Pool ----------------------------------------------------------
 
@@ -51,7 +45,9 @@ async def test_worker_pool_success_first_try():
         return {"echo": payload}
 
     result = await pool.submit(
-        idempotency_token="t1", payload={"x": 1}, handler=handler,
+        idempotency_token="t1",
+        payload={"x": 1},
+        handler=handler,
     )
     assert result.success is True
     assert result.attempts == 1
@@ -69,7 +65,9 @@ async def test_worker_pool_retries_then_dlq():
         raise ValueError("nope")
 
     result = await pool.submit(
-        idempotency_token="t1", payload={"x": 1}, handler=always_fail,
+        idempotency_token="t1",
+        payload={"x": 1},
+        handler=always_fail,
     )
     assert result.success is False
     assert result.attempts == 3
@@ -91,7 +89,9 @@ async def test_worker_pool_retry_succeeds_on_second_try():
         return "ok"
 
     result = await pool.submit(
-        idempotency_token="t1", payload={}, handler=flaky,
+        idempotency_token="t1",
+        payload={},
+        handler=flaky,
     )
     assert result.success is True
     assert result.attempts == 2
@@ -109,10 +109,14 @@ async def test_worker_pool_idempotency_dedup():
         return payload
 
     r1 = await pool.submit(
-        idempotency_token="dup", payload={"x": 1}, handler=handler,
+        idempotency_token="dup",
+        payload={"x": 1},
+        handler=handler,
     )
     r2 = await pool.submit(
-        idempotency_token="dup", payload={"x": 2}, handler=handler,
+        idempotency_token="dup",
+        payload={"x": 2},
+        handler=handler,
     )
     assert len(calls) == 1  # 第二次 dedup 命中
     assert r1.task_id == r2.task_id
@@ -135,7 +139,9 @@ async def test_worker_pool_concurrency_limit():
 
     tasks = [
         pool.submit(
-            idempotency_token=f"t{i}", payload={"id": i}, handler=handler,
+            idempotency_token=f"t{i}",
+            payload={"id": i},
+            handler=handler,
         )
         for i in range(5)
     ]
@@ -154,14 +160,20 @@ async def test_worker_pool_cancel_all():
         return "done"
 
     # 启一个长任务
-    task = asyncio.create_task(pool.submit(
-        idempotency_token="t1", payload={}, handler=slow,
-    ))
+    task = asyncio.create_task(
+        pool.submit(
+            idempotency_token="t1",
+            payload={},
+            handler=slow,
+        )
+    )
     await asyncio.sleep(0.02)  # 让 worker 开始
     pool.cancel_all()
     # 后续 submit 应立即返 cancelled
     result = await pool.submit(
-        idempotency_token="t2", payload={}, handler=slow,
+        idempotency_token="t2",
+        payload={},
+        handler=slow,
     )
     assert result.success is False
     assert result.error == "cancelled"
@@ -230,6 +242,7 @@ def test_token_bucket_consume_initial_full():
 def test_token_bucket_refill():
     """时间流逝补充令牌。"""
     import time
+
     bucket = TokenBucket(capacity=10, refill_rate=10.0, tokens=0.0)
     assert bucket.try_consume(1) is False
     time.sleep(0.5)  # 等 0.5s 应补充 5 个
@@ -238,7 +251,8 @@ def test_token_bucket_refill():
 
 def test_token_bucket_manager_three_dimensions():
     mgr = TokenBucketManager(
-        default_capacity=5, default_refill_rate=0.001,  # 几乎不 refill
+        default_capacity=5,
+        default_refill_rate=0.001,  # 几乎不 refill
         backend_overrides={"private": (5, 0.001), "ollama": (5, 0.001)},
     )
     # 三维 key 互不影响
@@ -273,7 +287,8 @@ def test_token_bucket_local_only_redline():
 
 def test_token_bucket_manager_reset():
     mgr = TokenBucketManager(
-        default_capacity=2, default_refill_rate=0.001,
+        default_capacity=2,
+        default_refill_rate=0.001,
         backend_overrides={"private": (2, 0.001)},
     )
     assert mgr.try_consume("t", "plan", "private", n=2) is True
@@ -327,7 +342,7 @@ async def test_hitl_bridge_request_has_correlation_id():
     hitl_mod.audit = fake_audit
     try:
         bridge = HITLBridge()
-        decision = await bridge.request_approval(
+        await bridge.request_approval(
             sub_agent_id="sub-1",
             parent_run_id="run-1",
             operation="DELETE FROM x",
@@ -360,7 +375,9 @@ async def test_integration_bucket_then_pool():
     for i in range(5):
         if mgr.try_consume("t", "plan", "private"):
             result = await pool.submit(
-                idempotency_token=f"t{i}", payload={}, handler=handler,
+                idempotency_token=f"t{i}",
+                payload={},
+                handler=handler,
             )
             if result.success:
                 succeeded += 1

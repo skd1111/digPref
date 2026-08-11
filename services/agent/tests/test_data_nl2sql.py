@@ -4,11 +4,10 @@
   - Schema 链接选表数 ≤ 5（绝不把全量 Schema 塞给大模型）
   - 业务字典正确替换（'成功' → status='SUC'）
 """
+
 import pytest
-
+from agent.dataexpert.nl2sql.dictionary import get_dictionary_context, translate
 from agent.dataexpert.nl2sql.linker import MAX_TABLES, select_tables
-from agent.dataexpert.nl2sql.dictionary import translate, get_dictionary_context
-
 
 # ---- Schema 链接：选表数 ≤ 5 --------------------------------------------------
 
@@ -51,15 +50,27 @@ async def test_select_tables_empty_cache():
 async def test_select_tables_relevance():
     """表名匹配度高的排在前面。"""
     cache = [
-        {"name": "t_account", "comment": "账户表", "columns": [
-            {"name": "balance", "type": "DECIMAL", "comment": "余额"},
-        ]},
-        {"name": "t_order", "comment": "订单表", "columns": [
-            {"name": "amount", "type": "DECIMAL", "comment": "金额"},
-        ]},
-        {"name": "t_log", "comment": "日志表", "columns": [
-            {"name": "msg", "type": "TEXT", "comment": "消息"},
-        ]},
+        {
+            "name": "t_account",
+            "comment": "账户表",
+            "columns": [
+                {"name": "balance", "type": "DECIMAL", "comment": "余额"},
+            ],
+        },
+        {
+            "name": "t_order",
+            "comment": "订单表",
+            "columns": [
+                {"name": "amount", "type": "DECIMAL", "comment": "金额"},
+            ],
+        },
+        {
+            "name": "t_log",
+            "comment": "日志表",
+            "columns": [
+                {"name": "msg", "type": "TEXT", "comment": "消息"},
+            ],
+        },
     ]
     result = await select_tables("查询账户余额", cache)
     # t_account 应该排第一（表名 + 字段名都匹配）
@@ -70,6 +81,7 @@ async def test_select_tables_relevance():
 async def test_select_tables_returns_table_schema():
     """返回的对象是 TableSchema 类型。"""
     from agent.dataexpert.models import TableSchema
+
     result = await select_tables("查询数据", _SCHEMA_CACHE_10)
     for tbl in result:
         assert isinstance(tbl, TableSchema)
@@ -77,6 +89,7 @@ async def test_select_tables_returns_table_schema():
 
 
 # ---- 业务字典替换 ---------------------------------------------------------------
+
 
 def test_translate_global_term():
     """全局字典：'成功' → status='SUC'。"""
@@ -116,6 +129,7 @@ def test_translate_multiple_terms():
 
 # ---- get_dictionary_context ----------------------------------------------------
 
+
 def test_get_dictionary_context_global():
     """全局字典上下文非空。"""
     ctx = get_dictionary_context("")
@@ -136,3 +150,11 @@ def test_get_dictionary_context_unknown_source():
     assert "成功" in ctx
     # 不应包含信贷特定映射
     assert "five_class" not in ctx
+
+
+def test_extract_sql_from_generator():
+    """SQL 围栏/前缀清洗（spec §4.5 extract_sql）。"""
+    from agent.llm.json_discipline import extract_sql
+
+    raw = "好的：\n```sql\nSELECT * FROM orders WHERE status='SUC'\n```"
+    assert extract_sql(raw) == "SELECT * FROM orders WHERE status='SUC'"

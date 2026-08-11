@@ -9,13 +9,11 @@
 - test_yaml_unicode_chinese
 - test_sync_db_to_yaml_round_trip
 """
+
 from __future__ import annotations
 
-import json
-
 import pytest
-
-from agent.biznav.import_export import FeatureIO, FeatureImportError
+from agent.biznav.import_export import FeatureImportError, FeatureIO
 from agent.biznav.models import Feature, RelatedFile
 from agent.biznav.storage import FeatureStorage
 
@@ -66,7 +64,8 @@ def test_sync_yaml_to_db_replaces_ai_source(tmp_path):
     storage.upsert(_feat("a", name="原名", source="ai"))
 
     new_yaml = FeatureIO.to_yaml(
-        "demo", "/tmp/demo",
+        "demo",
+        "/tmp/demo",
         [_feat("a", name="新名")],
         "2026-07-28T10:00:00Z",
     )
@@ -86,7 +85,8 @@ def test_sync_yaml_to_db_preserves_manual_source(tmp_path):
     storage.upsert(_feat("a", name="DB 原名", source="manual"))
 
     yaml_text = FeatureIO.to_yaml(
-        "demo", "/tmp/demo",
+        "demo",
+        "/tmp/demo",
         [_feat("a", name="YAML 新名")],
         "2026-07-28T10:00:00Z",
     )
@@ -112,7 +112,8 @@ def test_from_yaml_invalid_schema_raises(tmp_path):
 
 def test_yaml_unicode_chinese(tmp_path):
     text = FeatureIO.to_yaml(
-        "demo", "/tmp/demo",
+        "demo",
+        "/tmp/demo",
         [_feat("a", name="订单管理", description="包含中文描述与 emoji 测试 ✓")],
         "2026-07-28T10:00:00Z",
     )
@@ -128,9 +129,7 @@ def test_sync_db_to_yaml_round_trip(tmp_path):
     storage = FeatureStorage(db)
     storage.upsert(_feat("a"))
     storage.upsert(_feat("b", category="路由"))
-    text = FeatureIO.sync_db_to_yaml(
-        storage, project_name="demo", project_root="/tmp/demo"
-    )
+    text = FeatureIO.sync_db_to_yaml(storage, project_name="demo", project_root="/tmp/demo")
     features = FeatureIO.from_yaml(text)
     assert {f.id for f in features} == {"a", "b"}
     a = next(f for f in features if f.id == "a")

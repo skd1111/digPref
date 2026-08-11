@@ -7,6 +7,7 @@ design §4.3：
 
 降级策略：WeasyPrint 不可用时降级为 HTML 文件输出。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -16,7 +17,6 @@ from pathlib import Path
 from typing import Any
 
 from agent.dataexpert.export.watermark import embed_watermark_metadata, mask_pii_columns
-
 
 # PDF HTML 模板（Jinja2）
 _PDF_TEMPLATE = """<!DOCTYPE html>
@@ -78,6 +78,7 @@ def export_pdf(
 
     # 水印
     from agent.dataexpert.export.watermark import generate_watermark_text
+
     watermark_text = generate_watermark_text(operator)
 
     # 渲染 HTML
@@ -90,6 +91,7 @@ def export_pdf(
     # 尝试 WeasyPrint 渲染 PDF
     try:
         from weasyprint import HTML
+
         HTML(string=html_content).write_pdf(output_path)
         fmt = "pdf"
     except ImportError:
@@ -102,12 +104,15 @@ def export_pdf(
     file_bytes = Path(output_path).read_bytes()
     md5 = hashlib.md5(file_bytes).hexdigest()
 
-    meta = embed_watermark_metadata({
-        "path": output_path,
-        "md5": md5,
-        "row_count": len(masked_rows),
-        "format": fmt,
-    }, operator)
+    meta = embed_watermark_metadata(
+        {
+            "path": output_path,
+            "md5": md5,
+            "row_count": len(masked_rows),
+            "format": fmt,
+        },
+        operator,
+    )
 
     return meta
 
@@ -122,6 +127,7 @@ def _render_html(
     """渲染 HTML（V0 简化版，不依赖 Jinja2 也能工作）。"""
     try:
         from jinja2 import Template
+
         tmpl = Template(_PDF_TEMPLATE)
         return tmpl.render(
             title=title,
@@ -138,8 +144,11 @@ def _render_html(
 
 
 def _manual_html(
-    columns: list[str], rows: list[list[Any]],
-    title: str, operator: str, watermark: str,
+    columns: list[str],
+    rows: list[list[Any]],
+    title: str,
+    operator: str,
+    watermark: str,
 ) -> str:
     """手动拼接 HTML（Jinja2 不可用时的兜底）。"""
     th = "".join(f"<th>{c}</th>" for c in columns)

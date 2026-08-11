@@ -7,9 +7,9 @@
   1. 复用 SSE 适配器，把 agent:// 事件流推送到 WebSocket；
   2. 支持 WebSocket 通道接收 approval 决策（替代 HTTP POST /approval）。
 """
+
 from __future__ import annotations
 
-import asyncio
 import json
 from datetime import datetime, timezone
 
@@ -23,11 +23,13 @@ async def ws_endpoint(websocket: WebSocket) -> None:
     await websocket.accept()
 
     # 握手：告知客户端连接已建立
-    await websocket.send_json({
-        "event": "ready",
-        "timestamp": _utc_now_iso(),
-        "protocol_version": "0.1.0",
-    })
+    await websocket.send_json(
+        {
+            "event": "ready",
+            "timestamp": _utc_now_iso(),
+            "protocol_version": "0.1.0",
+        }
+    )
 
     # 进入双向消息循环，直到客户端断开
     try:
@@ -35,26 +37,32 @@ async def ws_endpoint(websocket: WebSocket) -> None:
             try:
                 payload = json.loads(raw)
             except json.JSONDecodeError:
-                await websocket.send_json({
-                    "event": "error",
-                    "message": "消息必须是合法 JSON",
-                    "timestamp": _utc_now_iso(),
-                })
+                await websocket.send_json(
+                    {
+                        "event": "error",
+                        "message": "消息必须是合法 JSON",
+                        "timestamp": _utc_now_iso(),
+                    }
+                )
                 continue
 
             # 当前阶段：回声 + 时间戳，验证通道可用
             msg_type = payload.get("type", "echo")
             if msg_type == "ping":
-                await websocket.send_json({
-                    "event": "pong",
-                    "timestamp": _utc_now_iso(),
-                })
+                await websocket.send_json(
+                    {
+                        "event": "pong",
+                        "timestamp": _utc_now_iso(),
+                    }
+                )
             else:
-                await websocket.send_json({
-                    "event": "echo",
-                    "original": payload,
-                    "timestamp": _utc_now_iso(),
-                })
+                await websocket.send_json(
+                    {
+                        "event": "echo",
+                        "original": payload,
+                        "timestamp": _utc_now_iso(),
+                    }
+                )
     except WebSocketDisconnect:
         # 客户端正常断开，无需额外清理
         pass

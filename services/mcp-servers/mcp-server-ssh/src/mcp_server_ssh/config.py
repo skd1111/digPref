@@ -1,4 +1,5 @@
 """SSH MCP 服务器配置。"""
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,8 +12,16 @@ class Settings(BaseSettings):
     extra_allowed_commands: list[str] = []
     # 旧版黑名单（已废弃，保留用于向后兼容；新代码使用白名单机制）
     command_blacklist: list[str] = [
-        "rm -rf /", "mkfs", "dd if=", ":(){:|:&};:",
-        "shutdown", "reboot", "halt", "poweroff",
-        "iptables -F", "userdel", "passwd",
+        "rm -rf /",
+        "mkfs",
+        "dd if=",
+        ":(){:|:&};:",
+        "shutdown",
+        "reboot",
+        "halt",
+        "poweroff",
+        "iptables -F",
+        "userdel",
+        "passwd",
     ]
     tool_timeout_sec: int = 30

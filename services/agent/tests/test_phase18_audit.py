@@ -1,15 +1,15 @@
 """Phase 18 审计留痕：AUTO_MODE_ENABLED / MODE_ROUTED / AUTO_MODE_DECISION。"""
+
 from __future__ import annotations
 
 import json
 
 import aiosqlite
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-
 from agent.api.autonomy import router as autonomy_router
 from agent.audit.store import audit
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 
 @pytest.fixture
@@ -70,7 +70,6 @@ async def test_mode_routed_audit(tmp_path, monkeypatch):
 
 async def test_auto_mode_decision_audit_shape(tmp_path):
     """AUTO_MODE_DECISION 事件字段完整性（经 audit() 直接写入验证 schema 兼容）。"""
-    from agent.config import settings
 
     db_path = str(tmp_path / "audit.sqlite")
     await audit(

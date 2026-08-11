@@ -12,17 +12,23 @@
     - OpenAI Codex CLI 的沙箱执行模式：所有 LLM 调用都有超时保护
     - VSCode 扩展系统的分层设计：清晰的接口边界，便于替换后端
 """
+
 from __future__ import annotations
 
 import json
+import logging
 import re
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
 from agent.dual.prompt_loader import FINAL_ANSWER_STYLE
+from agent.llm.json_discipline import RETRY_PROMPT, extract_json
 from agent.llm.prompts import load_prompt
+from agent.llm.token_usage import record_openai_usage
 from agent.llm.types import Intent
+
+logger = logging.getLogger(__name__)
 
 # ---- 思考块剥离 ----------------------------------------------------------------
 # 同时匹配大小写变体：文档说大写，但防御性编程不假设格式。
@@ -101,6 +107,8 @@ class PrivateLLMClient:
         self.api_key = api_key
         self.model = model
         self.max_context = max_context
+        # Token 计量标签：内网后端 "private"；云端客户端由 _build_cloud_client 改为 "cloud"
+        self.usage_label = "private"
         # 延迟创建客户端（避免 import 时产生副作用）
         self._client: httpx.AsyncClient | None = None
 
@@ -124,8 +132,7 @@ class PrivateLLMClient:
             # system 本身就超了：截 system 末尾
             keep_chars = max(512, budget_chars // 2)
             truncated = [
-                {**m, "content": str(m.get("content", ""))[-keep_chars:]}
-                for m in system_msgs
+                {**m, "content": str(m.get("content", ""))[-keep_chars:]} for m in system_msgs
             ]
             return truncated
 
@@ -137,9 +144,7 @@ class PrivateLLMClient:
             if content_len > remaining:
                 # 单条消息太长：直接截它
                 if remaining > 256:
-                    kept.append(
-                        {**m, "content": str(m.get("content", ""))[:remaining]}
-                    )
+                    kept.append({**m, "content": str(m.get("content", ""))[:remaining]})
                 break
             kept.append(m)
             remaining -= content_len
@@ -208,7 +213,134 @@ class PrivateLLMClient:
         if not choices:
             raise ValueError("LLM 返回了空的 choices 列表")
         content = choices[0].get("message", {}).get("content", "")
-        return json.loads(_strip_think(content))
+        # Token 计量（上传=prompt_tokens / 下载=completion_tokens）；缺失时按字符数估算
+        record_openai_usage(
+            body,
+            backend=self.usage_label,
+            model=self.model,
+            fallback_messages=truncated,
+            fallback_output=str(content or ""),
+        )
+        parsed = extract_json(content)
+        if parsed is None:
+            raise ValueError(f"LLM 输出无法解析为 JSON: {content[:200]}")
+        return cast(dict[str, Any], parsed)
+
+    async def _chat_json_with_retry(
+        self,
+        messages: list[dict],
+        *,
+        response_format: dict | None = None,
+        temperature: float = 0.1,
+    ) -> dict:
+        """_chat_completion + 第四层重试：解析失败时把错误提示喂回模型重发一次。"""
+        last_output = ""
+        for attempt in range(2):
+            msgs = messages
+            if attempt:
+                hint = RETRY_PROMPT.replace("{last_output}", last_output[:2000])
+                msgs = [*messages, {"role": "user", "content": hint}]
+            try:
+                return await self._chat_completion(
+                    msgs,
+                    response_format=response_format,
+                    temperature=temperature,
+                )
+            except ValueError as exc:
+                last_output = str(exc)
+        raise ValueError("LLM 输出两次均无法解析为 JSON")
+
+    # ---- 原生 Function Calling（OpenAI 模式，2026-08-07）--------------------
+
+    async def chat_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        *,
+        tool_choice: str = "auto",
+        temperature: float = 0.1,
+        timeout: float | None = None,
+    ) -> dict:
+        """OpenAI 原生工具调用：传 tools 参数，返原始响应体（不做 JSON 解析）。
+
+        Returns:
+            {"content": str | None, "tool_calls": [{id, name, arguments(dict)}],
+             "raw_message": dict}
+
+        失败抛异常（httpx / HTTP 状态码错误），由调用方降级到提示词协议。
+        """
+        truncated = self._truncate_history(messages)
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": truncated,
+            "temperature": temperature,
+            "tools": tools,
+            "tool_choice": tool_choice,
+        }
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(timeout or 90.0, connect=5.0),
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+        ) as client:
+            r = await client.post(f"{self.base_url}/chat/completions", json=payload)
+            r.raise_for_status()
+            body = r.json()
+        choices = body.get("choices") or []
+        if not choices:
+            raise ValueError("LLM 返回了空的 choices 列表")
+        msg = choices[0].get("message") or {}
+        record_openai_usage(
+            body,
+            backend=self.usage_label,
+            model=self.model,
+            fallback_messages=truncated,
+            fallback_output=str(msg.get("content") or ""),
+        )
+        tool_calls: list[dict[str, Any]] = []
+        for tc in msg.get("tool_calls") or []:
+            fn = tc.get("function") or {}
+            args_raw = fn.get("arguments") or "{}"
+            try:
+                args = json.loads(args_raw) if isinstance(args_raw, str) else dict(args_raw)
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+            tool_calls.append(
+                {
+                    "id": str(tc.get("id") or f"call_{len(tool_calls)}"),
+                    "name": str(fn.get("name") or ""),
+                    "arguments": args if isinstance(args, dict) else {},
+                }
+            )
+        return {
+            "content": msg.get("content"),
+            "tool_calls": tool_calls,
+            "raw_message": msg,
+        }
+
+    async def supports_tool_calling(self) -> bool:
+        """能力探测：后端是否支持 tools 参数（短超时，失败即返 False）。"""
+        try:
+            await self.chat_with_tools(
+                [{"role": "user", "content": "ping"}],
+                [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "noop_probe",
+                            "description": "能力探测，不要调用",
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    }
+                ],
+                tool_choice="none",
+                timeout=5.0,
+            )
+            return True
+        except Exception as exc:  # 不支持 / 不可达 → 回退提示词协议
+            logger.debug("tool calling probe failed: %s", exc)
+            return False
 
     # ---- 意图分类 ------------------------------------------------------------
 
@@ -219,7 +351,7 @@ class PrivateLLMClient:
         此实现保留作为 fallback。
         """
         try:
-            result = await self._chat_completion(
+            result = await self._chat_json_with_retry(
                 [
                     {"role": "system", "content": load_prompt("intent")},
                     {"role": "user", "content": text},
@@ -237,10 +369,43 @@ class PrivateLLMClient:
             )
         except Exception:
             return "query"
+
         intent = result.get("intent", "query")
         if intent not in {"query", "mutate", "orchestrate", "chitchat"}:
             return "query"
-        return intent  # type: ignore[return-value]
+        return cast(Intent, intent)
+
+    async def analyze_intent(self, text: str, history: list | None = None) -> dict:
+        """结构化意图分析（Intent Router）。失败抛异常，由 LMRouter 降级链接管。"""
+        from agent.llm.types import IntentAnalysis  # 避免循环导入
+
+        msgs: list[dict] = [{"role": "system", "content": load_prompt("intent_router")}]
+        for h in (history or [])[-4:]:
+            role = getattr(h, "role", None) or (h.get("role") if isinstance(h, dict) else None)
+            content = getattr(h, "content", None) or (
+                h.get("content") if isinstance(h, dict) else None
+            )
+            if role in ("user", "assistant") and content:
+                msgs.append({"role": role, "content": str(content)})
+        msgs.append({"role": "user", "content": text})
+        result = await self._chat_json_with_retry(
+            msgs,
+            response_format={
+                "type": "object",
+                "properties": {
+                    "intent": {
+                        "type": "string",
+                        "enum": ["query", "mutate", "orchestrate", "chitchat"],
+                    },
+                    "need_tool": {"type": "boolean"},
+                    "need_clarification": {"type": "boolean"},
+                },
+                "required": ["intent"],
+            },
+        )
+        if not isinstance(result, dict) or not result:
+            raise ValueError("intent analysis output is empty")
+        return IntentAnalysis.from_raw(result, fallback_text=text, backend="private").to_dict()
 
     # ---- 计划生成 ------------------------------------------------------------
 
@@ -275,7 +440,7 @@ class PrivateLLMClient:
         msgs.append({"role": "user", "content": user_prompt})
 
         try:
-            result = await self._chat_completion(
+            result = await self._chat_json_with_retry(
                 msgs,
                 response_format={
                     "type": "object",
@@ -333,7 +498,7 @@ class PrivateLLMClient:
             },
         ]
         try:
-            return await self._chat_completion(
+            return await self._chat_json_with_retry(
                 msgs,
                 response_format={
                     "type": "object",
@@ -368,16 +533,12 @@ class PrivateLLMClient:
         失败时返回原始结果的文字描述。
         """
         sys_prompt = (
-            load_prompt("system")
-            + "\n\n"
-            + load_prompt("summarise")
-            + "\n\n"
-            + FINAL_ANSWER_STYLE
+            load_prompt("system") + "\n\n" + load_prompt("summarise") + "\n\n" + FINAL_ANSWER_STYLE
         )
         results_brief = json.dumps(results, ensure_ascii=False, indent=2, default=str)
         plan_brief = json.dumps(plan, ensure_ascii=False, indent=2, default=str)
         try:
-            result = await self._chat_completion(
+            result = await self._chat_json_with_retry(
                 [
                     {"role": "system", "content": sys_prompt},
                     {
@@ -401,6 +562,51 @@ class PrivateLLMClient:
                 },
                 temperature=0.3,
             )
-        except Exception:
+        except (httpx.HTTPError, OSError) as exc:
+            # 传输层失败（后端不可达 / 超时 / 4xx / 5xx）：上抛让 Router
+            # 降级到下一级后端（ollama / cloud），并记日志便于排查。
+            logger.warning("private LLM summarise transport failed: %s", exc)
+            raise
+        except Exception as exc:
+            logger.warning("private LLM summarise parse failed: %s", exc)
             return "我无法综合最终答案。下面是工具返回的原始结果。", []
         return result.get("answer", ""), result.get("sources", [])
+
+    # ---- 原始对话（biznav 功能点提取等自由格式输出场景） ----------------
+
+    async def extract_chat(self, messages: list[dict]) -> str:
+        """原始对话：messages 透传，返回原始文本（不做 json.loads）。
+
+        与 summarise / _chat_completion 的区别：不强制 response_format、
+        不把输出解析成 JSON 对象——biznav 提取提示词要求模型输出 JSON 数组，
+        由调用方（extractor._parse_llm_json）自行容错解析。
+        """
+        truncated = self._truncate_history(messages)
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": truncated,
+            "temperature": 0.1,
+        }
+        # 提取场景 prompt 大（最多 8 个文件片段）且要求输出长 JSON，
+        # 共享 client 的 90s 默认超时不够 → 单请求放宽到 300s；
+        # 但 connect 阶段仍限 10s —— 否则后端不可达时整个请求会
+        # 卡在 TCP 连接阶段最长 300s，chat 前端表现为长时间无响应。
+        r = await self.client.post(
+            f"{self.base_url}/chat/completions",
+            json=payload,
+            timeout=httpx.Timeout(300.0, connect=10.0),
+        )
+        r.raise_for_status()
+        body = r.json()
+        choices = body.get("choices", [])
+        if not choices:
+            raise ValueError("LLM 返回了空的 choices 列表")
+        content = choices[0].get("message", {}).get("content", "")
+        record_openai_usage(
+            body,
+            backend=self.usage_label,
+            model=self.model,
+            fallback_messages=truncated,
+            fallback_output=str(content or ""),
+        )
+        return _strip_think(content)

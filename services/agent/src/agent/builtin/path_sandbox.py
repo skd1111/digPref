@@ -13,6 +13,7 @@ V0 范围：核心规则 5 项 + 1-2-3 项；V1 扩展：
   - 路径必须在某个 allowed_root 内（V0 跳过此规则，仅作记录）
   - 实际上 V0 也执行仅文件存在性检查
 """
+
 from __future__ import annotations
 
 import os
@@ -21,13 +22,17 @@ from pathlib import Path
 
 from agent.builtin.models import PathOutOfBoundsError, PathSecurityError
 
-
 # Windows 保留名（不区分大小写）
-_WINDOWS_RESERVED_NAMES = frozenset({
-    "CON", "PRN", "AUX", "NUL",
-    *(f"COM{i}" for i in range(1, 10)),
-    *(f"LPT{i}" for i in range(1, 10)),
-})
+_WINDOWS_RESERVED_NAMES = frozenset(
+    {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{i}" for i in range(1, 10)),
+        *(f"LPT{i}" for i in range(1, 10)),
+    }
+)
 
 # 路径最大长度（防止极端路径攻击）
 _MAX_PATH_LEN = 4096
@@ -97,13 +102,9 @@ def validate_path(
             resolved_roots = [Path(r).expanduser().resolve(strict=False) for r in allowed_roots]
         except (OSError, RuntimeError):
             resolved_roots = []
-        in_allowed = any(
-            _is_within(resolved, root) for root in resolved_roots
-        )
+        in_allowed = any(_is_within(resolved, root) for root in resolved_roots)
         if not in_allowed:
-            raise PathOutOfBoundsError(
-                f"path {resolved} not in allowed_roots {allowed_roots}"
-            )
+            raise PathOutOfBoundsError(f"path {resolved} not in allowed_roots {allowed_roots}")
 
     # ---- 6. 存在性检查 ----
     if must_exist and not resolved.exists():

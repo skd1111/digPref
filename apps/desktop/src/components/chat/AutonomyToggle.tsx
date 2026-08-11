@@ -1,7 +1,7 @@
 /**
  * AutonomyToggle —— Phase 18 会话级自主性开关（双框架架构）。
  *
- * 放在 ChatInput 发送按钮旁（与 InferenceModeToggle 并排）：
+ * 2026-08-05 起渲染于 设置 → 高级设置（AdvancedSettingsPanel）：
  *   👤 交互 —— 每步等人审批（默认，安全）
  *   🤖 自动 —— 按智能体推荐选项自主继续执行
  *

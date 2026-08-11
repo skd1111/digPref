@@ -12,6 +12,7 @@
     - repo 路径先走 path_sandbox.validate_path() 再执行。
     - subprocess 统一 timeout + 输出截断，避免挂死 / 爆内存。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -30,7 +31,7 @@ async def _run_git(repo: str, args: list[str], *, risk_level: str) -> ToolResult
     """在 repo 目录执行 `git <args>`，统一错误处理与输出截断。"""
     try:
         p = validate_path(repo, must_exist=True)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return ToolResult(
             ok=False,
             error=f"{type(exc).__name__}: {exc}",
@@ -38,9 +39,7 @@ async def _run_git(repo: str, args: list[str], *, risk_level: str) -> ToolResult
             risk_level=risk_level,
         )
     if not p.is_dir():
-        return ToolResult(
-            ok=False, error="not_a_directory", hint=str(p), risk_level=risk_level
-        )
+        return ToolResult(ok=False, error="not_a_directory", hint=str(p), risk_level=risk_level)
     try:
         proc = await asyncio.to_thread(
             subprocess.run,
@@ -66,7 +65,7 @@ async def _run_git(repo: str, args: list[str], *, risk_level: str) -> ToolResult
             hint=f"git 命令超过 {_DEFAULT_TIMEOUT_SEC}s",
             risk_level=risk_level,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return ToolResult.from_exception(exc, risk_level=risk_level)
 
     stdout = proc.stdout or ""
@@ -80,7 +79,9 @@ async def _run_git(repo: str, args: list[str], *, risk_level: str) -> ToolResult
             "stderr": stderr[:_MAX_OUTPUT_CHARS],
             "truncated": truncated,
         },
-        error=None if proc.returncode == 0 else (stderr.strip()[:2000] or f"exit {proc.returncode}"),
+        error=None
+        if proc.returncode == 0
+        else (stderr.strip()[:2000] or f"exit {proc.returncode}"),
         meta={"returncode": proc.returncode, "truncated": truncated},
         risk_level=risk_level,
     )
@@ -132,8 +133,8 @@ async def builtin_git_commit(*, repo: str, message: str) -> ToolResult:
 
 
 __all__: list[str] = [
-    "builtin_git_status",
+    "builtin_git_commit",
     "builtin_git_diff",
     "builtin_git_log",
-    "builtin_git_commit",
+    "builtin_git_status",
 ]

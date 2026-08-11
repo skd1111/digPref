@@ -67,6 +67,7 @@ export function featureToYaml(f: Feature): string {
   lines.push(`category: "${escapeString(f.category)}"`);
   lines.push(`project_name: "${escapeString(f.project_name)}"`);
   lines.push(`project_root: "${escapeString(f.project_root)}"`);
+  lines.push(`skill_id: ${f.skill_id ? `"${escapeString(f.skill_id)}"` : 'null'}`);
   lines.push(`risk_level: "${f.risk_level}"`);
   lines.push(`source: "${f.source}"`);
   lines.push(`ai_confidence: ${f.ai_confidence ?? 'null'}`);

@@ -5,6 +5,7 @@
   - user@host 格式：自动剥离 user@ 前缀后匹配
   - CIDR 子网：host = "10.0.0.0/8"（使用 ipaddress 模块匹配）
 """
+
 from __future__ import annotations
 
 import ipaddress

@@ -17,6 +17,7 @@
       流式 hash（本脚本默认）；100GB 随机访问归 Phase 2F+ logviewer 层。
     - 报告输出 JSON：bench_builtin_report.json。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -109,6 +110,7 @@ async def bench_glob(base: Path) -> dict:
 async def bench_shell() -> dict:
     """shell echo 延迟（走内置执行器，不含 HITL）。"""
     from agent.builtin.shell import builtin_shell
+
     t0 = time.perf_counter()
     r = await builtin_shell("echo hi", allowed_prefixes=["echo"], timeout_sec=10)
     elapsed = time.perf_counter() - t0
@@ -138,6 +140,7 @@ async def main() -> int:
             report["shell"] = await bench_shell()
     finally:
         import shutil
+
         shutil.rmtree(base, ignore_errors=True)
 
     out = Path(__file__).with_name("bench_builtin_report.json")

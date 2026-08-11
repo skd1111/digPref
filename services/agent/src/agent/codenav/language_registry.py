@@ -8,10 +8,10 @@ Phase 2F 首批覆盖：Java / Python / TypeScript（JavaScript 复用 TS 解析
     lang = Language(tsj.language())
     parser = Parser(lang)
 """
+
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import tree_sitter_java as tsj
 import tree_sitter_python as tsp
@@ -31,7 +31,7 @@ _LANGUAGE_BUILDERS: dict[str, tuple[object, str]] = {
 _PARSER_CACHE: dict[str, Parser] = {}
 
 
-def _build_parser(ext: str) -> Optional[Parser]:
+def _build_parser(ext: str) -> Parser | None:
     """构造并缓存 Parser。"""
     if ext in _PARSER_CACHE:
         return _PARSER_CACHE[ext]
@@ -45,7 +45,7 @@ def _build_parser(ext: str) -> Optional[Parser]:
     return parser
 
 
-def get_parser_for_file(file_path: str) -> Optional[tuple[Parser, str]]:
+def get_parser_for_file(file_path: str) -> tuple[Parser, str] | None:
     """根据文件后缀返回 (Parser, language_id)；不支持返回 None。
 
     例：get_parser_for_file("foo.java") → (Parser, "java")

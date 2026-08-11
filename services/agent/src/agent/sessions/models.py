@@ -17,6 +17,7 @@ V1.5 仍在 V0 数据类上扩展：
     - SessionEvent 链式哈希防篡改（与 Phase 5 审计同等级） —— 在 storage.py
     - 分支（parent_session_id + branch_from_checkpoint_id） —— 在 storage.py
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -47,7 +48,9 @@ class Session:
     branch_from_checkpoint_id: str | None = None
     branch_label: str = ""
     # ---- V1.5：共享权限矩阵 ----
-    share_tokens: list[dict] = field(default_factory=list)  # [{token, permission, created_at, expires_at?}]
+    share_tokens: list[dict] = field(
+        default_factory=list
+    )  # [{token, permission, created_at, expires_at?}]
     permissions: dict[str, str] = field(default_factory=dict)  # {"alice": "read", ...}
     shared_at: int = 0
 
@@ -75,6 +78,7 @@ class SessionCheckpoint:
     实际 checkpoint 数据存在 LangGraph 自己的 SQLite 表（thread_id + checkpoint_id）。
     本表只存 user-friendly metadata（label / description / created_at）。
     """
+
     id: int = 0  # sqlite 自增
     session_id: str = ""
     thread_id: str = ""
@@ -109,6 +113,7 @@ class SessionEvent:
         hash = SHA256(prev_hash + event_type + payload_json + created_at)
     验证：依序遍历同 session 的事件，若任意一条 hash 与重算不符 → 篡改。
     """
+
     id: int = 0  # sqlite 自增
     session_id: str = ""
     event_type: SessionEventType = "created"
@@ -126,6 +131,7 @@ class ShareToken:
     生成：UUID4 hex + permission + expires_at? → 写入 session.share_tokens_json
     校验：通过 token + 解析 permission + 校验 expires_at → check_access(actor, perm)
     """
+
     token: str = ""
     permission: SharePermission = "read"
     created_at: int = 0
@@ -141,6 +147,7 @@ class BranchInfo:
         branch_from_checkpoint_id: 从父会话的哪个 checkpoint 派生
         branch_label: 分支标签（'bugfix-order-amount' / 'experiment-foo'）
     """
+
     parent_session_id: str | None = None
     branch_from_checkpoint_id: str | None = None
     branch_label: str = ""
@@ -149,14 +156,14 @@ class BranchInfo:
 # V1.5 兼容性别名：保留 V0 文档提及的 "context.py 三段式" 接口（虽然实际被
 # compression.py 替代），供外部调用者引用。
 __all__ = [
+    "BranchInfo",
     "Message",
     "MessageRole",
     "Session",
     "SessionCheckpoint",
-    "SessionStatus",
-    "SharePermission",
     "SessionEvent",
     "SessionEventType",
+    "SessionStatus",
+    "SharePermission",
     "ShareToken",
-    "BranchInfo",
 ]

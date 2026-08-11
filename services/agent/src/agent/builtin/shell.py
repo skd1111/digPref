@@ -9,6 +9,7 @@
     3. 长度上限 4096
     4. 超时强杀（subprocess.TimeoutExpired → timed_out=True）
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -18,10 +19,22 @@ import sys
 
 from agent.builtin.models import ToolResult
 
-
 # 危险操作符 —— 出现即拒绝（防止命令注入 / 管道 / 重定向）
 DANGEROUS_SHELL_CHARS: tuple[str, ...] = (
-    ";", "&", "|", "<", ">", "`", "$", "(", ")", "{", "}", "\n", "\r", "\x00",
+    ";",
+    "&",
+    "|",
+    "<",
+    ">",
+    "`",
+    "$",
+    "(",
+    ")",
+    "{",
+    "}",
+    "\n",
+    "\r",
+    "\x00",
 )
 
 # shell 命令最大字节数
@@ -55,8 +68,7 @@ async def builtin_shell(
     first = shlex.split(trimmed)[0] if shlex.split(trimmed) else ""
     allowed = allowed_prefixes or []
     if allowed and not any(
-        first.startswith(p.rstrip("*")) if p.endswith("*") else first == p
-        for p in allowed
+        first.startswith(p.rstrip("*")) if p.endswith("*") else first == p for p in allowed
     ):
         return ToolResult(
             ok=False,
@@ -88,11 +100,16 @@ async def builtin_shell(
                 False,
             )
         except subprocess.TimeoutExpired as exc:
-            return (124, (exc.stdout or "").decode("utf-8", "replace")
-                    if isinstance(exc.stdout, bytes) else (exc.stdout or ""),
-                    (exc.stderr or "").decode("utf-8", "replace")
-                    if isinstance(exc.stderr, bytes) else (exc.stderr or ""),
-                    True)
+            return (
+                124,
+                (exc.stdout or "").decode("utf-8", "replace")
+                if isinstance(exc.stdout, bytes)
+                else (exc.stdout or ""),
+                (exc.stderr or "").decode("utf-8", "replace")
+                if isinstance(exc.stderr, bytes)
+                else (exc.stderr or ""),
+                True,
+            )
         except OSError as exc:
             raise exc
 

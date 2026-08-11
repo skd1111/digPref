@@ -4,6 +4,7 @@ V0 物理隔离：
     audit_expert.db 与 audit / tool_calls / ssh / image_processing 等 12 个 db 独立。
     （不与 audit 共享 —— 审批工作台是金融审计专属高频模块，独立 DB 减少互锁）
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -16,7 +17,6 @@ from typing import Any
 import aiosqlite
 
 from agent.config import settings
-
 
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -68,9 +68,14 @@ class AuditExpertStorage:
                     ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        task_id, run_id, title, description, risk_level,
+                        task_id,
+                        run_id,
+                        title,
+                        description,
+                        risk_level,
                         json.dumps(pending_tool_call, ensure_ascii=False, default=str),
-                        requested_by, _now_iso(),
+                        requested_by,
+                        _now_iso(),
                         1 if dual_required else 0,
                         json.dumps(meta, ensure_ascii=False, default=str),
                         _now_iso(),
@@ -148,8 +153,14 @@ class AuditExpertStorage:
                         decision_reason = ?, mfa_verified = ?
                     WHERE task_id = ?
                     """,
-                    (status, decided_by, _now_iso(), decision_reason,
-                     1 if mfa_verified else 0, task_id),
+                    (
+                        status,
+                        decided_by,
+                        _now_iso(),
+                        decision_reason,
+                        1 if mfa_verified else 0,
+                        task_id,
+                    ),
                 )
                 await db.commit()
                 return cur.rowcount > 0
@@ -157,7 +168,10 @@ class AuditExpertStorage:
                 await db.close()
 
     async def record_first_approver(
-        self, task_id: str, actor: str, reason: str,
+        self,
+        task_id: str,
+        actor: str,
+        reason: str,
     ) -> bool:
         """记录第一审批人（双人复核模式）。
 
@@ -182,7 +196,10 @@ class AuditExpertStorage:
                 await db.close()
 
     async def record_second_approver(
-        self, task_id: str, actor: str, reason: str,
+        self,
+        task_id: str,
+        actor: str,
+        reason: str,
     ) -> bool:
         """记录第二审批人 + 决策完成。
 
@@ -237,9 +254,17 @@ class AuditExpertStorage:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        action_id, task_id, action_type, actor, reason,
-                        1 if mfa_verified else 0, totp_code_hash, timestamp,
-                        prev_hash, signature_hash, rsa_signature,
+                        action_id,
+                        task_id,
+                        action_type,
+                        actor,
+                        reason,
+                        1 if mfa_verified else 0,
+                        totp_code_hash,
+                        timestamp,
+                        prev_hash,
+                        signature_hash,
+                        rsa_signature,
                         json.dumps(meta or {}, ensure_ascii=False, default=str),
                     ),
                 )
@@ -301,8 +326,14 @@ class AuditExpertStorage:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        evidence_id, task_id, evidence_type, title,
-                        content_json, source, _now_iso(), content_hash,
+                        evidence_id,
+                        task_id,
+                        evidence_type,
+                        title,
+                        content_json,
+                        source,
+                        _now_iso(),
+                        content_hash,
                     ),
                 )
                 await db.commit()
@@ -346,8 +377,13 @@ class AuditExpertStorage:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        check_id, task_id, rule_name, level, message,
-                        1 if passed else 0, _now_iso(),
+                        check_id,
+                        task_id,
+                        rule_name,
+                        level,
+                        message,
+                        1 if passed else 0,
+                        _now_iso(),
                     ),
                 )
                 await db.commit()
@@ -387,20 +423,36 @@ class AuditExpertStorage:
                 await db.close()
         return {
             "tasks_by_status": {s: n for s, n in task_rows},
-            "compliance_failures_by_level": {l: n for l, n in fail_rows},
+            "compliance_failures_by_level": {level: n for level, n in fail_rows},
         }
 
 
 # ---- 行 → dict helpers ----------------------------------------------------
 
+
 def _task_row_to_dict(row: tuple) -> dict:
     cols = [
-        "id", "task_id", "run_id", "title", "description", "risk_level",
-        "status", "pending_tool_call_json", "requested_by", "requested_at",
-        "decided_by", "decided_at", "decision_reason", "mfa_verified",
-        "dual_required", "first_approver", "second_approver",
-        "first_approver_signed_at", "second_approver_signed_at",
-        "meta_json", "ts",
+        "id",
+        "task_id",
+        "run_id",
+        "title",
+        "description",
+        "risk_level",
+        "status",
+        "pending_tool_call_json",
+        "requested_by",
+        "requested_at",
+        "decided_by",
+        "decided_at",
+        "decision_reason",
+        "mfa_verified",
+        "dual_required",
+        "first_approver",
+        "second_approver",
+        "first_approver_signed_at",
+        "second_approver_signed_at",
+        "meta_json",
+        "ts",
     ]
     d = dict(zip(cols, row))
     if d.get("pending_tool_call_json"):
@@ -421,9 +473,19 @@ def _task_row_to_dict(row: tuple) -> dict:
 
 def _action_row_to_dict(row: tuple) -> dict:
     cols = [
-        "id", "action_id", "task_id", "action_type", "actor", "reason",
-        "mfa_verified", "totp_code_hash", "timestamp", "prev_hash",
-        "signature_hash", "rsa_signature", "meta_json",
+        "id",
+        "action_id",
+        "task_id",
+        "action_type",
+        "actor",
+        "reason",
+        "mfa_verified",
+        "totp_code_hash",
+        "timestamp",
+        "prev_hash",
+        "signature_hash",
+        "rsa_signature",
+        "meta_json",
     ]
     d = dict(zip(cols, row))
     if d.get("meta_json"):
@@ -437,8 +499,15 @@ def _action_row_to_dict(row: tuple) -> dict:
 
 def _evidence_row_to_dict(row: tuple) -> dict:
     cols = [
-        "id", "evidence_id", "task_id", "evidence_type", "title",
-        "content_json", "source", "timestamp", "hash",
+        "id",
+        "evidence_id",
+        "task_id",
+        "evidence_type",
+        "title",
+        "content_json",
+        "source",
+        "timestamp",
+        "hash",
     ]
     d = dict(zip(cols, row))
     if d.get("content_json"):
@@ -451,8 +520,14 @@ def _evidence_row_to_dict(row: tuple) -> dict:
 
 def _compliance_row_to_dict(row: tuple) -> dict:
     cols = [
-        "id", "check_id", "task_id", "rule_name", "level", "message",
-        "passed", "timestamp",
+        "id",
+        "check_id",
+        "task_id",
+        "rule_name",
+        "level",
+        "message",
+        "passed",
+        "timestamp",
     ]
     return dict(zip(cols, row))
 

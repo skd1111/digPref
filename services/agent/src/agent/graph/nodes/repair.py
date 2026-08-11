@@ -2,11 +2,11 @@
 
 对一次运行内的总重试次数设上限（默认 2）。用完后把错误传给 responder，
 让 responder 老老实实告诉用户哪里挂了。"""
+
 from __future__ import annotations
 
 from agent.graph.state import AgentState, record_trace
 from agent.llm.router import LMRouter
-
 
 MAX_RETRIES = 2
 
@@ -23,12 +23,15 @@ async def repair_node(state: AgentState, llm: LMRouter) -> dict:
     if retry_count >= MAX_RETRIES:
         return {
             "tool_error": error,  # leave as-is; responder will surface
-            "trace": [record_trace(
-                "repair", "fail",
-                reason="retry_exhausted",
-                retries=retry_count,
-                error=error,
-            )],
+            "trace": [
+                record_trace(
+                    "repair",
+                    "fail",
+                    reason="retry_exhausted",
+                    retries=retry_count,
+                    error=error,
+                )
+            ],
         }
 
     original = state.get("pending_tool_call") or {}
@@ -40,13 +43,13 @@ async def repair_node(state: AgentState, llm: LMRouter) -> dict:
             error=error,
             history=history,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         # LLM itself is unavailable — surface this error immediately
         # instead of silently looping until retries are exhausted
         new_err = f"repair LLM call failed: {exc} (original error: {error})"
         return {
             "retry_count": retry_count + 1,
-            "tool_error": new_err,   # surface so user sees the real problem
+            "tool_error": new_err,  # surface so user sees the real problem
             "trace": [record_trace("repair", "fail", error=str(exc))],
         }
 
@@ -54,15 +57,18 @@ async def repair_node(state: AgentState, llm: LMRouter) -> dict:
         # Swap the plan entry in-place so the next tool_runner uses the fixed call
         "plan": _swap_plan_step(state.get("plan", []), idx, fixed),
         "pending_tool_call": fixed,
-        "tool_error": None,         # cleared so tool_runner proceeds
+        "tool_error": None,  # cleared so tool_runner proceeds
         "tool_result": None,
         "retry_count": retry_count + 1,
-        "trace": [record_trace(
-            "repair", "ok",
-            attempt=retry_count + 1,
-            new_server=fixed.get("server"),
-            new_name=fixed.get("name"),
-        )],
+        "trace": [
+            record_trace(
+                "repair",
+                "ok",
+                attempt=retry_count + 1,
+                new_server=fixed.get("server"),
+                new_name=fixed.get("name"),
+            )
+        ],
     }
 
 

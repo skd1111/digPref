@@ -1,5 +1,4 @@
 """预算控制测试。"""
-import time
 
 from agent.llm.budget import BudgetController
 from agent.llm.models import LLMBackend

@@ -9,16 +9,17 @@
 测试护栏（test_router_rules.py）：即使云端后端五维总分最高，
 只要 `task_kind in _LOCAL_ONLY_TASKS`，它**不会**出现在候选里。
 """
+
 from __future__ import annotations
 
 import logging
-from typing import Iterable
+from collections.abc import Iterable
 
 from agent.llm.models import (
-    LLMBackend,
     RESIDENCY_CLOUD,
     RESIDENCY_LOCAL,
     RESIDENCY_PRIVATE,
+    LLMBackend,
     Sensitivity,
 )
 
@@ -31,10 +32,10 @@ _LOCAL_ONLY_TASKS = frozenset({"intent", "repair"})
 
 # sensitivity → 允许的 data_residency
 _RESIDENCY_ALLOW = {
-    Sensitivity.PUBLIC:      {RESIDENCY_LOCAL, RESIDENCY_PRIVATE, RESIDENCY_CLOUD},
-    Sensitivity.INTERNAL:    {RESIDENCY_LOCAL, RESIDENCY_PRIVATE, RESIDENCY_CLOUD},
-    Sensitivity.PII:         {RESIDENCY_LOCAL, RESIDENCY_PRIVATE},  # 不 cloud
-    Sensitivity.PRODUCTION:  {RESIDENCY_PRIVATE},                  # 仅私有
+    Sensitivity.PUBLIC: {RESIDENCY_LOCAL, RESIDENCY_PRIVATE, RESIDENCY_CLOUD},
+    Sensitivity.INTERNAL: {RESIDENCY_LOCAL, RESIDENCY_PRIVATE, RESIDENCY_CLOUD},
+    Sensitivity.PII: {RESIDENCY_LOCAL, RESIDENCY_PRIVATE},  # 不 cloud
+    Sensitivity.PRODUCTION: {RESIDENCY_PRIVATE},  # 仅私有
 }
 
 

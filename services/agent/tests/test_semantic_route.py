@@ -1,0 +1,234 @@
+"""意图向量快速路由（semantic-router 模式）测试。
+
+覆盖：
+    - 命中/未命中路由（余弦阈值）
+    - embedding 不可用 / 全零向量 → 静默回退（返 None）
+    - 开关关闭 → 不调 embedding
+    - 向量缓存落盘 + 指纹失效重建
+    - intent_node / responder 集成（闲聊模板直回）
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+from agent.config import settings
+from agent.graph.semantic_route import (
+    DEFAULT_ROUTES,
+    Route,
+    SemanticIntentRouter,
+    _cosine,
+)
+
+# ---- 确定性伪 embedding 客户端 ----------------------------------------------
+
+
+class _FakeEmbedding:
+    """2 维玩具向量空间：闲聊 → (1,0)，时间 → (0,1)，无关 → (-1,0)。
+
+    embed_calls 计数用于验证缓存命中后不重复批量向量化。
+    """
+
+    model = "fake-2d"
+
+    def __init__(self) -> None:
+        self.embed_calls = 0
+        self.batch_calls = 0
+        self.healthy = True
+
+    def _vec(self, text: str) -> list[float]:
+        if any(
+            k in text
+            for k in (
+                "你好",
+                "您好",
+                "嗨",
+                "在吗",
+                "你是谁",
+                "介绍",
+                "谢谢",
+                "多谢",
+                "辛苦",
+                "再见",
+                "拜",
+            )
+        ):
+            return [1.0, 0.0]
+        if any(k in text for k in ("几号", "几点", "农历", "星期", "日期", "时间")):
+            return [0.0, 1.0]
+        return [-1.0, 0.0]  # 无关文本 → 负半轴，与所有路由向量都不相似
+
+    async def health_check(self) -> bool:
+        return self.healthy
+
+    async def embed(self, text: str) -> list[float]:
+        self.embed_calls += 1
+        return self._vec(text)
+
+    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        self.batch_calls += 1
+        return [self._vec(t) for t in texts]
+
+
+def _router(fake: _FakeEmbedding, **kw) -> SemanticIntentRouter:
+    return SemanticIntentRouter(DEFAULT_ROUTES, embedding=fake, **kw)
+
+
+# ---- 基础 -------------------------------------------------------------------
+
+
+def test_cosine():
+    assert _cosine([1, 0], [1, 0]) == pytest.approx(1.0)
+    assert _cosine([1, 0], [0, 1]) == pytest.approx(0.0)
+    assert _cosine([], []) == 0.0
+    assert _cosine([0, 0], [1, 1]) == 0.0
+
+
+# ---- 路由命中 / 未命中 -------------------------------------------------------
+
+
+class TestSemanticRoute:
+    async def test_hit_chitchat(self, monkeypatch):
+        monkeypatch.setattr(settings, "semantic_route_enabled", True)
+        fake = _FakeEmbedding()
+        out = await _router(fake).route("你好呀")
+        assert out is not None
+        assert out["intent"] == "chitchat"
+        assert out["_route"] == "chitchat"
+        assert out["canned_response"]
+        assert out["rewritten_query"] == "你好呀"
+
+    async def test_hit_time_query(self, monkeypatch):
+        monkeypatch.setattr(settings, "semantic_route_enabled", True)
+        fake = _FakeEmbedding()
+        out = await _router(fake).route("请问今天几号")
+        assert out is not None
+        assert out["_route"] == "time_query"
+        assert out["need_tool"] is True
+
+    async def test_miss_returns_none(self, monkeypatch):
+        monkeypatch.setattr(settings, "semantic_route_enabled", True)
+        fake = _FakeEmbedding()
+        out = await _router(fake).route("帮我查询订单系统的库存数据并生成报表")
+        assert out is None
+
+    async def test_disabled_skips_embedding(self, monkeypatch):
+        monkeypatch.setattr(settings, "semantic_route_enabled", False)
+        fake = _FakeEmbedding()
+        out = await _router(fake).route("你好")
+        assert out is None
+        assert fake.embed_calls == 0 and fake.batch_calls == 0
+
+    async def test_unhealthy_embedding_returns_none(self, monkeypatch):
+        monkeypatch.setattr(settings, "semantic_route_enabled", True)
+        fake = _FakeEmbedding()
+        fake.healthy = False
+        out = await _router(fake).route("你好")
+        assert out is None
+        # 探活失败后不再重试（会话内标记不可用）
+        out2 = await _router(fake).route("你好")
+        assert out2 is None
+
+    async def test_threshold_guard(self, monkeypatch):
+        """阈值调高到 1.0 后，非完全匹配一律未命中。"""
+        monkeypatch.setattr(settings, "semantic_route_enabled", True)
+        fake = _FakeEmbedding()
+        out = await _router(fake, threshold=1.0).route("你好呀")
+        # 「你好呀」向量 (1,0) 与示例句 (1,0) 完全一致 → 仍命中
+        assert out is not None
+        fake2 = _FakeEmbedding()
+        out2 = await _router(fake2, threshold=1.0).route("麻烦帮个忙")
+        assert out2 is None
+
+
+# ---- 缓存 --------------------------------------------------------------------
+
+
+class TestSemanticRouteCache:
+    async def test_cache_written_and_reused(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(settings, "semantic_route_enabled", True)
+        monkeypatch.setattr(settings, "knowledge_db_path", str(tmp_path / "knowledge.db"))
+        fake = _FakeEmbedding()
+        await _router(fake).route("你好")
+        cache = tmp_path / "semantic_route_cache.json"
+        assert cache.exists()
+        data = json.loads(cache.read_text(encoding="utf-8"))
+        assert data["fingerprint"]
+        assert len(data["vectors"]) == sum(len(r.utterances) for r in DEFAULT_ROUTES)
+
+        # 新实例复用缓存 → 不再批量向量化，只产生 1 次查询 embed
+        fake2 = _FakeEmbedding()
+        out = await _router(fake2).route("你好")
+        assert out is not None
+        assert fake2.batch_calls == 0
+        assert fake2.embed_calls == 1
+
+    async def test_cache_invalidated_by_routes_change(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(settings, "semantic_route_enabled", True)
+        monkeypatch.setattr(settings, "knowledge_db_path", str(tmp_path / "knowledge.db"))
+        fake = _FakeEmbedding()
+        await _router(fake).route("你好")
+
+        extra = (*DEFAULT_ROUTES, Route(name="custom", utterances=("暗号",)))
+        fake2 = _FakeEmbedding()
+        await SemanticIntentRouter(extra, embedding=fake2).route("你好")
+        assert fake2.batch_calls == 1  # 指纹变化 → 缓存失效重算
+
+
+# ---- 集成：intent_node + responder -------------------------------------------
+
+
+class TestSemanticRouteIntegration:
+    async def test_intent_node_vector_path_skips_llm(self, monkeypatch):
+        from agent.graph import semantic_route as sr
+        from agent.graph.nodes.intent import intent_node
+        from agent.graph.state import empty_state
+
+        monkeypatch.setattr(settings, "semantic_route_enabled", True)
+        monkeypatch.setattr(settings, "local_embedding_base_url", "http://fake:1/v1")
+        monkeypatch.setattr(
+            sr,
+            "_default_router",
+            SemanticIntentRouter(
+                DEFAULT_ROUTES,
+                embedding=_FakeEmbedding(),
+            ),
+        )
+
+        class _ExplodingLLM:
+            async def analyze_intent(self, text, history=None):
+                raise AssertionError("向量命中后不应调 LLM")
+
+            async def classify_intent(self, text):
+                raise AssertionError("向量命中后不应调 LLM")
+
+        st = empty_state("你好呀")
+        st["run_id"] = "run-sr"
+        out = await intent_node(st, _ExplodingLLM())
+        assert out["intent"] == "chitchat"
+        assert out["intent_analysis"]["_route"] == "chitchat"
+        monkeypatch.setattr(sr, "_default_router", None)
+
+    async def test_responder_canned_response_no_llm(self, monkeypatch):
+        from agent.graph.nodes.responder import responder_node
+        from agent.graph.state import empty_state
+
+        st = empty_state("你好呀")
+        st["intent"] = "chitchat"
+        st["intent_analysis"] = {
+            "intent": "chitchat",
+            "need_tool": False,
+            "confidence": 0.9,
+            "canned_response": "你好，我是 EAIDE 企业 AI 助理。告诉我你想查询或操作哪个系统吧。",
+        }
+        st["decompose_decision"] = {
+            "decision": {"mode": "MAIN_AGENT", "clarifying_questions": []},
+        }
+
+        class _ExplodingLLM:
+            async def summarise(self, **kw):
+                raise AssertionError("canned_response 应直回，不调 summarise")
+
+        out = await responder_node(st, _ExplodingLLM())
+        assert "EAIDE 企业 AI 助理" in out["final_answer"]

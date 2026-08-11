@@ -8,18 +8,18 @@
     - data_residency 决定后端能否承接敏感任务（硬规则 rules.py 读它）
     - ScoreBreakdown 权重固定：能力 .35 / 成本 .25 / 延迟 .20 / 合规 .15 / 可用 .05
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
 
 
 class TaskCategory(str, Enum):
     """任务复杂度分类（classifier.py 产出，决定候选后端层级）。"""
 
-    SIMPLE = "simple"    # 意图 / 实体 / 关键词 → 本地小模型
-    MEDIUM = "medium"    # 代码解释 / SQL 生成 / 日志分析 → 私有中模型
+    SIMPLE = "simple"  # 意图 / 实体 / 关键词 → 本地小模型
+    MEDIUM = "medium"  # 代码解释 / SQL 生成 / 日志分析 → 私有中模型
     COMPLEX = "complex"  # 代码生成 / 跨系统规划 / 金融分析 → 云端大模型
     SPECIAL = "special"  # 视觉理解 / 向量化 → 专用模型
 
@@ -29,7 +29,7 @@ class Sensitivity(str, Enum):
 
     PUBLIC = "public"
     INTERNAL = "internal"
-    PII = "pii"                # 金融 PII → 强制不出云
+    PII = "pii"  # 金融 PII → 强制不出云
     PRODUCTION = "production"  # 生产操作 → 强制私有化
 
 
@@ -52,10 +52,10 @@ class LLMBackend:
     """
 
     name: str
-    type: str                                   # local / private / cloud
+    type: str  # local / private / cloud
     base_url: str
     model_name: str
-    api_key_ref: Optional[str] = None
+    api_key_ref: str | None = None
     capabilities: list[str] = field(default_factory=list)
     max_context: int = 8192
     cost_per_1k_tokens: float = 0.0
@@ -149,10 +149,10 @@ class RoutingDecision:
 
     request_id: str
     user_id: str = "anonymous"
-    task_category: Optional[TaskCategory] = None
-    sensitivity: Optional[Sensitivity] = None
-    primary_backend: Optional[str] = None
-    actual_backend: Optional[str] = None
+    task_category: TaskCategory | None = None
+    sensitivity: Sensitivity | None = None
+    primary_backend: str | None = None
+    actual_backend: str | None = None
     fallback_chain: list[str] = field(default_factory=list)
     # 候选排序审计：[(backend_name, ScoreBreakdown), ...]
     candidates: list[tuple[str, ScoreBreakdown]] = field(default_factory=list)
@@ -161,21 +161,21 @@ class RoutingDecision:
     estimated_cost: float = 0.0
     actual_cost: float = 0.0
     latency_ms: int = 0
-    quality_score: Optional[float] = None
+    quality_score: float | None = None
 
     # === Phase 13 DSpark 字段（V0 决策层注入）===
     # 4 字段从 agent.llm.dspark.api.decide_for_task() 填充
     speculative_enabled: bool = False
     n_draft: int = 1
     draft_p_min: float = 1.0
-    draft_model: Optional[str] = None
+    draft_model: str | None = None
     dspark_reason: str = "off-no-dspark"  # 决策原因（供 metrics 指标展示）
 
     # === Phase 2C V2.0 Spark 模式双跳字段（engine.route_spark 填充）===
-    spark_draft: Optional[str] = None
-    spark_execution_output: Optional[str] = None
-    spark_reasoning_backend: Optional[str] = None
-    spark_execution_backend: Optional[str] = None
+    spark_draft: str | None = None
+    spark_execution_output: str | None = None
+    spark_reasoning_backend: str | None = None
+    spark_execution_backend: str | None = None
 
     def trace_dict(self) -> dict:
         """结构化 Trace（写入 routing_decisions.trace_json + SSE llm_route_decided）。"""

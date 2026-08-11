@@ -7,6 +7,7 @@ self-contained and trivially mockable in tests.
 Phase 16：每个节点经 `_with_trace` 包装 —— 执行完成后把中文思考/工具调用
 记录到思维链（trace.db thinking_steps）。best-effort，不影响主图。
 """
+
 from __future__ import annotations
 
 import time
@@ -15,12 +16,14 @@ from dataclasses import dataclass
 from langgraph.graph import END, START, StateGraph
 
 from agent.config import settings
+from agent.dual.policy import tag_plan_with_policy  # Phase 18 双框架
+from agent.dual.router import mode_router_node  # Phase 18 双框架
 from agent.graph.edges import (
-    route_after_hitl,
     route_after_decompose,
-    route_after_tool_loop,
+    route_after_hitl,
     route_after_repair,
     route_after_tool,
+    route_after_tool_loop,
 )
 from agent.graph.nodes.decompose import decompose_node
 from agent.graph.nodes.hitl_gate import hitl_gate_node
@@ -30,11 +33,9 @@ from agent.graph.nodes.planner import planner_node
 from agent.graph.nodes.rag_retrieve import rag_retrieve_node  # Phase 4 V1
 from agent.graph.nodes.repair import repair_node
 from agent.graph.nodes.responder import responder_node
-from agent.graph.nodes.tool_runner import tool_runner_node
 from agent.graph.nodes.tool_orchestrator import tool_orchestrator_node
+from agent.graph.nodes.tool_runner import tool_runner_node
 from agent.graph.nodes.vision_understand import vision_understand_node  # Phase 4 V0
-from agent.dual.router import mode_router_node  # Phase 18 双框架
-from agent.dual.policy import tag_plan_with_policy  # Phase 18 双框架
 from agent.graph.state import AgentState
 
 
@@ -64,7 +65,7 @@ def _with_trace(node_name: str, fn):
                     await get_collector().record_node_step(
                         session_id, node_name, out, latency_ms=latency
                     )
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass  # best-effort
         return out
 
@@ -109,20 +110,10 @@ def build_graph(runtime: Runtime) -> StateGraph:
         return await repair_node(s, rt.llm)
 
     async def _responder(s):
-        out = await responder_node(s, rt.llm)
-        # Phase 18：路由偏离模式默认时，在回复开头显式声明
-        decl = s.get("routing_declaration")
-        if decl and isinstance(out, dict) and out.get("final_answer"):
-            out["final_answer"] = f"> {decl}\n\n" + str(out["final_answer"])
-        # Phase 18：结构化执行报告尾注（仅在有真实信号时追加，不伪造）
-        if isinstance(out, dict) and out.get("final_answer"):
-            from agent.dual.report import build_dual_report
-
-            merged_state = {**s, **out}
-            report = build_dual_report(merged_state)
-            if report:
-                out["final_answer"] = str(out["final_answer"]) + "\n" + report
-        return out
+        # 2026-08-04：不再向最终回复注入路由声明 / 结构化执行报告 ——
+        # 用户侧只展示纯回答。路由决策与审批信号仍按 Phase 18 留痕审计
+        # （dual/router.py + trace.db），仅从用户可见文本中移除。
+        return await responder_node(s, rt.llm)
 
     # Phase 4 V0
     async def _vision_understand(s):
@@ -137,16 +128,18 @@ def build_graph(runtime: Runtime) -> StateGraph:
     async def _rag_retrieve(s):
         return await rag_retrieve_node(s, None)  # 用默认 retriever
 
-    g.add_node("vision_understand", _with_trace("vision_understand", _vision_understand))  # Phase 4 V0
+    g.add_node(
+        "vision_understand", _with_trace("vision_understand", _vision_understand)
+    )  # Phase 4 V0
     g.add_node("mode_router", _with_trace("mode_router", _mode_router))  # Phase 18
-    g.add_node("intent",      _with_trace("intent", _intent))
-    g.add_node("planner",     _with_trace("planner", _planner))
-    g.add_node("decompose",   _with_trace("decompose", _decompose))
+    g.add_node("intent", _with_trace("intent", _intent))
+    g.add_node("planner", _with_trace("planner", _planner))
+    g.add_node("decompose", _with_trace("decompose", _decompose))
     g.add_node("tool_orchestrator", _with_trace("tool_orchestrator", _tool_orchestrator))
     g.add_node("tool_runner", _with_trace("tool_runner", _tool_runner))
-    g.add_node("hitl_gate",   _with_trace("hitl_gate", _hitl_gate))
-    g.add_node("repair",      _with_trace("repair", _repair))
-    g.add_node("responder",   _with_trace("responder", _responder))
+    g.add_node("hitl_gate", _with_trace("hitl_gate", _hitl_gate))
+    g.add_node("repair", _with_trace("repair", _repair))
+    g.add_node("responder", _with_trace("responder", _responder))
     # Phase 4 V1 注册（不默认接主图；保留给 settings.rag_enabled=True 时启用）
     g.add_node("local_intent", _with_trace("local_intent", _local_intent))
     g.add_node("rag_retrieve", _with_trace("rag_retrieve", _rag_retrieve))
@@ -162,22 +155,34 @@ def build_graph(runtime: Runtime) -> StateGraph:
             g.add_edge("rag_retrieve", "decompose")
         else:
             g.add_edge("intent", "decompose")
-        g.add_conditional_edges("decompose", route_after_decompose, {
-            "tool_orchestrator": "tool_orchestrator",
-            "tool_runner": "tool_runner",  # 保留目标：回退路径/单测
-            "responder": "responder",
-        })
-        g.add_conditional_edges("tool_orchestrator", route_after_tool_loop, {
-            "tool_orchestrator": "tool_orchestrator",
-            "hitl_gate": "hitl_gate",
-            "responder": "responder",
-        })
-        g.add_conditional_edges("hitl_gate", route_after_hitl, {
-            "hitl_gate": "hitl_gate",
-            "tool_orchestrator": "tool_orchestrator",
-            "tool_runner": "tool_runner",
-            "responder": "responder",
-        })
+        g.add_conditional_edges(
+            "decompose",
+            route_after_decompose,
+            {
+                "tool_orchestrator": "tool_orchestrator",
+                "tool_runner": "tool_runner",  # 保留目标：回退路径/单测
+                "responder": "responder",
+            },
+        )
+        g.add_conditional_edges(
+            "tool_orchestrator",
+            route_after_tool_loop,
+            {
+                "tool_orchestrator": "tool_orchestrator",
+                "hitl_gate": "hitl_gate",
+                "responder": "responder",
+            },
+        )
+        g.add_conditional_edges(
+            "hitl_gate",
+            route_after_hitl,
+            {
+                "hitl_gate": "hitl_gate",
+                "tool_orchestrator": "tool_orchestrator",
+                "tool_runner": "tool_runner",
+                "responder": "responder",
+            },
+        )
     else:
         # 既有路径（测试 / 回退）：intent → rag → planner → decompose → tool_runner
         if getattr(settings, "rag_enabled", True):
@@ -186,25 +191,41 @@ def build_graph(runtime: Runtime) -> StateGraph:
         else:
             g.add_edge("intent", "planner")
         g.add_edge("planner", "decompose")
-        g.add_conditional_edges("decompose", route_after_decompose, {
-            "tool_orchestrator": "tool_orchestrator",
-            "tool_runner": "tool_runner",
-            "responder": "responder",
-        })
-        g.add_conditional_edges("tool_runner", route_after_tool, {
-            "repair": "repair",
-            "hitl_gate": "hitl_gate",
-        })
-        g.add_conditional_edges("repair", route_after_repair, {
-            "tool_runner": "tool_runner",
-            "responder": "responder",
-        })
-        g.add_conditional_edges("hitl_gate", route_after_hitl, {
-            "hitl_gate": "hitl_gate",
-            "tool_orchestrator": "tool_orchestrator",
-            "tool_runner": "tool_runner",
-            "responder": "responder",
-        })
+        g.add_conditional_edges(
+            "decompose",
+            route_after_decompose,
+            {
+                "tool_orchestrator": "tool_orchestrator",
+                "tool_runner": "tool_runner",
+                "responder": "responder",
+            },
+        )
+        g.add_conditional_edges(
+            "tool_runner",
+            route_after_tool,
+            {
+                "repair": "repair",
+                "hitl_gate": "hitl_gate",
+            },
+        )
+        g.add_conditional_edges(
+            "repair",
+            route_after_repair,
+            {
+                "tool_runner": "tool_runner",
+                "responder": "responder",
+            },
+        )
+        g.add_conditional_edges(
+            "hitl_gate",
+            route_after_hitl,
+            {
+                "hitl_gate": "hitl_gate",
+                "tool_orchestrator": "tool_orchestrator",
+                "tool_runner": "tool_runner",
+                "responder": "responder",
+            },
+        )
     g.add_edge("responder", END)
     return g
 

@@ -8,10 +8,10 @@
     - raise_on_all_fail=True 时全链失败抛 LLMBackendError
     - FallbackResult 包含完整 trail
 """
+
 from __future__ import annotations
 
 import pytest
-
 from agent.llm.fallback import (
     FallbackResult,
     LLMBackendError,
@@ -20,12 +20,12 @@ from agent.llm.fallback import (
     with_fallback,
 )
 
-
 # ---------- 正常路径 ----------------------------------------------------------
 
 
 async def test_primary_success_no_fallback():
     """primary 成功 → 不调用 secondary，trail 只有一项。"""
+
     async def primary():
         return "hello"
 
@@ -48,6 +48,7 @@ async def test_primary_success_no_fallback():
 
 async def test_fallback_to_secondary_on_unavailable():
     """primary 抛 LLMUnavailableError → 自动切 secondary。"""
+
     async def primary():
         raise LLMUnavailableError("connection refused")
 
@@ -69,6 +70,7 @@ async def test_fallback_to_secondary_on_unavailable():
 
 async def test_fallback_to_secondary_on_rate_limit():
     """primary 抛 LLMRateLimitError → 切 secondary。"""
+
     async def primary():
         raise LLMRateLimitError("429 too many requests")
 
@@ -87,6 +89,7 @@ async def test_fallback_to_secondary_on_rate_limit():
 
 async def test_fallback_three_levels():
     """三级链：primary 挂 → secondary 挂 → tertiary 成功。"""
+
     async def primary():
         raise LLMUnavailableError("p dead")
 
@@ -109,6 +112,7 @@ async def test_fallback_three_levels():
 
 async def test_unknown_exception_also_triggers_fallback():
     """未知异常（不是 LLMBackendError 子类）也应触发降级。"""
+
     async def primary():
         raise RuntimeError("something weird")
 
@@ -130,6 +134,7 @@ async def test_unknown_exception_also_triggers_fallback():
 
 async def test_all_failed_default_returns_none():
     """默认 raise_on_all_fail=False → 返回 value=None, final_status='all_failed'。"""
+
     async def primary():
         raise LLMUnavailableError("p dead")
 
@@ -150,6 +155,7 @@ async def test_all_failed_default_returns_none():
 
 async def test_all_failed_raise_on_all_fail_true():
     """raise_on_all_fail=True → 抛 LLMBackendError。"""
+
     async def primary():
         raise LLMUnavailableError("p dead")
 
@@ -213,7 +219,6 @@ async def test_router_classify_intent_backward_compatible():
 async def test_router_classify_intent_with_fallback_trail():
     """classify_intent_with_fallback 返回 FallbackResult 含 trail。"""
     from agent.llm.router import LMRouter
-    from agent.llm.fallback import FallbackResult
 
     router = LMRouter()
     result = await router.classify_intent_with_fallback("查订单")

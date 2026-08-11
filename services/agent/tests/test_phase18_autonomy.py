@@ -1,10 +1,10 @@
 """Phase 18 自动模式决策矩阵：risk × autonomy × hard_block 全组合（确定性）。"""
+
 from __future__ import annotations
 
 import itertools
 
 import pytest
-
 from agent.dual.autonomy import AutonomyDecision, decide, is_hard_blocked
 
 

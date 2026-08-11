@@ -5,13 +5,13 @@
     - 环境变量名必须与 pydantic-settings 字段名精确匹配（EAIDE_ 前缀）
     - 所有测试不依赖用户级配置，保证 CI 可重现
 """
+
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
 import pytest
-
 from agent.config import settings
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,7 +52,7 @@ def _isolate(monkeypatch, tmp_path):
         from agent.graph.nodes.planner import reset_tool_specs_cache
 
         reset_tool_specs_cache()
-    except Exception:  # noqa: BLE001 —— planner 未加载时无需重置
+    except Exception:
         pass
     yield
 
@@ -60,15 +60,21 @@ def _isolate(monkeypatch, tmp_path):
 @pytest.fixture
 def mock_llm():
     """Stub LMRouter —— 返回预置响应，不调用真实 LLM。"""
-    from agent.llm.router import Intent
 
     class _Mock:
         async def classify_intent(self, text):
             return "query"
 
         async def plan(self, *, intent, user_prompt, history, tool_specs):
-            return [{"server": "db", "name": "db.query", "args": {"sql": "SELECT 1"},
-                     "risk_level": "read", "rationale": "mock"}], "mock plan"
+            return [
+                {
+                    "server": "db",
+                    "name": "db.query",
+                    "args": {"sql": "SELECT 1"},
+                    "risk_level": "read",
+                    "rationale": "mock",
+                }
+            ], "mock plan"
 
         async def repair_call(self, *, original, error, history):
             return {**original, "args": {"sql": "SELECT 2"}}
@@ -82,6 +88,7 @@ def mock_llm():
 @pytest.fixture
 def mock_mcp():
     """Stub McpClient —— 返回预置数据，不连接真实 MCP 服务器。"""
+
     class _Mock:
         async def __aenter__(self):
             return self
@@ -91,17 +98,29 @@ def mock_mcp():
 
         async def list_tools(self):
             return [
-                {"server": "db", "name": "db.query",
-                 "inputSchema": {"type": "object", "properties": {"sql": {"type": "string"}}}},
-                {"server": "db", "name": "db.execute",
-                 "inputSchema": {"type": "object", "properties": {"sql": {"type": "string"}}}},
+                {
+                    "server": "db",
+                    "name": "db.query",
+                    "inputSchema": {"type": "object", "properties": {"sql": {"type": "string"}}},
+                },
+                {
+                    "server": "db",
+                    "name": "db.execute",
+                    "inputSchema": {"type": "object", "properties": {"sql": {"type": "string"}}},
+                },
             ]
 
         async def invoke(self, call, *, timeout_sec, row_limit):
             if call.get("name") == "db.query":
-                return {"ok": True, "columns": ["x"], "rows": [[42]], "truncated": False,
-                        "rows_returned": 1, "rows_dropped_by_row_cap": 0,
-                        "rows_dropped_by_byte_cap": 0}
+                return {
+                    "ok": True,
+                    "columns": ["x"],
+                    "rows": [[42]],
+                    "truncated": False,
+                    "rows_returned": 1,
+                    "rows_dropped_by_row_cap": 0,
+                    "rows_dropped_by_byte_cap": 0,
+                }
             if call.get("name") == "db.execute":
                 return {"ok": True, "rows_affected": 1}
             return {"ok": False, "error": "unknown"}

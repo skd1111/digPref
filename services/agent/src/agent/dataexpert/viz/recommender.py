@@ -10,6 +10,7 @@
   - 占比 → 饼图
   - 相关性 → 散点图
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -125,4 +126,6 @@ def _is_time_dtype(dt: str) -> bool:
 
 def _looks_like_time(col_name: str) -> bool:
     name_lower = col_name.lower()
-    return any(kw in name_lower for kw in ("date", "time", "month", "year", "day", "日期", "时间", "月"))
+    return any(
+        kw in name_lower for kw in ("date", "time", "month", "year", "day", "日期", "时间", "月")
+    )

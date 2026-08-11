@@ -3,6 +3,7 @@
 This is what makes the system extensible: an enterprise can publish its
 internal OpenAPI spec and the Agent immediately gets N new tools.
 """
+
 from __future__ import annotations
 
 from urllib.parse import urlparse
@@ -26,10 +27,14 @@ async def to_tools(url: str) -> dict:
         for method, op in (methods or {}).items():
             if method.lower() not in {"get", "post", "put", "patch", "delete"}:
                 continue
-            out.append({
-                "name": f"api_{method.lower()}_{path}".replace("/", "_").replace("{", "").replace("}", ""),
-                "method": method.upper(),
-                "path": path,
-                "summary": op.get("summary", ""),
-            })
+            out.append(
+                {
+                    "name": f"api_{method.lower()}_{path}".replace("/", "_")
+                    .replace("{", "")
+                    .replace("}", ""),
+                    "method": method.upper(),
+                    "path": path,
+                    "summary": op.get("summary", ""),
+                }
+            )
     return {"ok": True, "tools": out}

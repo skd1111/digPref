@@ -1,7 +1,6 @@
 """Tests for safety/write_detector + safety/policy."""
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 from agent.safety.policy import policy_for
 from agent.safety.write_detector import is_write_call
@@ -12,10 +11,16 @@ class TestWriteDetector:
         assert is_write_call({"name": "db.query", "args": {"sql": "SELECT 1"}}) is False
 
     def test_insert_sql(self):
-        assert is_write_call({"name": "db.execute", "args": {"sql": "INSERT INTO t VALUES (1)"}}) is True
+        assert (
+            is_write_call({"name": "db.execute", "args": {"sql": "INSERT INTO t VALUES (1)"}})
+            is True
+        )
 
     def test_update_sql(self):
-        assert is_write_call({"name": "db.execute", "args": {"sql": "UPDATE t SET x=1 WHERE id=1"}}) is True
+        assert (
+            is_write_call({"name": "db.execute", "args": {"sql": "UPDATE t SET x=1 WHERE id=1"}})
+            is True
+        )
 
     def test_drop_sql(self):
         assert is_write_call({"name": "db.execute", "args": {"sql": "DROP TABLE users"}}) is True
@@ -34,14 +39,20 @@ class TestPolicy:
         assert d.risk_level == "read"
 
     def test_write_needs_hitl(self):
-        d = policy_for({"name": "db.execute", "args": {"sql": "UPDATE t SET x=1 WHERE id=1"},
-                        "risk_level": "medium"})
+        d = policy_for(
+            {
+                "name": "db.execute",
+                "args": {"sql": "UPDATE t SET x=1 WHERE id=1"},
+                "risk_level": "medium",
+            }
+        )
         assert d.decision == "needs_hitl"
         assert d.risk_level == "medium"
 
     def test_critical_always_hitl(self):
-        d = policy_for({"name": "db.execute", "args": {"sql": "DROP TABLE users"},
-                        "risk_level": "critical"})
+        d = policy_for(
+            {"name": "db.execute", "args": {"sql": "DROP TABLE users"}, "risk_level": "critical"}
+        )
         assert d.decision == "needs_hitl"
         assert "critical" in d.reason
 

@@ -1,21 +1,23 @@
 /**
- * ModeSwitcher —— 顶部页签切换器（Phase 2E + Phase 5）：
- *   开发模式（完整 IDE）| 运营专家模式 | 审核专家模式
+ * ModeSwitcher —— 顶部页签切换器（Phase 2E + Phase 5 + Phase 2H）：
+ *   开发模式 | 运营模式（独立页签，与开发模式并列）| 审核专家模式 | 数据专家模式
  *
  * 设计要点（用户要求"切换动作要丝滑"）：
  *   - 视觉形态：VSCode 风格页签（large 态圆角胶囊 / 紧凑态下划线）
  *   - 平滑过渡：底部高亮条用 CSS transform 滑动 (150ms ease-out)
  *   - 状态保留：uiStore.mode 通过 Zustand persist 持久化到 localStorage
- *   - 切到 operator / auditor 首次弹确认框（独立"不再提示"开关）
+ *   - 切到 operator / auditor / analyst 首次弹确认框（独立"不再提示"开关）
  *   - 旧版 'audit' 自动迁移为 'auditor'（Phase 5 改名）
+ *   - Phase 2H 收尾（用户要求）：运营模式恢复为独立顶级页签（与开发模式并列），
+ *     进入后全屏渲染运营工作台（业务列表 + Chat + 工作台）
  */
 import { useState } from 'react';
 import { useUIStore, type WorkMode } from '@/store/uiStore';
 import {
   AdvancedModeConfirmDialog,
-  OPERATOR_MODE_CONTENT,
   AUDITOR_MODE_CONTENT,
   DATA_MODE_CONTENT,
+  OPERATOR_MODE_CONTENT,
   type AdvancedModeDialogContent,
 } from './OperatorModeConfirmDialog';
 
@@ -29,8 +31,8 @@ const TABS: TabDef[] = [
   { id: 'full', label: '开发模式', hint: '4 象限：资源 + 对话 + Trace + 终端' },
   {
     id: 'operator',
-    label: '运营专家模式',
-    hint: '2 象限：资源 + 对话（极简，资源按业务功能点展示）',
+    label: '运营模式',
+    hint: '运营工作台：业务列表 + Chat + 工作台（Skill 承载功能点）',
   },
   {
     id: 'auditor',
@@ -63,7 +65,9 @@ export function ModeSwitcher({ large = false }: { large?: boolean }): JSX.Elemen
   const pendingAuditCount = useUIStore((s) => s.pendingAuditCount);
 
   // 同时只可能弹一个 dialog（切到 operator / auditor / analyst 之一）
-  const [pendingAdvanced, setPendingAdvanced] = useState<null | 'operator' | 'auditor' | 'analyst'>(null);
+  const [pendingAdvanced, setPendingAdvanced] = useState<null | 'operator' | 'auditor' | 'analyst'>(
+    null,
+  );
 
   /**
    * 切换逻辑：

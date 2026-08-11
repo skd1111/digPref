@@ -4,6 +4,7 @@ work 子任务触发 medium+ 审批前，LLM 生成 2~3 个候选（必含"不�
 与推荐项；前端 ApprovalCard 渲染选项列表；自动模式按推荐项执行。
 解析失败一律返回空（hitl_gate 回退二元审批，绝不因选项机制阻塞审批）。
 """
+
 from __future__ import annotations
 
 import json
@@ -13,18 +14,12 @@ from typing import Any
 
 from protocol.approval import ApprovalOption
 
+from agent.llm.json_discipline import extract_json, parse_with_retry
+from agent.llm.prompts import load_prompt, render_prompt
+
 logger = logging.getLogger(__name__)
 
 _ABORT_LABEL = "不执行"
-
-_OPTIONS_PROMPT = (
-    "你是企业系统的审批助手。用户即将执行一个需要审批的操作，请给出 2~3 个候选执行方案，"
-    "其中必须包含一个'不执行'保底项。只输出 JSON，格式：\n"
-    '{{"options": [{{"id": "o1", "label": "简短选项名", "adjusted_plan": "该选项对应的执行方案", '
-    '"risk_note": "风险说明或null"}}], "recommended_option_id": "o1", '
-    '"recommendation_reason": "推荐理由"}}\n'
-    "待审批操作：{operation}\n目标：{target}"
-)
 
 
 async def generate_approval_options(
@@ -36,19 +31,31 @@ async def generate_approval_options(
     """
     if llm is None:
         return [], None, None
-    operation = str(call.get("name") or "") + " " + json.dumps(
-        call.get("args") or call.get("arguments") or {}, ensure_ascii=False, default=str
-    )[:500]
+    operation = (
+        str(call.get("name") or "")
+        + " "
+        + json.dumps(
+            call.get("args") or call.get("arguments") or {}, ensure_ascii=False, default=str
+        )[:500]
+    )
     target = str(call.get("target_system") or call.get("server") or "")
     try:
-        raw = await llm.route(
-            task="query",
-            prompt=_OPTIONS_PROMPT.format(operation=operation, target=target),
-        )
-    except Exception as exc:  # noqa: BLE001
+
+        async def _call(hint: str, last: str) -> str:
+            prompt = render_prompt(
+                load_prompt("approval/options"),
+                OPERATION=operation,
+                TARGET=target + (f"\n\n{hint}" if hint else ""),
+            )
+            return str(await llm.route(task="query", prompt=prompt))
+
+        raw = await parse_with_retry(_call, lambda t: extract_json(t, want="object"))
+    except Exception as exc:
         logger.warning("approval options generation failed: %s", exc)
         return [], None, None
-    return _parse_options(raw)
+    if not isinstance(raw, dict):
+        return [], None, None
+    return _parse_options(json.dumps(raw, ensure_ascii=False))
 
 
 def _parse_options(
@@ -65,23 +72,27 @@ def _parse_options(
     for o in raw_opts[:4]:
         if not isinstance(o, dict) or not o.get("label"):
             continue
-        options.append(ApprovalOption(
-            id=str(o.get("id") or f"o{len(options) + 1}"),
-            label=str(o["label"]),
-            adjusted_plan=str(o.get("adjusted_plan") or ""),
-            risk_note=o.get("risk_note"),
-        ))
+        options.append(
+            ApprovalOption(
+                id=str(o.get("id") or f"o{len(options) + 1}"),
+                label=str(o["label"]),
+                adjusted_plan=str(o.get("adjusted_plan") or ""),
+                risk_note=o.get("risk_note"),
+            )
+        )
     if not options:
         return [], None, None
 
     # 保底项：必须存在"不执行"
     if not any(o.label == _ABORT_LABEL for o in options):
-        options.append(ApprovalOption(
-            id=f"abort-{uuid.uuid4().hex[:8]}",
-            label=_ABORT_LABEL,
-            adjusted_plan="",
-            risk_note="取消本次操作",
-        ))
+        options.append(
+            ApprovalOption(
+                id=f"abort-{uuid.uuid4().hex[:8]}",
+                label=_ABORT_LABEL,
+                adjusted_plan="",
+                risk_note="取消本次操作",
+            )
+        )
 
     rec = data.get("recommended_option_id")
     reason = data.get("recommendation_reason")
@@ -92,12 +103,5 @@ def _parse_options(
 
 
 def _extract_json(text: str) -> Any:
-    """从模型输出里抽取 JSON（容忍代码围栏与前后缀文本）。"""
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end <= start:
-        return None
-    try:
-        return json.loads(text[start : end + 1])
-    except json.JSONDecodeError:
-        return None
+    """从模型输出里抽取 JSON（共享容错解析，spec §4.5）。"""
+    return extract_json(text, want="object")

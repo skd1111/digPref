@@ -21,14 +21,5 @@ pub mod tailer;
 #[cfg(test)]
 mod tests;
 
-pub use indexer::{FileIndexer, IndexProgress, IndexSummary, IndexerError};
-pub use reader::{LineReader, ReadLinesResult};
-pub use registry::{
-    LogViewerState, SubmitError, TaskEntry, TaskId, TaskKind, TaskSnapshot, TaskStatus,
-    FINISHED_TTL_SECS,
-};
-pub use searcher::{LogSearchMatch, LogSearchResult, LogSearcher, SearchMode};
-pub use storage::{
-    decode_u64_le, encode_u64_le, FileIndex, IndexStatus, LogIndexStorage, SchemaError,
-};
-pub use tailer::{TailLineEvent, TailManager, TailSessionId, TailSessionInfo};
+pub use registry::LogViewerState;
+pub use tailer::TailManager;

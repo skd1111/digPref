@@ -4,6 +4,7 @@ Agent 独立运行（无 Tauri 注入）时，以下只读 Rust 工具改走本�
 stat_file / find / glob / hash / base64 / mkdir。高危工具（delete / move / shell）
 的 Python 兜底在 dispatcher._exec_python_fallback 中已有。
 """
+
 from __future__ import annotations
 
 import base64 as _base64
@@ -13,7 +14,6 @@ import hashlib
 import os
 import re
 from pathlib import Path
-from typing import Any
 
 from agent.builtin.models import ToolResult
 from agent.builtin.path_sandbox import validate_path
@@ -41,7 +41,7 @@ def builtin_stat_file_py(*, path: str) -> ToolResult:
             meta={"size": st.st_size},
             risk_level="read",
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return ToolResult.from_exception(exc, risk_level="read")
 
 
@@ -85,7 +85,7 @@ def builtin_find_py(
             meta={"hit_count": len(hits), "truncated": len(hits) >= 1000},
             risk_level="read",
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return ToolResult.from_exception(exc, risk_level="read")
 
 
@@ -102,7 +102,7 @@ def builtin_glob_py(*, pattern: str, base_dir: str = ".") -> ToolResult:
             meta={"hit_count": len(hits), "truncated": len(hits) >= 1000},
             risk_level="read",
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return ToolResult.from_exception(exc, risk_level="read")
 
 
@@ -127,7 +127,7 @@ def builtin_hash_py(*, path: str, algorithm: str = "sha256") -> ToolResult:
             meta={"algorithm": algorithm, "path": str(p)},
             risk_level="read",
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return ToolResult.from_exception(exc, risk_level="read")
 
 
@@ -164,7 +164,7 @@ def builtin_base64_py(
         else:
             out = _base64.b64decode(raw).decode("utf-8", errors="replace")
         return ToolResult(ok=True, content=out, meta={"mode": mode}, risk_level="read")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return ToolResult.from_exception(exc, risk_level="read")
 
 
@@ -199,5 +199,5 @@ def builtin_mkdir_py(*, path: str, parents: bool = False) -> ToolResult:
             meta={"created": True, "parents": parents},
             risk_level="medium",
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return ToolResult.from_exception(exc, risk_level="medium")

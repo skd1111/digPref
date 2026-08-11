@@ -7,7 +7,23 @@ export function DocImportButton(): JSX.Element {
   const onImport = async (): Promise<void> => {
     const picked = await open({
       multiple: false,
-      filters: [{ name: "文档", extensions: ["pdf", "docx", "txt", "md"] }],
+      filters: [
+        {
+          name: "文档",
+          extensions: [
+            "pdf",
+            "docx",
+            "doc",
+            "txt",
+            "md",
+            "csv",
+            "html",
+            "htm",
+            "xlsx",
+            "pptx",
+          ],
+        },
+      ],
     });
     if (typeof picked === "string") {
       const res = await register(picked);

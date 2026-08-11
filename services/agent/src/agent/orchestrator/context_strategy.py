@@ -16,6 +16,7 @@
 
 本模块不依赖 LLM，可纯函数式单测（压缩率 / 必读字段保留率是 CI 指标）。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -23,7 +24,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from agent.orchestrator.spec import ArtifactRef, ContextPolicy, SubAgentSpec
 from agent.prompts import SUBAGENT_EXECUTION_PROMPT_TEMPLATE
@@ -57,7 +58,7 @@ def _stringify(value: Any) -> str:
         return value
     try:
         return json.dumps(value, ensure_ascii=False, default=str)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return str(value)
 
 
@@ -67,6 +68,7 @@ def _stringify(value: Any) -> str:
 @dataclass
 class ComposedContext:
     """上下文组装结果 —— Orchestrator 拿 prompt，评测拿 metrics。"""
+
     prompt: str
     strategy: str
     tokens_before: int
@@ -103,6 +105,7 @@ class ComposedContext:
 @dataclass
 class SharedFact:
     """共享事实：值 + 版本号 + content_hash（铁律 4 可追溯）。"""
+
     key: str
     value: Any
     version: int = 1
@@ -141,7 +144,7 @@ class SharedMemoryPool:
         pool[key] = fact
         return fact
 
-    def get_fact(self, run_id: str, key: str) -> Optional[SharedFact]:
+    def get_fact(self, run_id: str, key: str) -> SharedFact | None:
         return self._pools.get(run_id, {}).get(key)
 
     def get_many(self, run_id: str, keys: list[str]) -> dict[str, SharedFact]:
@@ -191,8 +194,8 @@ def select_strategy(spec: SubAgentSpec, *, raw_tokens: int | None = None) -> str
         return policy.strategy
     if policy.shared_keys:
         return "shared_memory_pool"
-    tokens = raw_tokens if raw_tokens is not None else estimate_tokens(
-        _stringify(spec.input_payload)
+    tokens = (
+        raw_tokens if raw_tokens is not None else estimate_tokens(_stringify(spec.input_payload))
     )
     if tokens > 2000:
         return "incremental_summary"
@@ -264,8 +267,9 @@ def _render_payload(
 def _render_execution_template(fields: dict[str, Any]) -> str:
     """按「子智能体执行提示词模板」填充子 Agent prompt。"""
     return (
-        SUBAGENT_EXECUTION_PROMPT_TEMPLATE
-        .replace("{{SUBAGENT_NAME}}", str(fields.get("name") or ""))
+        SUBAGENT_EXECUTION_PROMPT_TEMPLATE.replace(
+            "{{SUBAGENT_NAME}}", str(fields.get("name") or "")
+        )
         .replace("{{SUBAGENT_ROLE}}", str(fields.get("role") or ""))
         .replace("{{USER_GOAL}}", str(fields.get("user_goal") or ""))
         .replace("{{TASK}}", str(fields.get("task") or ""))
@@ -321,9 +325,7 @@ def build_context(
     # Phase 12 V2：自动派生时携带执行模板字段 → 子 Agent prompt 直接用模板渲染
     exec_template = payload.pop("execution_template_fields", None)
     raw_text = _stringify(payload)
-    tokens_before = estimate_tokens(
-        f"{spec.task_description}\n{raw_text}\n{previous_summary}"
-    )
+    tokens_before = estimate_tokens(f"{spec.task_description}\n{raw_text}\n{previous_summary}")
     chosen = strategy or select_strategy(spec, raw_tokens=estimate_tokens(raw_text))
 
     raw_refs: list[ArtifactRef] = []
@@ -354,9 +356,7 @@ def build_context(
     elif chosen == "incremental_summary":
         if previous_summary:
             lines.append("上一轮摘要（增量基线）:")
-            lines.append(
-                _truncate_to_tokens(previous_summary, policy.max_summary_tokens)
-            )
+            lines.append(_truncate_to_tokens(previous_summary, policy.max_summary_tokens))
             lines.append("")
         if state_delta:
             lines.append("增量状态 delta:")
@@ -364,9 +364,7 @@ def build_context(
                 lines.append(f"  - {k}: {_truncate_to_tokens(_stringify(v), 120)}")
             lines.append("")
         # 长会话：非必读字段一律小 inline 限额，原文外置
-        lines.extend(
-            _render_payload(payload, policy, inline_limit=120, raw_refs=raw_refs)
-        )
+        lines.extend(_render_payload(payload, policy, inline_limit=120, raw_refs=raw_refs))
         lines.append("请只输出结构化摘要（不要复述原文），并显式保留必读字段。")
 
     else:  # passthrough
@@ -381,13 +379,12 @@ def build_context(
 
     # 必读字段保留校验（CI 指标：保留率必须 100%）
     missing = [
-        name for name in policy.required_fields
+        name
+        for name in policy.required_fields
         if name in payload and _stringify(payload[name]) not in prompt
     ]
     if missing:
-        logger.error(
-            "[context_strategy] 必读字段丢失 strategy=%s missing=%s", chosen, missing
-        )
+        logger.error("[context_strategy] 必读字段丢失 strategy=%s missing=%s", chosen, missing)
 
     if chosen == "passthrough" and tokens_after > PASSTHROUGH_SOFT_TOKEN_LIMIT * 4:
         logger.warning(
@@ -408,14 +405,14 @@ def build_context(
 
 
 __all__ = [
+    "MAX_INLINE_VALUE_CHARS",
+    "PASSTHROUGH_SOFT_TOKEN_LIMIT",
     "ComposedContext",
     "SharedFact",
     "SharedMemoryPool",
     "build_context",
-    "select_strategy",
     "estimate_tokens",
     "get_default_pool",
     "reset_default_pool",
-    "MAX_INLINE_VALUE_CHARS",
-    "PASSTHROUGH_SOFT_TOKEN_LIMIT",
+    "select_strategy",
 ]

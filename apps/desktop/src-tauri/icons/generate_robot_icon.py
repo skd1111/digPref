@@ -10,20 +10,21 @@
 设计：圆润的方形机器人头 + 2 根天线 + 大圆眼（青色 #4ec9b0）+ 微笑嘴
 配色贴合 EAIDE 深色主题（背景 #1e1e1e / 头部 #2d2d30 / 边框 #007acc）
 """
-import struct
+
 import sys
 from pathlib import Path
+
 from PIL import Image, ImageDraw
 
 OUT_DIR = Path(sys.argv[1] if len(sys.argv) > 1 else ".")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # EAIDE 主题色
-BG = (30, 30, 30, 255)        # #1e1e1e  背景
-HEAD = (45, 45, 48, 255)       # #2d2d30  机器人头
-BORDER = (0, 122, 204, 255)    # #007acc  边框（VSCode 蓝）
-EYE = (78, 201, 176, 255)     # #4ec9b0  眼睛（dev 绿）
-MOUTH = (78, 201, 176, 255)    # 同眼睛色
+BG = (30, 30, 30, 255)  # #1e1e1e  背景
+HEAD = (45, 45, 48, 255)  # #2d2d30  机器人头
+BORDER = (0, 122, 204, 255)  # #007acc  边框（VSCode 蓝）
+EYE = (78, 201, 176, 255)  # #4ec9b0  眼睛（dev 绿）
+MOUTH = (78, 201, 176, 255)  # 同眼睛色
 ANTENNA = (180, 180, 180, 255)
 HIGHLIGHT = (90, 90, 95, 255)  # 头部高光
 
@@ -76,13 +77,21 @@ def draw_robot(size: int) -> Image.Image:
     # 眼睛高光（小白点）
     hl_r = max(1, s // 32)
     d.ellipse(
-        [eye_left_x - eye_r // 2, eye_y - eye_r // 2,
-         eye_left_x - eye_r // 2 + hl_r, eye_y - eye_r // 2 + hl_r],
+        [
+            eye_left_x - eye_r // 2,
+            eye_y - eye_r // 2,
+            eye_left_x - eye_r // 2 + hl_r,
+            eye_y - eye_r // 2 + hl_r,
+        ],
         fill=(255, 255, 255, 255),
     )
     d.ellipse(
-        [eye_right_x - eye_r // 2, eye_y - eye_r // 2,
-         eye_right_x - eye_r // 2 + hl_r, eye_y - eye_r // 2 + hl_r],
+        [
+            eye_right_x - eye_r // 2,
+            eye_y - eye_r // 2,
+            eye_right_x - eye_r // 2 + hl_r,
+            eye_y - eye_r // 2 + hl_r,
+        ],
         fill=(255, 255, 255, 255),
     )
 
@@ -97,15 +106,23 @@ def draw_robot(size: int) -> Image.Image:
     # 左天线
     d.line([(s // 3, ant_y_bot), (s // 3 - s // 16, ant_y_top)], fill=ANTENNA, width=ant_w)
     d.ellipse(
-        [s // 3 - s // 16 - s // 40, ant_y_top - s // 40,
-         s // 3 - s // 16 + s // 40, ant_y_top + s // 40],
+        [
+            s // 3 - s // 16 - s // 40,
+            ant_y_top - s // 40,
+            s // 3 - s // 16 + s // 40,
+            ant_y_top + s // 40,
+        ],
         fill=ANTENNA,
     )
     # 右天线
     d.line([(2 * s // 3, ant_y_bot), (2 * s // 3 + s // 16, ant_y_top)], fill=ANTENNA, width=ant_w)
     d.ellipse(
-        [2 * s // 3 + s // 16 - s // 40, ant_y_top - s // 40,
-         2 * s // 3 + s // 16 + s // 40, ant_y_top + s // 40],
+        [
+            2 * s // 3 + s // 16 - s // 40,
+            ant_y_top - s // 40,
+            2 * s // 3 + s // 16 + s // 40,
+            ant_y_top + s // 40,
+        ],
         fill=ANTENNA,
     )
 

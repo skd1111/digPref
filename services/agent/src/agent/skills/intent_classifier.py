@@ -6,15 +6,15 @@ V1 实现：LLM 意图分类（Ollama 本地）+ 关键词回退。
 - Ollama 不可用 / 超时 / 返回非 JSON → 静默回退关键词路由
 - 严格遵守 CLAUDE.md §2：skill_router 任务在 _LOCAL_ONLY_TASKS → 仅 Ollama
 """
+
 from __future__ import annotations
 
-import json
 import logging
-import re
-from typing import Optional
 
 import httpx
 
+from agent.llm.json_discipline import extract_json
+from agent.llm.prompts import load_prompt, render_prompt
 from agent.skills.models import Skill
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 class IntentResult:
     """LLM 分类结果（V0 简化，不强 schema）。"""
 
-    def __init__(self, skill_id: Optional[str], confidence: float = 0.0, reasoning: str = ""):
+    def __init__(self, skill_id: str | None, confidence: float = 0.0, reasoning: str = ""):
         self.skill_id = skill_id
         self.confidence = confidence
         self.reasoning = reasoning
@@ -42,7 +42,7 @@ async def classify_with_llm(
     ollama_base_url: str = "http://127.0.0.1:11434",
     ollama_model: str = "qwen2.5:0.5b",
     timeout_s: float = 5.0,
-) -> Optional[IntentResult]:
+) -> IntentResult | None:
     """调 Ollama 分类。失败返回 None（调用方回退关键词）。
 
     V0 简化：不做严格 JSON schema 解析（V1 期望 LLM 输出
@@ -60,11 +60,9 @@ async def classify_with_llm(
         f"- {s.id} ({s.name}): {s.description} | keywords: {', '.join(s.trigger_keywords[:5])}"
         for s in enabled
     )
-    system_prompt = (
-        "你是一个 skill 路由助手。根据用户输入选择最匹配的 skill id。\n"
-        "可用 skills:\n" + skill_lines + "\n"
-        "如果都不匹配返回 {\"skill_id\": null, \"confidence\": 0, \"reasoning\": \"no match\"}。\n"
-        "否则返回 {\"skill_id\": \"<id>\", \"confidence\": 0.0-1.0, \"reasoning\": \"<why>\"}。"
+    system_prompt = render_prompt(
+        load_prompt("skills/classify"),
+        SKILL_LINES=skill_lines,
     )
     user_msg = f"用户输入: {user_prompt[:500]}"
 
@@ -92,20 +90,16 @@ async def classify_with_llm(
     if not content:
         return None
 
-    # V0 简单解析：尝试 JSON，找 skill_id 字段
-    json_match = re.search(r"\{[^{}]*skill_id[^{}]*\}", content, re.DOTALL)
-    if json_match:
-        try:
-            parsed = json.loads(json_match.group(0))
-            sid = parsed.get("skill_id")
-            if sid and any(s.id == sid for s in enabled):
-                return IntentResult(
-                    skill_id=sid,
-                    confidence=float(parsed.get("confidence", 0.5)),
-                    reasoning=parsed.get("reasoning", ""),
-                )
-        except (json.JSONDecodeError, ValueError):
-            pass
+    # 共享容错解析：围栏/think/前后缀（spec §4.5 第三层）
+    parsed = extract_json(content, want="object")
+    if isinstance(parsed, dict):
+        sid = parsed.get("skill_id")
+        if sid and any(s.id == sid for s in enabled):
+            return IntentResult(
+                skill_id=sid,
+                confidence=float(parsed.get("confidence", 0.5)),
+                reasoning=str(parsed.get("reasoning") or ""),
+            )
 
     # 回退：content 直接出现 skill_id 字符串
     for s in enabled:

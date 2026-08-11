@@ -15,6 +15,7 @@
     5. 后端不区分模式一律记录（金融合规审计）；前端仅开发模式渲染。
     6. thinking_steps 只追加不删改。
 """
+
 from agent.trace.models import FileOperation, ThinkingStep
 
 __all__ = ["FileOperation", "ThinkingStep"]

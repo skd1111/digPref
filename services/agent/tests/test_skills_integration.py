@@ -1,9 +1,9 @@
 """intent_node 集成 skill 路由 + system_prompt 注入测试。"""
-import pytest
 
+import pytest
 from agent.skills import api as api_mod
-from agent.skills.router import SkillRouter
 from agent.skills.loader import SkillLoader
+from agent.skills.router import SkillRouter
 
 
 @pytest.fixture
@@ -11,13 +11,16 @@ def reset_loader(tmp_path):
     """重置全局 loader，注入临时目录。"""
     test_dir = tmp_path / "eaide" / "skills"
     test_dir.mkdir(parents=True, exist_ok=True)
-    (test_dir / "order.yaml").write_text("""
+    (test_dir / "order.yaml").write_text(
+        """
 schema_version: "1.0"
 id: db_query_order
 name: 订单
 trigger_keywords: [订单, order]
 system_prompt: 你是一名订单分析师
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
     new_loader = SkillLoader(test_dir)
     new_loader.load_all()
     saved = api_mod._loader

@@ -13,6 +13,7 @@
   - 读路径永远不被拦截（agent 看代码 / 配置文件）—— 除非明确是 sensitive
   - 写路径严格校验
 """
+
 from __future__ import annotations
 
 import logging
@@ -66,7 +67,9 @@ def init_opened_projects(extra: list[str] | None = None) -> list[str]:
                 _opened.append(resolved)
         except OSError:
             continue
-    logger.info("path_guard initialised with %d project(s): %s", len(_opened), [str(p) for p in _opened])
+    logger.info(
+        "path_guard initialised with %d project(s): %s", len(_opened), [str(p) for p in _opened]
+    )
     return [str(p) for p in _opened]
 
 
@@ -132,6 +135,8 @@ def check(path: str | Path, *, operation: str = "write") -> None:
         return
     logger.info(
         "path_guard blocked operation=%s path=%s (opened=%s)",
-        operation, path, [str(p) for p in _opened],
+        operation,
+        path,
+        [str(p) for p in _opened],
     )
     raise PathOutsideProjectsError(str(path), [str(p) for p in _opened])

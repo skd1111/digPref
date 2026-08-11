@@ -40,6 +40,11 @@ export interface Feature {
   project_name: string;
   /** V0 = "C:/demo/order-service" */
   project_root: string;
+  /** Phase 2H：绑定的业务 Skill id（历史字段，保留兼容；运营链路已改由专家团承载） */
+  skill_id?: string | null;
+  /** 中期改造（2026-08-07）：功能点直连专家团预设（选中业务零延迟自动选团；
+   * 未预设时后端拿功能点名 + 全部专家团描述让 LLM 判断） */
+  expert_team_ids?: string[];
   related_files: RelatedFile[];
   related_apis: RelatedApi[];
   related_tables: RelatedTable[];
@@ -63,6 +68,8 @@ export interface FeatureContextPayload {
   feature_id: string;
   feature_name: string;
   feature_description: string;
+  /** Phase 2H：绑定的 Skill id（注入提示词时附带 Skill 经验） */
+  skill_id?: string | null;
   related_files: RelatedFile[];
   related_apis: RelatedApi[];
   related_tables: RelatedTable[];

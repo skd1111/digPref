@@ -15,6 +15,7 @@ CLAUDE.md §phase-14 红线：
   - **不做**版面分析 / 表格还原 / 段落结构化
   - 数据不出域（端侧推理）
 """
+
 from __future__ import annotations
 
 import time
@@ -23,7 +24,6 @@ from pathlib import Path
 from agent.image_processing.models import (
     BackendUnavailableError,
     OcrBackend,
-    OcrEngine,
     OcrRequest,
     OcrResponse,
     check_file_size,
@@ -42,6 +42,7 @@ class MockOcrBackend:
             check_file_size(request.input_path)
             if not is_supported_format(request.input_path):
                 from agent.image_processing.models import UnsupportedFormatError
+
                 raise UnsupportedFormatError(
                     fmt=Path(request.input_path).suffix.lstrip("."),
                     supported=frozenset({"png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff"}),
@@ -72,6 +73,7 @@ class MockOcrBackend:
 
 class PaddleOcrBackend:
     """V1 PaddleOCR 后端（占位）。"""
+
     name: str = "paddleocr"
 
     def __init__(self) -> None:

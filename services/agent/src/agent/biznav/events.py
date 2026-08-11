@@ -16,6 +16,7 @@ CLAUDE.md §4 SSE 三处同步：
     - 通道名必须严格一致：`biznav_yaml_reloaded` / `biznav_feature_affected` /
       `biznav_extraction_done`
 """
+
 from __future__ import annotations
 
 from collections import deque

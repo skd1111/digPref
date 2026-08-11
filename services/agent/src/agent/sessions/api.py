@@ -29,20 +29,19 @@ V1.5 新端点（CLAUDE.md §6 §1 HITL + §5 Keyring）：
   GET    /sessions/{id}/event-chain      列出 SessionEvent
   POST   /sessions/{id}/event-chain/verify  校验哈希链
 """
+
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
-from typing import Optional
 
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from .checkpointer import SessionCheckpointer
-from .knowledge_base import KBConfig, build_kb_context
+from .knowledge_base import build_kb_context
 from .models import MessageRole, Session
-from .sharing import ShareManager, SessionAccessDenied
+from .sharing import SessionAccessDenied, ShareManager
 from .storage import SessionStorage
 
 logger = logging.getLogger(__name__)
@@ -73,6 +72,7 @@ def get_checkpointer() -> SessionCheckpointer:
 
 
 # ---- Pydantic 模型 --------------------------------------------------------
+
 
 class CreateSessionRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
@@ -305,9 +305,15 @@ class EventChainVerifyResponse(BaseModel):
 
 def _session_to_summary(s: Session) -> SessionSummary:
     return SessionSummary(
-        id=s.id, title=s.title, owner=s.owner, project_name=s.project_name,
-        status=s.status, created_at=s.created_at, updated_at=s.updated_at,
-        thread_id=s.thread_id, metadata=s.metadata,
+        id=s.id,
+        title=s.title,
+        owner=s.owner,
+        project_name=s.project_name,
+        status=s.status,
+        created_at=s.created_at,
+        updated_at=s.updated_at,
+        thread_id=s.thread_id,
+        metadata=s.metadata,
     )
 
 
@@ -331,8 +337,8 @@ def create_session(body: CreateSessionRequest) -> SessionSummary:
 
 @router.get("", response_model=list[SessionSummary])
 def list_sessions(
-    status: Optional[str] = Query(None),
-    project_name: Optional[str] = Query(None),
+    status: str | None = Query(None),
+    project_name: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
 ) -> list[SessionSummary]:
     """列出会话（默认不按 status 过滤，按 updated_at DESC）。
@@ -356,6 +362,7 @@ def list_sessions(
 # FastAPI/Starlette 按注册顺序匹配路由；/recovery /search /import 是字面量路径，
 # 必须早于 /{session_id} 通配符，否则 /sessions/recovery 会被当 session_id="recovery" 解析 → 404。
 
+
 @router.get("/recovery", response_model=RecoveryResponse)
 def recovery_endpoint(
     idle_threshold_ms: int = Query(300_000, ge=10_000, le=86_400_000),
@@ -363,9 +370,12 @@ def recovery_endpoint(
 ) -> RecoveryResponse:
     """启动恢复扫描：列出 updated_at 距今 > 阈值的活跃会话。"""
     from .recovery import scan_resumable_sessions
+
     storage = get_storage()
     report = scan_resumable_sessions(
-        storage, idle_threshold_ms=idle_threshold_ms, limit=limit,
+        storage,
+        idle_threshold_ms=idle_threshold_ms,
+        limit=limit,
     )
     return RecoveryResponse(**report.to_dict())
 
@@ -374,6 +384,7 @@ def recovery_endpoint(
 def import_endpoint(body: ImportRequest) -> ImportResponse:
     """从 .eas 导入会话（新建 session；可选 import_as_branch）。"""
     from .export import SessionImporter
+
     storage = get_storage()
     try:
         result = SessionImporter(storage).import_from_file(
@@ -392,7 +403,9 @@ def search_endpoint(body: SearchRequest) -> SearchResponse:
     """FTS5 全文搜索：跨会话（标题 + 消息 + 工具名 + 工具结果）。"""
     storage = get_storage()
     rows = storage.fts_search(
-        body.query, project_name=body.project_name, limit=body.limit,
+        body.query,
+        project_name=body.project_name,
+        limit=body.limit,
     )
     return SearchResponse(
         query=body.query,
@@ -437,9 +450,12 @@ async def kb_search(body: KBSearchRequest) -> KBSearchResponse:
       - 失败 → 空 context，不阻塞 agent 决策
     """
     ctx = await build_kb_context(
-        body.query, top_k=body.top_k, adapter=None,
+        body.query,
+        top_k=body.top_k,
+        adapter=None,
     )
     from .knowledge_base import kb_context_to_prompt_snippet
+
     snippet = kb_context_to_prompt_snippet(ctx)
     return KBSearchResponse(
         backend=ctx.backend,
@@ -524,10 +540,13 @@ class CompressResponse(BaseModel):
 async def extract_events(body: ExtractEventsRequest):
     """从消息轨迹启发式抽取事件节点（V1 无 LLM；use_llm=True 时占位）。"""
     from .event_graph import extract_events_with_llm
+
     storage = get_storage()
     nodes = await extract_events_with_llm(
-        body.session_id, body.messages,
-        storage=storage, llm=None,
+        body.session_id,
+        body.messages,
+        storage=storage,
+        llm=None,
     )
     return ExtractEventsResponse(
         session_id=body.session_id,
@@ -540,6 +559,7 @@ async def extract_events(body: ExtractEventsRequest):
 async def distill_rules(body: DistillRulesRequest):
     """从 session 的事件图谱蒸馏语义规则。"""
     from .semantic import distill_rules_from_events
+
     storage = get_storage()
     rules = distill_rules_from_events(
         body.session_id,
@@ -558,9 +578,11 @@ async def distill_rules(body: DistillRulesRequest):
 async def recall_episode_endpoint(body: RecallEpisodeRequest):
     """从事件图谱 BFS 召回相关历史事件。"""
     from .event_graph import recall_episode
+
     storage = get_storage()
     nodes = recall_episode(
-        storage, body.session_id,
+        storage,
+        body.session_id,
         query=body.query,
         entity_keywords=body.entity_keywords,
         max_hops=body.max_hops,
@@ -581,6 +603,7 @@ async def compress_endpoint(body: CompressRequest):
     """用 CompressionRouter 选策略 + 应用压缩 + 写 compression_log。"""
     from .compression import CompressionRouter
     from .models_macc import CompressionContext
+
     storage = get_storage()
     router = CompressionRouter(storage)
     ctx = CompressionContext(
@@ -612,198 +635,11 @@ async def compress_endpoint(body: CompressRequest):
 # =============================================================================
 # Phase 6 V1.5 端点：stats / messages / checkpoints / search / branch /
 #                   share / export / import / recovery / event-chain
+# （请求/响应 Pydantic 模型已在文件头部定义，此处不再重复）
 # =============================================================================
 
-
-class StatsResponse(BaseModel):
-    session_id: str
-    title: str
-    owner: str
-    status: str
-    is_branch: bool
-    parent_session_id: str | None
-    branch_label: str
-    message_count: int
-    checkpoint_count: int
-    event_chain_count: int
-    compression_count: int
-    branch_count: int
-    created_at: int
-    updated_at: int
-
-
-class AppendMessageRequest(BaseModel):
-    role: MessageRole = "user"
-    content: str = ""
-    tool_call_id: str | None = None
-    tool_name: str | None = None
-    tool_args: dict | None = None
-    tool_result: str | None = None
-    metadata: dict = Field(default_factory=dict)
-    actor: str = "default"
-
-
-class AppendMessageResponse(BaseModel):
-    message_id: int
-    session_id: str
-    created_at: int
-
-
-class RecordCheckpointRequest(BaseModel):
-    thread_id: str
-    checkpoint_id: str
-    label: str = ""
-    description: str = ""
-    metadata: dict = Field(default_factory=dict)
-
-
-class RecordCheckpointResponse(BaseModel):
-    checkpoint_id: int
-    session_id: str
-    created_at: int
-
-
-class SearchRequest(BaseModel):
-    query: str = Field(..., min_length=1, max_length=2000)
-    project_name: str | None = None
-    limit: int = Field(default=20, ge=1, le=100)
-
-
-class SearchHit(BaseModel):
-    session_id: str
-    created_at: int
-    title: str
-    content_snippet: str
-    tool_name: str
-    tool_result: str
-    relevance: float
-
-
-class SearchResponse(BaseModel):
-    query: str
-    total: int
-    hits: list[SearchHit]
-
-
-class BranchCreateRequest(BaseModel):
-    branch_label: str = Field(..., min_length=1, max_length=200)
-    from_checkpoint_id: str | None = None
-    title_suffix: str = " (分支)"
-    actor: str = "default"
-
-
-class BranchInfoResponse(BaseModel):
-    id: str
-    title: str
-    parent_session_id: str | None
-    branch_from_checkpoint_id: str | None
-    branch_label: str
-    created_at: int
-    updated_at: int
-    status: str
-
-
-class BranchListResponse(BaseModel):
-    parent_session_id: str
-    branches: list[BranchInfoResponse]
-    total: int
-
-
-class ShareCreateRequest(BaseModel):
-    permission: str = Field(default="read", pattern=r"^(read|write)$")
-    expires_in_ms: int | None = None
-    actor: str = "default"
-
-
-class ShareTokenResponse(BaseModel):
-    token: str
-    permission: str
-    created_at: int
-    expires_at: int | None = None
-
-
-class ShareRevokeRequest(BaseModel):
-    actor: str = "default"
-
-
-class ShareGrantRequest(BaseModel):
-    target_actor: str = Field(..., min_length=1, max_length=64)
-    permission: str = Field(..., pattern=r"^(read|write)$")
-    granter: str = "default"
-
-
-class ShareListResponse(BaseModel):
-    session_id: str
-    share_tokens: list[dict]
-    permissions: dict[str, str]
-
-
-class ExportRequest(BaseModel):
-    output_path: str = Field(..., min_length=1, max_length=512)
-    actor: str = "default"
-    include_messages: bool = True
-    include_event_chain: bool = True
-    scrub_pii: bool = True
-
-
-class ExportResponse(BaseModel):
-    path: str
-    bytes: int
-    checksum: str
-    exported_at: int
-
-
-class ImportRequest(BaseModel):
-    eas_path: str = Field(..., min_length=1, max_length=512)
-    actor: str = "default"
-    import_as_branch: bool = False
-    parent_session_id: str | None = None
-
-
-class ImportResponse(BaseModel):
-    new_session_id: str
-    message_count: int
-    checkpoint_count: int
-    event_count: int
-    checksum: str
-    chain_check: dict
-
-
-class RecoveryResponse(BaseModel):
-    total: int
-    resumable_ids: list[str]
-    oldest_idle_ms: int
-    generated_at: int
-    threshold_ms: int
-    needs_recovery: bool
-
-
-class EventChainEntry(BaseModel):
-    id: int
-    session_id: str
-    event_type: str
-    payload: dict
-    prev_hash: str
-    hash: str
-    actor: str
-    created_at: int
-
-
-class EventChainResponse(BaseModel):
-    session_id: str
-    total: int
-    entries: list[EventChainEntry]
-
-
-class EventChainVerifyResponse(BaseModel):
-    session_id: str
-    valid: bool
-    total: int
-    broken_at_id: int | None
-    broken_reason: str | None
-
-
 # ---- Stats / Append / Checkpoint / Search ---------------------------------
+
 
 @router.get("/{session_id}/stats", response_model=StatsResponse)
 def session_stats(session_id: str) -> StatsResponse:
@@ -832,15 +668,20 @@ def append_message_endpoint(session_id: str, body: AppendMessageRequest) -> Appe
         metadata=body.metadata,
     )
     return AppendMessageResponse(
-        message_id=msg.id, session_id=session_id, created_at=msg.created_at,
+        message_id=msg.id,
+        session_id=session_id,
+        created_at=msg.created_at,
     )
 
 
 @router.post(
-    "/{session_id}/checkpoints", response_model=RecordCheckpointResponse, status_code=201,
+    "/{session_id}/checkpoints",
+    response_model=RecordCheckpointResponse,
+    status_code=201,
 )
 def record_checkpoint_endpoint(
-    session_id: str, body: RecordCheckpointRequest,
+    session_id: str,
+    body: RecordCheckpointRequest,
 ) -> RecordCheckpointResponse:
     """手动记录 checkpoint 引用（实际状态存 LangGraph 自己的 SQLite 表）。"""
     storage = get_storage()
@@ -855,11 +696,14 @@ def record_checkpoint_endpoint(
         metadata=body.metadata,
     )
     return RecordCheckpointResponse(
-        checkpoint_id=cp.id, session_id=session_id, created_at=cp.created_at,
+        checkpoint_id=cp.id,
+        session_id=session_id,
+        created_at=cp.created_at,
     )
 
 
 # ---- Branch ---------------------------------------------------------------
+
 
 @router.post("/{session_id}/branch", response_model=BranchInfoResponse, status_code=201)
 def branch_endpoint(session_id: str, body: BranchCreateRequest) -> BranchInfoResponse:
@@ -911,9 +755,11 @@ def list_branches_endpoint(session_id: str) -> BranchListResponse:
 
 # ---- Share -----------------------------------------------------------------
 
+
 @router.post("/{session_id}/share", response_model=ShareTokenResponse, status_code=201)
 def share_create_endpoint(
-    session_id: str, body: ShareCreateRequest,
+    session_id: str,
+    body: ShareCreateRequest,
 ) -> ShareTokenResponse:
     """创建分享令牌（owner only；非 owner 返 403）。"""
     storage = get_storage()
@@ -939,7 +785,9 @@ def share_create_endpoint(
 
 @router.delete("/{session_id}/share/{token}", status_code=204)
 def share_revoke_endpoint(
-    session_id: str, token: str, actor: str = Query("default"),
+    session_id: str,
+    token: str,
+    actor: str = Query("default"),
 ) -> None:
     """撤销分享令牌。"""
     storage = get_storage()
@@ -954,7 +802,8 @@ def share_revoke_endpoint(
 
 @router.post("/{session_id}/share/grant", status_code=200)
 def share_grant_endpoint(
-    session_id: str, body: ShareGrantRequest,
+    session_id: str,
+    body: ShareGrantRequest,
 ) -> dict:
     """授予 actor 权限（owner only）。"""
     storage = get_storage()
@@ -975,7 +824,8 @@ def share_grant_endpoint(
 
 @router.get("/{session_id}/share", response_model=ShareListResponse)
 def share_list_endpoint(
-    session_id: str, actor: str = Query("default"),
+    session_id: str,
+    actor: str = Query("default"),
 ) -> ShareListResponse:
     """列出会话的 share_token + permissions（owner only）。"""
     storage = get_storage()
@@ -994,10 +844,12 @@ def share_list_endpoint(
 
 # ---- Export / Import -------------------------------------------------------
 
+
 @router.post("/{session_id}/export", response_model=ExportResponse)
 def export_endpoint(session_id: str, body: ExportRequest) -> ExportResponse:
     """加密 .eas 导出（Fernet + Keyring；owner only）。"""
     from .export import SessionExporter
+
     storage = get_storage()
     try:
         result = SessionExporter(storage).export_to_file(
@@ -1017,9 +869,11 @@ def export_endpoint(session_id: str, body: ExportRequest) -> ExportResponse:
 
 # ---- Recovery / Event Chain -------------------------------------------------
 
+
 @router.get("/{session_id}/event-chain", response_model=EventChainResponse)
 def event_chain_endpoint(
-    session_id: str, limit: int = Query(200, ge=1, le=2000),
+    session_id: str,
+    limit: int = Query(200, ge=1, le=2000),
 ) -> EventChainResponse:
     storage = get_storage()
     if storage.get_session(session_id) is None:
@@ -1045,7 +899,8 @@ def event_chain_endpoint(
 
 
 @router.post(
-    "/{session_id}/event-chain/verify", response_model=EventChainVerifyResponse,
+    "/{session_id}/event-chain/verify",
+    response_model=EventChainVerifyResponse,
 )
 def event_chain_verify_endpoint(session_id: str) -> EventChainVerifyResponse:
     """校验会话 SessionEvent 哈希链完整性。"""

@@ -7,10 +7,10 @@
 - sync_db_to_yaml：DB 全量 dump 成 YAML
 - 不依赖 yaml 之外的东西；yaml.safe_dump(allow_unicode=True, sort_keys=False)
 """
+
 from __future__ import annotations
 
 import json
-from typing import Any
 
 import yaml
 
@@ -72,7 +72,9 @@ class FeatureIO:
         except yaml.YAMLError as e:
             raise FeatureImportError(f"yaml parse error: {e}") from e
         if not isinstance(doc, dict):
-            raise FeatureImportError("yaml root must be a mapping with project_name/project_root/features")
+            raise FeatureImportError(
+                "yaml root must be a mapping with project_name/project_root/features"
+            )
         features_raw = doc.get("features") or []
         if not isinstance(features_raw, list):
             raise FeatureImportError("'features' must be a list")
@@ -124,7 +126,9 @@ class FeatureIO:
         """
         incoming = FeatureIO.from_yaml(yaml_text)
         report = SyncReport()
-        with_storage_features = {f.id: f for f in storage.list_by_project(project_name, include_deleted=True)}
+        with_storage_features = {
+            f.id: f for f in storage.list_by_project(project_name, include_deleted=True)
+        }
         for f in incoming:
             # 强制 project_name 一致
             f.project_name = project_name

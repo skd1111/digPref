@@ -11,11 +11,10 @@
     - repair: 返回原样
     - summarise: 根据 user_prompt 套友好模板
 """
+
 from __future__ import annotations
 
 import re
-import time
-from typing import Any
 
 
 class MockLLMClient:
@@ -29,14 +28,20 @@ class MockLLMClient:
         if not t:
             return "chitchat"
         # 写操作信号
-        if re.search(r"\b(insert|update|delete|drop|create|alter|truncate|grant|revoke)\b", t) \
-           or any(kw in t for kw in ("修改", "删除", "更新", "插入", "新增", "清空", "建表", "删除表")):
+        if re.search(
+            r"\b(insert|update|delete|drop|create|alter|truncate|grant|revoke)\b", t
+        ) or any(
+            kw in t for kw in ("修改", "删除", "更新", "插入", "新增", "清空", "建表", "删除表")
+        ):
             return "mutate"
         # 跨系统编排
         if any(kw in t for kw in ("orchestrate", "跨系统", "编排", "工作流", "workflow")):
             return "orchestrate"
         # 闲聊
-        if any(kw in t for kw in ("你好", "你是", "hi", "hello", "嗨", "who are you", "what's your name")):
+        if any(
+            kw in t
+            for kw in ("你好", "你是", "hi", "hello", "嗨", "who are you", "what's your name")
+        ):
             return "chitchat"
         return "query"
 
@@ -90,6 +95,17 @@ class MockLLMClient:
             [s.get("server") for s in plan if s.get("server")],
         )
 
+    async def extract_chat(self, messages: list[dict]) -> str:
+        """mock 原始对话：返回一个示例功能点 JSON 数组，让 biznav 提取链路
+        在 mock 模式下能端到端跑通（不发起任何网络请求）。"""
+        await _sleep_async(0.1)
+        return (
+            '[{"id": "mock-feature-1", "name": "示例业务功能点", '
+            '"description": "（mock 模式）导入工程后由 AI 提炼的示例功能点", '
+            '"category": "业务", "related_files": [], "related_apis": [], '
+            '"related_tables": [], "business_rules": []}]'
+        )
+
 
 def _chitchat_answer(user_prompt: str) -> str:
     p = user_prompt.strip()
@@ -131,4 +147,5 @@ def _format_plan(plan: list[dict]) -> str:
 
 async def _sleep_async(seconds: float) -> None:
     import asyncio
+
     await asyncio.sleep(seconds)

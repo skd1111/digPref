@@ -1,4 +1,5 @@
 """HITL approval models."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -7,7 +8,6 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from protocol.tools import ToolCall, ToolRiskLevel
-
 
 ApprovalDecision = Literal["approve", "reject"]
 

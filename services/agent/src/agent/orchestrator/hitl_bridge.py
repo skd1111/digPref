@@ -21,6 +21,7 @@ V1.5（新增 `wait_for_user=True`）：**真 interrupt**
     - 超时默认 reject（绝不 fail-open）
     - `require_hitl_for_write=False`（总开关关）时才隐式批准，与 hitl_gate 语义一致
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -28,7 +29,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from agent.audit.store import audit
 from agent.config import settings
@@ -44,11 +45,12 @@ _POLL_INTERVAL_S = 0.05
 @dataclass
 class HITLRequest:
     """子 Agent 提交的 HITL 请求（写操作需审批）。"""
+
     request_id: str
     sub_agent_id: str
     parent_run_id: str
-    operation: str                 # 写操作描述（如 "UPDATE orders SET ..."）
-    target: str                    # 影响目标（"orders_db.orders" / "redis://..."）
+    operation: str  # 写操作描述（如 "UPDATE orders SET ..."）
+    target: str  # 影响目标（"orders_db.orders" / "redis://..."）
     risk_level: Literal["low", "medium", "high", "critical"] = "medium"
     correlation_id: str = ""
     created_at: int = field(default_factory=lambda: int(time.time() * 1000))
@@ -82,6 +84,7 @@ class HITLRequest:
 @dataclass
 class HITLDecision:
     """HITL 决策结果。"""
+
     request_id: str
     decision: Literal["approve", "reject"]
     decided_at: int
@@ -146,7 +149,7 @@ class HITLBridge:
         # 1. 写 audit（V1 兼容签名：位置参数两个，不加 kwargs）
         try:
             await audit("SUB_AGENT_HITL_REQUESTED", request.to_dict())
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("audit SUB_AGENT_HITL_REQUESTED failed: %s", e)
         # 1b. V1.5：结构化审计（correlation_id 可回放整棵决策树）
         await audit_bridge.log_event(
@@ -197,15 +200,18 @@ class HITLBridge:
 
         # 3. 写 audit（decision；V1 兼容签名）
         try:
-            await audit("SUB_AGENT_HITL_DECIDED", {
-                **request.to_dict(),
-                "decision": result.decision,
-                "decided_at": result.decided_at,
-                "decided_by": result.decided_by,
-                "waited_ms": result.waited_ms,
-                "timed_out": result.timed_out,
-            })
-        except Exception as e:  # noqa: BLE001
+            await audit(
+                "SUB_AGENT_HITL_DECIDED",
+                {
+                    **request.to_dict(),
+                    "decision": result.decision,
+                    "decided_at": result.decided_at,
+                    "decided_by": result.decided_by,
+                    "waited_ms": result.waited_ms,
+                    "timed_out": result.timed_out,
+                },
+            )
+        except Exception as e:
             logger.warning("audit SUB_AGENT_HITL_DECIDED failed: %s", e)
         await audit_bridge.log_event(
             audit_bridge.EVENT_HITL_DECIDED,
@@ -227,7 +233,10 @@ class HITLBridge:
     # ---- 内部：真 interrupt ----------------------------------------------
 
     async def _await_user_decision(
-        self, request: HITLRequest, *, timeout_sec: int,
+        self,
+        request: HITLRequest,
+        *,
+        timeout_sec: int,
     ) -> tuple[Literal["approve", "reject"], bool]:
         """发起审批 + 推 SSE + 轮询决策。返回 (decision, timed_out)。"""
         from agent.graph.interrupt import (
@@ -240,26 +249,31 @@ class HITLBridge:
         plan = request.to_plan()
         try:
             await start_approval(
-                approval_id=approval_id, plan=plan, timeout_sec=timeout_sec,
+                approval_id=approval_id,
+                plan=plan,
+                timeout_sec=timeout_sec,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("[hitl_bridge] start_approval 失败 → fail-closed: %s", exc)
             return "reject", False
 
         # 推 SSE：复用主图 approval 通道（前端 ApprovalCard 零改动）
-        emit_orchestrator_event(EVT_APPROVAL, {
-            "kind": "approval",
-            "approval_id": approval_id,
-            "plan": plan,
-            "sub_agent_id": request.sub_agent_id,
-            "parent_run_id": request.parent_run_id,
-            "correlation_id": request.correlation_id,
-            "risk_level": request.risk_level,
-            "source": "sub_agent",
-        })
+        emit_orchestrator_event(
+            EVT_APPROVAL,
+            {
+                "kind": "approval",
+                "approval_id": approval_id,
+                "plan": plan,
+                "sub_agent_id": request.sub_agent_id,
+                "parent_run_id": request.parent_run_id,
+                "correlation_id": request.correlation_id,
+                "risk_level": request.risk_level,
+                "source": "sub_agent",
+            },
+        )
 
         deadline = time.monotonic() + timeout_sec
-        decision: Optional[str] = None
+        decision: str | None = None
         try:
             while time.monotonic() < deadline:
                 decision = await check_decision(approval_id)
@@ -284,7 +298,7 @@ class HITLBridge:
     async def _safe_cleanup(cleanup_fn, approval_id: str) -> None:
         try:
             await cleanup_fn(approval_id)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
 
@@ -307,9 +321,9 @@ def reset_default_hitl_bridge() -> None:
 
 
 __all__ = [
-    "HITLRequest",
-    "HITLDecision",
     "HITLBridge",
+    "HITLDecision",
+    "HITLRequest",
     "get_default_hitl_bridge",
     "reset_default_hitl_bridge",
 ]

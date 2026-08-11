@@ -1,4 +1,5 @@
 """Phase 18 分层验证器：L1 语法快检 / L2 项目验证命令 / L3 降级。"""
+
 from __future__ import annotations
 
 from agent.coding.validator import CodingValidator

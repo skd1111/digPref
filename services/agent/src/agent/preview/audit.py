@@ -21,7 +21,7 @@ async def audit_preview(action: str, payload: dict[str, Any]) -> None:
             actor_type="user",
             event_type=action,
         )
-    except Exception:  # noqa: BLE001 —— 审计失败不阻断预览
+    except Exception:
         pass
 
 
@@ -51,5 +51,5 @@ def audit_preview_sync(action: str, payload: dict[str, Any]) -> None:
                 event_type=action,
             )
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass

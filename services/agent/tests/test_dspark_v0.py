@@ -16,14 +16,14 @@
   - DSparkEngine 环形 buffer + stats 汇总
   - 加固：deep copy / reason 顺序 / fallback conservative 启用
 """
-import pytest
-from pathlib import Path
-from pydantic import ValidationError
 
+from pathlib import Path
+
+import pytest
 from agent.llm.dspark import (
-    DSparkConfig,
     DEFAULT_POLICIES,
     SPECULATIVE_OFF,
+    DSparkConfig,
     SpeculativePolicy,
     decide_dspark,
     load_speculative_policies,
@@ -31,7 +31,6 @@ from agent.llm.dspark import (
 from agent.llm.dspark.config import policy_for_mode
 from agent.llm.dspark.engine import DSparkEngine, make_record
 from agent.llm.dspark.policy import (
-    _decide_dspark_with_reason,
     REASON_APPLIED,
     REASON_APPLIED_DEFAULT,
     REASON_OFF_GLOBAL,
@@ -39,8 +38,10 @@ from agent.llm.dspark.policy import (
     REASON_OFF_NO_DRAFT,
     REASON_OFF_NO_RUNTIME,
     REASON_OFF_SHORT,
+    _decide_dspark_with_reason,
 )
-from agent.llm.models import RoutingDecision, TaskCategory, Sensitivity
+from agent.llm.models import RoutingDecision, Sensitivity, TaskCategory
+from pydantic import ValidationError
 
 
 def _rd(i: int = 0, **overrides) -> RoutingDecision:
@@ -72,7 +73,6 @@ def _guard_globals():
         if cat in DEFAULT_POLICIES:
             DEFAULT_POLICIES[cat].n_draft = n_d
             DEFAULT_POLICIES[cat].draft_p_min = p_min
-
 
 
 # ---- DSparkConfig Pydantic 边界 -----------------------------------------
@@ -143,10 +143,18 @@ def test_policy_for_mode_returns_4_levels():
 def test_default_policies_cover_all_phase13_categories():
     """DEFAULT_POLICIES 必须覆盖 Phase 1 + 2C + 12 + 13 的全部 task_category"""
     expected = {
-        "intent", "repair", "skill_router", "data_summary",  # sensitive
-        "plan", "summarise",  # complex
-        "sql_generation", "code_completion",  # aggressive
-        "code_explanation", "log_analysis", "chat_qa", "toolspec",  # misc
+        "intent",
+        "repair",
+        "skill_router",
+        "data_summary",  # sensitive
+        "plan",
+        "summarise",  # complex
+        "sql_generation",
+        "code_completion",  # aggressive
+        "code_explanation",
+        "log_analysis",
+        "chat_qa",
+        "toolspec",  # misc
     }
     assert set(DEFAULT_POLICIES.keys()) >= expected
 
@@ -155,9 +163,15 @@ def test_speculative_policy_enabled_derivation():
     """enabled 派发性：off / n_draft=1 / threshold=1.0 → False"""
     assert SpeculativePolicy(task_category="x", mode="off").enabled is False
     assert SpeculativePolicy(task_category="x", mode="aggressive", n_draft=1).enabled is False
-    assert SpeculativePolicy(task_category="x", mode="aggressive", n_draft=8, draft_p_min=1.0).enabled is False
+    assert (
+        SpeculativePolicy(task_category="x", mode="aggressive", n_draft=8, draft_p_min=1.0).enabled
+        is False
+    )
     # 正常
-    assert SpeculativePolicy(task_category="x", mode="aggressive", n_draft=8, draft_p_min=0.75).enabled is True
+    assert (
+        SpeculativePolicy(task_category="x", mode="aggressive", n_draft=8, draft_p_min=0.75).enabled
+        is True
+    )
 
 
 def test_speculative_policy_pydantic_bounds():
@@ -188,7 +202,14 @@ def test_load_yaml_returns_defaults_when_none():
 
 def test_load_yaml_real_file(tmp_path):
     """加载仓库自带的 speculative.yaml，应至少 12 个 category"""
-    yaml_path = Path(__file__).resolve().parents[1] / "src" / "agent" / "config" / "llm" / "speculative.yaml"
+    yaml_path = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "agent"
+        / "config"
+        / "llm"
+        / "speculative.yaml"
+    )
     pms = load_speculative_policies(yaml_path)
     assert len(pms) >= 12
     assert pms["sql_generation"].mode == "aggressive"
@@ -279,7 +300,9 @@ def test_decide_dspark_local_only_force_off():
 def test_decide_dspark_local_only_overrides_yaml():
     """铁律 2：即便 YAML 把 intent 配成 aggressive 也强制 off"""
     pms = dict(DEFAULT_POLICIES)
-    pms["intent"] = SpeculativePolicy(task_category="intent", mode="aggressive", n_draft=8, draft_p_min=0.75)
+    pms["intent"] = SpeculativePolicy(
+        task_category="intent", mode="aggressive", n_draft=8, draft_p_min=0.75
+    )
     local_only = frozenset({"intent"})
     pol = decide_dspark(
         config=_cfg(),
@@ -358,7 +381,10 @@ def test_decide_with_reason_consistency_between_paths():
 
     # 1. runtime 未初始化
     _, reason = _decide_dspark_with_reason(
-        config=None, policies=policies, task_category="sql_generation", max_tokens=500,
+        config=None,
+        policies=policies,
+        task_category="sql_generation",
+        max_tokens=500,
         local_only_tasks=local_only,
     )
     assert reason == REASON_OFF_NO_RUNTIME
@@ -366,38 +392,60 @@ def test_decide_with_reason_consistency_between_paths():
     # 2. 全局关闭
     _, reason = _decide_dspark_with_reason(
         config=DSparkConfig(enable_global=False, draft_model_path="/x"),
-        policies=policies, task_category="sql_generation", max_tokens=500, local_only_tasks=local_only,
+        policies=policies,
+        task_category="sql_generation",
+        max_tokens=500,
+        local_only_tasks=local_only,
     )
     assert reason == REASON_OFF_GLOBAL
 
     # 3. 敏感任务（**注意**：短输出但本地任务 → 优先本地，铁律 3 排序）
     _, reason = _decide_dspark_with_reason(
-        config=cfg, policies=policies, task_category="intent", max_tokens=10, local_only_tasks=local_only,
+        config=cfg,
+        policies=policies,
+        task_category="intent",
+        max_tokens=10,
+        local_only_tasks=local_only,
     )
     assert reason == REASON_OFF_LOCAL_ONLY
 
     # 4. 短输出
     _, reason = _decide_dspark_with_reason(
-        config=cfg, policies=policies, task_category="sql_generation", max_tokens=10, local_only_tasks=local_only,
+        config=cfg,
+        policies=policies,
+        task_category="sql_generation",
+        max_tokens=10,
+        local_only_tasks=local_only,
     )
     assert reason == REASON_OFF_SHORT
 
     # 5. 无草稿模型
     _, reason = _decide_dspark_with_reason(
         config=DSparkConfig(enable_global=True, draft_model_path=None),
-        policies=policies, task_category="sql_generation", max_tokens=500, local_only_tasks=local_only,
+        policies=policies,
+        task_category="sql_generation",
+        max_tokens=500,
+        local_only_tasks=local_only,
     )
     assert reason == REASON_OFF_NO_DRAFT
 
     # 6. 未知类别
     _, reason = _decide_dspark_with_reason(
-        config=cfg, policies=policies, task_category="unknown_cat", max_tokens=500, local_only_tasks=local_only,
+        config=cfg,
+        policies=policies,
+        task_category="unknown_cat",
+        max_tokens=500,
+        local_only_tasks=local_only,
     )
     assert reason == REASON_APPLIED_DEFAULT
 
     # 7. 正常
     _, reason = _decide_dspark_with_reason(
-        config=cfg, policies=policies, task_category="sql_generation", max_tokens=500, local_only_tasks=local_only,
+        config=cfg,
+        policies=policies,
+        task_category="sql_generation",
+        max_tokens=500,
+        local_only_tasks=local_only,
     )
     assert reason == REASON_APPLIED
 
@@ -409,7 +457,10 @@ def test_decide_for_task_engine_path_consistency():
     """
     from agent.llm.dspark import api as dspark_api
     from agent.llm.dspark.config import DSparkConfig
-    cfg = DSparkConfig(draft_model_path="/tmp/x.gguf", enable_global=True, short_output_threshold=20)
+
+    cfg = DSparkConfig(
+        draft_model_path="/tmp/x.gguf", enable_global=True, short_output_threshold=20
+    )
     dspark_api.init_dspark_runtime(config=cfg, yaml_path=None, local_only_tasks=["intent"])
     try:
         # 1. 正常 sql_generation → applied
@@ -449,6 +500,7 @@ def test_draft_model_path_set_then_persisted(tmp_path, monkeypatch):
     persisted_file = tmp_path / "dspark.json"
     assert persisted_file.exists()
     import json
+
     data = json.loads(persisted_file.read_text(encoding="utf-8"))
     assert data["draft_model_path"] == "/models/qwen2.5-0.1b.gguf"
 
@@ -457,8 +509,9 @@ def test_draft_model_path_set_then_persisted(tmp_path, monkeypatch):
 
 def test_draft_model_path_load_overrides_env(tmp_path, monkeypatch):
     """持久化路径优先于 env var 默认值（用户在 UI 保存过就以 UI 为准）。"""
-    from agent.llm.dspark import api as dspark_api
     import json
+
+    from agent.llm.dspark import api as dspark_api
 
     persist = tmp_path / "dspark.json"
     persist.write_text(
@@ -522,8 +575,9 @@ def test_draft_model_path_corrupt_json_fallback(tmp_path, monkeypatch):
 
 def test_draft_model_path_missing_key_fallback(tmp_path, monkeypatch):
     """dspark.json 缺 draft_model_path 字段 → None。"""
-    from agent.llm.dspark import api as dspark_api
     import json
+
+    from agent.llm.dspark import api as dspark_api
 
     persist = tmp_path / "dspark.json"
     persist.write_text(json.dumps({"other_key": "x"}), encoding="utf-8")
@@ -533,7 +587,6 @@ def test_draft_model_path_missing_key_fallback(tmp_path, monkeypatch):
     assert persisted is None
 
     dspark_api.reset_dspark_runtime()
-
 
 
 # ---- RoutingDecision 4 字段 --------------------------------------------
@@ -576,12 +629,14 @@ def test_engine_record_and_recent():
     """record + recent 顺序"""
     e = DSparkEngine(_max_history=10)
     for i in range(5):
-        e.record(make_record(
-            task_category=f"cat{i}",
-            decision=_rd(i),
-            reason="applied",
-            max_tokens=200,
-        ))
+        e.record(
+            make_record(
+                task_category=f"cat{i}",
+                decision=_rd(i),
+                reason="applied",
+                max_tokens=200,
+            )
+        )
     items = e.recent(limit=10)
     assert len(items) == 5
     assert items[0].task_category == "cat0"
@@ -592,12 +647,14 @@ def test_engine_circular_buffer_caps_history():
     """超出 max_history 自动丢最早的"""
     e = DSparkEngine(_max_history=3)
     for i in range(5):
-        e.record(make_record(
-            task_category=f"cat{i}",
-            decision=_rd(i),
-            reason="applied",
-            max_tokens=200,
-        ))
+        e.record(
+            make_record(
+                task_category=f"cat{i}",
+                decision=_rd(i),
+                reason="applied",
+                max_tokens=200,
+            )
+        )
     items = e.recent(limit=10)
     assert len(items) == 3
     # 只保留最近 3 条
@@ -608,9 +665,30 @@ def test_engine_circular_buffer_caps_history():
 def test_engine_stats_aggregates_reasons():
     """stats 汇总：total / pct / per_category / per_reason"""
     e = DSparkEngine()
-    e.record(make_record(task_category="sql", decision=_rd(0, speculative_enabled=True, n_draft=8, draft_p_min=0.75), reason="applied", max_tokens=500))
-    e.record(make_record(task_category="sql", decision=_rd(2, speculative_enabled=True, n_draft=8, draft_p_min=0.75), reason="applied", max_tokens=500))
-    e.record(make_record(task_category="intent", decision=_rd(1, speculative_enabled=False, n_draft=1, draft_p_min=1.0), reason="off-local-only", max_tokens=100))
+    e.record(
+        make_record(
+            task_category="sql",
+            decision=_rd(0, speculative_enabled=True, n_draft=8, draft_p_min=0.75),
+            reason="applied",
+            max_tokens=500,
+        )
+    )
+    e.record(
+        make_record(
+            task_category="sql",
+            decision=_rd(2, speculative_enabled=True, n_draft=8, draft_p_min=0.75),
+            reason="applied",
+            max_tokens=500,
+        )
+    )
+    e.record(
+        make_record(
+            task_category="intent",
+            decision=_rd(1, speculative_enabled=False, n_draft=1, draft_p_min=1.0),
+            reason="off-local-only",
+            max_tokens=100,
+        )
+    )
     stats = e.stats()
     assert stats["total_decisions"] == 3
     assert stats["dspark_enabled_pct"] == pytest.approx(66.7, abs=0.2)
@@ -640,7 +718,6 @@ def test_speculative_off_sentinel():
 # ---- V0.6: 审计落库（POST /dspark/draft-model-path 与 /dspark/config）-----
 
 
-import asyncio
 import json
 
 
@@ -651,16 +728,12 @@ async def _read_audit_entries(db_path) -> list[dict]:
     """
     import aiosqlite
     from agent.audit.store import SCHEMA_CREATE_TABLE, SCHEMA_INDEXES
+
     async with aiosqlite.connect(str(db_path)) as db:
         await db.executescript(SCHEMA_CREATE_TABLE + SCHEMA_INDEXES)
-        cur = await db.execute(
-            "SELECT action, payload, ts FROM audit ORDER BY id ASC"
-        )
+        cur = await db.execute("SELECT action, payload, ts FROM audit ORDER BY id ASC")
         rows = await cur.fetchall()
-    return [
-        {"action": a, "payload": json.loads(p), "ts": t}
-        for (a, p, t) in rows
-    ]
+    return [{"action": a, "payload": json.loads(p), "ts": t} for (a, p, t) in rows]
 
 
 @pytest.mark.asyncio
@@ -670,6 +743,7 @@ async def test_draft_model_path_endpoint_emits_audit(tmp_path, monkeypatch):
     payload 含 actor_type='system' / event_type / changed_fields / old / new。
     """
     from agent.llm.dspark import api as dspark_api
+
     monkeypatch.setenv("EAIDE_DSPARK_PERSIST_PATH", str(tmp_path / "dspark.json"))
     audit_db = tmp_path / "audit.sqlite"
     monkeypatch.setenv("EAIDE_AUDIT_DB_PATH", str(audit_db))
@@ -705,6 +779,7 @@ async def test_config_endpoint_emits_audit_with_diff(tmp_path, monkeypatch):
     验证所有改动字段都被记录，方便事后审计"谁改了什么"。
     """
     from agent.llm.dspark import api as dspark_api
+
     monkeypatch.setenv("EAIDE_DSPARK_PERSIST_PATH", str(tmp_path / "dspark.json"))
     audit_db = tmp_path / "audit.sqlite"
     monkeypatch.setenv("EAIDE_AUDIT_DB_PATH", str(audit_db))
@@ -756,6 +831,7 @@ async def test_config_endpoint_emits_audit_with_diff(tmp_path, monkeypatch):
 async def test_config_endpoint_rejects_empty_body(tmp_path, monkeypatch):
     """POST /dspark/config 空 body → 400 + 不落 audit（避免噪音）。"""
     from agent.llm.dspark import api as dspark_api
+
     monkeypatch.setenv("EAIDE_DSPARK_PERSIST_PATH", str(tmp_path / "dspark.json"))
     audit_db = tmp_path / "audit.sqlite"
     monkeypatch.setenv("EAIDE_AUDIT_DB_PATH", str(audit_db))
@@ -766,7 +842,10 @@ async def test_config_endpoint_rejects_empty_body(tmp_path, monkeypatch):
         body = dspark_api.DSparkConfigUpdateBody()  # 全 None
         with pytest.raises(Exception) as exc_info:
             await dspark_api.update_config(body)
-        assert "no fields to update" in str(exc_info.value).lower() or exc_info.value.status_code == 400
+        assert (
+            "no fields to update" in str(exc_info.value).lower()
+            or exc_info.value.status_code == 400
+        )
 
         # 不应有任何 dspark audit 条目
         entries = await _read_audit_entries(audit_db)

@@ -9,6 +9,7 @@
 探测结果按会话缓存，避免每次 repair 重复探测。
 工具链路径配置持久化在单文件 JSON（settings.toolchain_config_path）。
 """
+
 from __future__ import annotations
 
 import glob
@@ -105,6 +106,7 @@ def _resolve_uncached(name: str, configured: dict[str, str]) -> ToolchainResult:
 
 
 # ---- 工具链路径配置持久化（单文件 JSON）----
+
 
 def load_toolchain_config() -> dict[str, str]:
     from agent.config import settings

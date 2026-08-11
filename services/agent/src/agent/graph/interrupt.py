@@ -10,13 +10,13 @@
     - 同一笔审批可能有多个 Agent 副本在抢；Redis 保证唯一性
     - Agent 重启也能恢复：任意接住 LangGraph thread 的副本都能继续
 """
+
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
 import os
-from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -42,8 +42,7 @@ async def start_approval(
     # 避免 ensure_future 静默吞掉后台任务错误
     task = asyncio.create_task(_poll_until_decision(approval_id, timeout_sec))
     task.add_done_callback(
-        lambda t: log.error("审批轮询任务异常: %s", t.exception())
-        if t.exception() else None
+        lambda t: log.error("审批轮询任务异常: %s", t.exception()) if t.exception() else None
     )
 
 
@@ -111,7 +110,7 @@ async def _store_pending(approval_id: str, plan: dict) -> None:
             json.dumps(plan, default=str),
             ex=3600,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.warning("Redis 存储待审批计划失败: %s", exc)
 
 
@@ -124,7 +123,7 @@ async def _read_decision(approval_id: str) -> str | None:
         if raw is None:
             return None
         return raw.decode() if isinstance(raw, bytes) else raw
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.warning("Redis 读取决策失败: %s", exc)
         return _LOCAL_DECISIONS.pop(approval_id, None)
 
@@ -136,7 +135,7 @@ async def _store_decision(approval_id: str, decision: str) -> None:
         return
     try:
         await redis.set(_decision_key(approval_id), decision, ex=3600)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.warning("Redis 存储决策失败，降级到内存: %s", exc)
         _LOCAL_DECISIONS[approval_id] = decision
 
@@ -147,7 +146,7 @@ async def _cleanup(approval_id: str) -> None:
         return
     try:
         await redis.delete(_pending_key(approval_id), _decision_key(approval_id))
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
 
@@ -176,7 +175,7 @@ def _redis():
         from redis.asyncio import Redis
 
         _REDIS = Redis.from_url(url, decode_responses=False)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.warning("Redis 不可用，降级到进程内事件: %s", exc)
         _REDIS = None
     return _REDIS

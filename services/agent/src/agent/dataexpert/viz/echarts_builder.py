@@ -1,4 +1,5 @@
 """Phase 7 V0 · ECharts 配置生成器 —— 生成前端 ECharts option JSON。"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -35,32 +36,42 @@ def build_echarts_option(
 
     if chart_type == "pie":
         pie_data = [{"name": x, "value": y} for x, y in zip(x_data, y_data)]
-        base.update({
-            "series": [{
-                "type": "pie",
-                "radius": "60%",
-                "data": pie_data,
-                "emphasis": {"itemStyle": {"shadowBlur": 10}},
-            }],
-        })
+        base.update(
+            {
+                "series": [
+                    {
+                        "type": "pie",
+                        "radius": "60%",
+                        "data": pie_data,
+                        "emphasis": {"itemStyle": {"shadowBlur": 10}},
+                    }
+                ],
+            }
+        )
     elif chart_type == "scatter":
         scatter_data = [[x, y] for x, y in zip(x_data, y_data)]
-        base.update({
-            "xAxis": {"type": "value", "name": x_name},
-            "yAxis": {"type": "value", "name": y_name},
-            "series": [{"type": "scatter", "data": scatter_data}],
-        })
+        base.update(
+            {
+                "xAxis": {"type": "value", "name": x_name},
+                "yAxis": {"type": "value", "name": y_name},
+                "series": [{"type": "scatter", "data": scatter_data}],
+            }
+        )
     else:
         # bar / line
-        base.update({
-            "xAxis": {"type": "category", "data": x_data, "name": x_name},
-            "yAxis": {"type": "value", "name": y_name},
-            "series": [{
-                "type": chart_type,
-                "data": y_data,
-                "itemStyle": {"borderRadius": [2, 2, 0, 0]} if chart_type == "bar" else {},
-            }],
-        })
+        base.update(
+            {
+                "xAxis": {"type": "category", "data": x_data, "name": x_name},
+                "yAxis": {"type": "value", "name": y_name},
+                "series": [
+                    {
+                        "type": chart_type,
+                        "data": y_data,
+                        "itemStyle": {"borderRadius": [2, 2, 0, 0]} if chart_type == "bar" else {},
+                    }
+                ],
+            }
+        )
 
     return base
 

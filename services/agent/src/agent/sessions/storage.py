@@ -13,6 +13,7 @@ Phase 6 V1.5 扩展（CLAUDE.md §6 物理隔离 sessions.db）：
     - SessionEvent 哈希链：SHA-256(prev_hash + payload) 防篡改
     - 迁移：现有 V0 DB 自动 ALTER TABLE 加新列（无破坏）
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -24,7 +25,6 @@ import uuid
 from pathlib import Path
 
 from .models import (
-    BranchInfo,
     Message,
     MessageRole,
     Session,
@@ -119,28 +119,42 @@ class SessionStorage:
                                      created_at, updated_at, thread_id, metadata_json)
                 VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?)
                 """,
-                (sid, title, owner, project_name, ts, ts, sid, json.dumps(metadata, ensure_ascii=False)),
+                (
+                    sid,
+                    title,
+                    owner,
+                    project_name,
+                    ts,
+                    ts,
+                    sid,
+                    json.dumps(metadata, ensure_ascii=False),
+                ),
             )
         # V1.5 哈希链：created 事件（best-effort，不阻塞主流程）
         try:
             self._append_event(
-                sid, "created",
+                sid,
+                "created",
                 {"title": title, "owner": owner, "project_name": project_name},
                 actor=owner,
             )
         except Exception:
             pass
         return Session(
-            id=sid, title=title, owner=owner, project_name=project_name,
-            status="active", created_at=ts, updated_at=ts,
-            thread_id=sid, metadata=metadata,
+            id=sid,
+            title=title,
+            owner=owner,
+            project_name=project_name,
+            status="active",
+            created_at=ts,
+            updated_at=ts,
+            thread_id=sid,
+            metadata=metadata,
         )
 
     def get_session(self, session_id: str) -> Session | None:
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM sessions WHERE id = ?", (session_id,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
         return self._row_to_session(row) if row else None
 
     def list_sessions(
@@ -216,9 +230,7 @@ class SessionStorage:
     ) -> Message:
         ts = now_ms()
         metadata_json = json.dumps(metadata or {}, ensure_ascii=False)
-        tool_args_json = (
-            json.dumps(tool_args, ensure_ascii=False) if tool_args else None
-        )
+        tool_args_json = json.dumps(tool_args, ensure_ascii=False) if tool_args else None
         with self._connect() as conn:
             cur = conn.execute(
                 """
@@ -228,9 +240,17 @@ class SessionStorage:
                     metadata_json
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (session_id, role, content, ts,
-                 tool_call_id, tool_name, tool_args_json, tool_result,
-                 metadata_json),
+                (
+                    session_id,
+                    role,
+                    content,
+                    ts,
+                    tool_call_id,
+                    tool_name,
+                    tool_args_json,
+                    tool_result,
+                    metadata_json,
+                ),
             )
             msg_id = cur.lastrowid
             # 顺手刷 session.updated_at
@@ -241,7 +261,8 @@ class SessionStorage:
         # V1.5 哈希链：message_appended 事件（content 前 200 字避免超大 payload）
         try:
             self._append_event(
-                session_id, "message_appended",
+                session_id,
+                "message_appended",
                 {
                     "message_id": int(msg_id),
                     "role": role,
@@ -253,9 +274,16 @@ class SessionStorage:
         except Exception:
             pass
         return Message(
-            id=msg_id, session_id=session_id, role=role, content=content,
-            created_at=ts, tool_call_id=tool_call_id, tool_name=tool_name,
-            tool_args=tool_args, tool_result=tool_result, metadata=metadata or {},
+            id=msg_id,
+            session_id=session_id,
+            role=role,
+            content=content,
+            created_at=ts,
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            tool_args=tool_args,
+            tool_result=tool_result,
+            metadata=metadata or {},
         )
 
     def list_messages(
@@ -293,21 +321,24 @@ class SessionStorage:
                     created_at, metadata_json
                 ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (session_id, thread_id, checkpoint_id, label, description,
-                 ts, metadata_json),
+                (session_id, thread_id, checkpoint_id, label, description, ts, metadata_json),
             )
             cid = cur.lastrowid
         return SessionCheckpoint(
-            id=cid, session_id=session_id, thread_id=thread_id,
-            checkpoint_id=checkpoint_id, label=label, description=description,
-            created_at=ts, metadata=metadata or {},
+            id=cid,
+            session_id=session_id,
+            thread_id=thread_id,
+            checkpoint_id=checkpoint_id,
+            label=label,
+            description=description,
+            created_at=ts,
+            metadata=metadata or {},
         )
 
     def list_checkpoints(self, session_id: str) -> list[SessionCheckpoint]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM session_checkpoints WHERE session_id = ? "
-                "ORDER BY created_at DESC",
+                "SELECT * FROM session_checkpoints WHERE session_id = ? ORDER BY created_at DESC",
                 (session_id,),
             ).fetchall()
         return [self._row_to_checkpoint(r) for r in rows]
@@ -360,9 +391,7 @@ class SessionStorage:
         )
 
     def _row_to_message(self, row: sqlite3.Row) -> Message:
-        tool_args = (
-            json.loads(row["tool_args_json"]) if row["tool_args_json"] else None
-        )
+        tool_args = json.loads(row["tool_args_json"]) if row["tool_args_json"] else None
         metadata = json.loads(row["metadata_json"]) if row["metadata_json"] else {}
         return Message(
             id=int(row["id"]),
@@ -438,8 +467,7 @@ class SessionStorage:
                   (id, session_id, pattern, rule_text, confidence, last_updated, source_event_ids_json)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (rule_id, session_id, pattern, rule_text,
-                 float(confidence), now, source_json),
+                (rule_id, session_id, pattern, rule_text, float(confidence), now, source_json),
             )
         return rule_id
 
@@ -476,7 +504,8 @@ class SessionStorage:
     def delete_semantic_rule(self, rule_id: str) -> bool:
         with self._connect() as conn:
             cur = conn.execute(
-                "DELETE FROM semantic_rules WHERE id = ?", (rule_id,),
+                "DELETE FROM semantic_rules WHERE id = ?",
+                (rule_id,),
             )
         return cur.rowcount > 0
 
@@ -503,7 +532,12 @@ class SessionStorage:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    node_id, session_id, entity, action, result, status,
+                    node_id,
+                    session_id,
+                    entity,
+                    action,
+                    result,
+                    status,
                     json.dumps(metadata or {}, ensure_ascii=False),
                     now_ms(),
                 ),
@@ -528,7 +562,10 @@ class SessionStorage:
                 VALUES (?, ?, ?, ?, ?)
                 """,
                 (
-                    session_id, from_node, to_node, relation,
+                    session_id,
+                    from_node,
+                    to_node,
+                    relation,
                     json.dumps(metadata or {}, ensure_ascii=False),
                 ),
             )
@@ -674,7 +711,8 @@ class SessionStorage:
                 frontier = next_frontier
         # 按 hops 升序 + created_at 降序
         return sorted(
-            nodes.values(), key=lambda n: (n["hops"], -n["created_at"]),
+            nodes.values(),
+            key=lambda n: (n["hops"], -n["created_at"]),
         )[:max_nodes]
 
     # ---- compression_log CRUD ---------------------------------------------
@@ -698,9 +736,14 @@ class SessionStorage:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    session_id, strategy, int(before_tokens), int(after_tokens),
-                    float(ratio), json.dumps(layers_used, ensure_ascii=False),
-                    int(elapsed_ms), now_ms(),
+                    session_id,
+                    strategy,
+                    int(before_tokens),
+                    int(after_tokens),
+                    float(ratio),
+                    json.dumps(layers_used, ensure_ascii=False),
+                    int(elapsed_ms),
+                    now_ms(),
                 ),
             )
         return int(cur.lastrowid or 0)
@@ -828,15 +871,24 @@ class SessionStorage:
                 ) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    new_id, branch_title, parent.owner, parent.project_name,
-                    ts, ts, new_id, json.dumps(parent.metadata, ensure_ascii=False),
-                    parent_session_id, from_checkpoint_id, branch_label,
+                    new_id,
+                    branch_title,
+                    parent.owner,
+                    parent.project_name,
+                    ts,
+                    ts,
+                    new_id,
+                    json.dumps(parent.metadata, ensure_ascii=False),
+                    parent_session_id,
+                    from_checkpoint_id,
+                    branch_label,
                 ),
             )
         # V1.5 哈希链：branched 事件
         try:
             self._append_event(
-                new_id, "branched",
+                new_id,
+                "branched",
                 {
                     "parent_session_id": parent_session_id,
                     "from_checkpoint_id": from_checkpoint_id,
@@ -847,9 +899,14 @@ class SessionStorage:
         except Exception:
             pass  # 哈希链失败不阻塞主流程
         return Session(
-            id=new_id, title=branch_title, owner=parent.owner,
-            project_name=parent.project_name, status="active",
-            created_at=ts, updated_at=ts, thread_id=new_id,
+            id=new_id,
+            title=branch_title,
+            owner=parent.owner,
+            project_name=parent.project_name,
+            status="active",
+            created_at=ts,
+            updated_at=ts,
+            thread_id=new_id,
             metadata=parent.metadata,
             parent_session_id=parent_session_id,
             branch_from_checkpoint_id=from_checkpoint_id,
@@ -860,8 +917,7 @@ class SessionStorage:
         """列出某父会话的所有分支会话。"""
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM sessions WHERE parent_session_id = ? "
-                "ORDER BY created_at DESC",
+                "SELECT * FROM sessions WHERE parent_session_id = ? ORDER BY created_at DESC",
                 (parent_session_id,),
             ).fetchall()
         return [self._row_to_session(r) for r in rows]
@@ -908,7 +964,8 @@ class SessionStorage:
         # V1.5 哈希链：shared 事件
         try:
             self._append_event(
-                session_id, "shared",
+                session_id,
+                "shared",
                 {
                     "permission": permission,
                     "expires_at": expires_at,
@@ -919,8 +976,10 @@ class SessionStorage:
         except Exception:
             pass
         return ShareToken(
-            token=token, permission=permission,
-            created_at=ts, expires_at=expires_at,
+            token=token,
+            permission=permission,
+            created_at=ts,
+            expires_at=expires_at,
         )
 
     def revoke_share_token(
@@ -944,7 +1003,8 @@ class SessionStorage:
             )
         try:
             self._append_event(
-                session_id, "shared",
+                session_id,
+                "shared",
                 {"action": "revoked", "token_prefix": token[:8]},
                 actor=actor,
             )
@@ -1010,7 +1070,8 @@ class SessionStorage:
             )
         try:
             self._append_event(
-                session_id, "shared",
+                session_id,
+                "shared",
                 {"action": "granted", "actor": actor, "permission": permission},
                 actor=granter,
             )
@@ -1021,13 +1082,15 @@ class SessionStorage:
     # ---- SessionEvent 哈希链（SHA-256 链式防篡改）------------------------
 
     @staticmethod
-    def _compute_event_hash(prev_hash: str, event_type: str, payload_json: str, created_at: int) -> str:
+    def _compute_event_hash(
+        prev_hash: str, event_type: str, payload_json: str, created_at: int
+    ) -> str:
         """计算单条事件的 SHA-256 hash。
 
         hash = SHA256(prev_hash + '|' + event_type + '|' + payload_json + '|' + created_at)
         任意字段被篡改 → hash 与链上记录不符 → verify_chain 返回 False。
         """
-        raw = f"{prev_hash}|{event_type}|{payload_json}|{created_at}".encode("utf-8")
+        raw = f"{prev_hash}|{event_type}|{payload_json}|{created_at}".encode()
         return hashlib.sha256(raw).hexdigest()
 
     def _append_event(
@@ -1079,18 +1142,21 @@ class SessionStorage:
             raise ValueError(f"session {session_id} not found")
         event_id = self._append_event(session_id, event_type, payload, actor=actor)
         return SessionEvent(
-            id=event_id, session_id=session_id,
-            event_type=event_type, payload=payload,
-            prev_hash="", hash="",  # 内部不返回 hash → 调用 verify_chain 验证
-            actor=actor, created_at=now_ms(),
+            id=event_id,
+            session_id=session_id,
+            event_type=event_type,
+            payload=payload,
+            prev_hash="",
+            hash="",  # 内部不返回 hash → 调用 verify_chain 验证
+            actor=actor,
+            created_at=now_ms(),
         )
 
     def list_event_chain(self, session_id: str, limit: int = 200) -> list[SessionEvent]:
         """列出会话的全部 SessionEvent（按 id ASC）。"""
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM session_event_chain WHERE session_id = ? "
-                "ORDER BY id ASC LIMIT ?",
+                "SELECT * FROM session_event_chain WHERE session_id = ? ORDER BY id ASC LIMIT ?",
                 (session_id, int(limit)),
             ).fetchall()
         return [
@@ -1130,7 +1196,10 @@ class SessionStorage:
             # 2. 重算 hash 与记录的 hash 对齐
             payload_json = json.dumps(ev.payload, ensure_ascii=False, sort_keys=True)
             recomputed = self._compute_event_hash(
-                ev.prev_hash, ev.event_type, payload_json, ev.created_at,
+                ev.prev_hash,
+                ev.event_type,
+                payload_json,
+                ev.created_at,
             )
             if recomputed != ev.hash:
                 return {
@@ -1211,7 +1280,7 @@ class SessionStorage:
                 "SELECT s.* FROM sessions s "
                 "WHERE s.status = 'active' "
                 "  AND s.parent_session_id IS NULL "  # 仅根会话（非分支）
-                "  AND s.updated_at < ? "             # 已超过空闲阈值
+                "  AND s.updated_at < ? "  # 已超过空闲阈值
                 "  AND EXISTS (SELECT 1 FROM session_messages m "
                 "              WHERE m.session_id = s.id) "  # 至少 1 条消息
                 "ORDER BY s.updated_at DESC LIMIT 50",

@@ -4,7 +4,7 @@
 //!   - V1：9 占位工具名 + 风险等级 + HITL helper（mod.rs 145 行 + 10 单测）
 //!   - V1.5：path_sandbox.rs + 6 安全工具真实实现（stat / mkdir / find / glob / hash / base64）
 //!   - V2：3 高危工具（delete_file / move_file / shell）真实实现 + md5/sha1/blake2b hash
-//!         算法 + glob crate 真支持 + Tauri Command 注册 + HITL interrupt（critical 永远需审批）
+//!     算法 + glob crate 真支持 + Tauri Command 注册 + HITL interrupt（critical 永远需审批）
 //!
 //! 设计原则：
 //!   1. 全部工具走 path_sandbox 校验
@@ -654,11 +654,10 @@ pub fn builtin_glob(
         }
         // 白名单二次校验（glob 展开结果必须在 allowed_roots 内）
         let entry_str = entry.to_string_lossy().to_string();
-        if !allowed_roots.is_empty() {
-            if validate_path(&entry_str, allowed_roots, true).is_err() {
+        if !allowed_roots.is_empty()
+            && validate_path(&entry_str, allowed_roots, true).is_err() {
                 continue;
             }
-        }
         paths.push(entry_str);
     }
     paths.sort();
@@ -1115,7 +1114,7 @@ mod tests {
         let r = builtin_base64(file.to_str().unwrap(), "encode_file", &[]);
         assert!(r.ok);
         let content = r.content.unwrap();
-        assert!(content["result"].as_str().unwrap().len() > 0);
+        assert!(!content["result"].as_str().unwrap().is_empty());
         assert_eq!(content["size"], 11);
         let _ = fs::remove_dir_all(&tmp);
     }

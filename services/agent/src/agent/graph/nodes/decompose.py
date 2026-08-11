@@ -8,6 +8,7 @@ SINGLE_SUBAGENT, MULTI_SUBAGENT, ASK_USER, REFUSE}，并遵守安全门槛：
       写操作 / 工具调用永远留在主图 tool_runner + hitl_gate 单线完成；
     - 判定失败 / LLM 不可用 / 决策不合规 → 保守回退单 Agent（原行为不变）。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -20,7 +21,6 @@ from agent.llm.router import LMRouter
 from agent.orchestrator.orchestrator import get_orchestrator
 from agent.orchestrator.spec import ContextPolicy, ModelPolicy, SubAgentSpec
 from agent.tools.catalog import ToolCatalog
-
 
 # 可用子智能体目录 —— 编排决策器只能从这里选（不虚构能力）。
 # 本实现中每个档案都映射到只读分析型 LLM worker（task_type 白名单）。
@@ -48,6 +48,41 @@ AVAILABLE_SUBAGENT_CATALOG: list[dict] = [
 ]
 
 
+# 时间 / 日期类问题关键词 —— 命中即直接路由动态工具循环（datetime_now），
+# 跳过编排决策器 LLM 调用（本地模型单次 10s+，纯浪费）。
+_TIME_QUERY_KEYWORDS: tuple[str, ...] = (
+    "几号",
+    "几月",
+    "几日",
+    "今天",
+    "昨天",
+    "明天",
+    "前天",
+    "后天",
+    "现在几点",
+    "几点",
+    "当前时间",
+    "当前日期",
+    "今天的日期",
+    "星期几",
+    "周几",
+    "礼拜几",
+    "农历",
+    "阴历",
+    "老黄历",
+    "黄历",
+    "节气",
+)
+
+
+def _is_time_query(prompt: str) -> bool:
+    """短提示词命中时间/日期关键词 → 判定为工具查询（避免误伤长任务）。"""
+    text = (prompt or "").strip()
+    if not text or len(text) > 60:
+        return False
+    return any(k in text for k in _TIME_QUERY_KEYWORDS)
+
+
 async def decompose_node(
     state: AgentState,
     llm: LMRouter,
@@ -58,13 +93,35 @@ async def decompose_node(
     intent = state.get("intent") or "query"
     user_prompt = state.get("user_prompt", "")
     plan = state.get("plan") or []
-    history = state.get("messages", [])
+    state.get("messages", [])
 
     # 1) 快速跳过：开关关闭 / 无需编排的意图
     if not getattr(settings, "multi_agent_auto_enabled", True):
         return _skip("multi_agent disabled by config")
     if intent == "chitchat":
         return _skip("chitchat never decomposed")
+    # 1.5) 时间/日期类问题快速路径：直接走动态工具循环（datetime_now），
+    #      不调编排决策器 LLM —— 决策器对这类问题既慢（10s+）又易误判 MAIN_AGENT。
+    if (
+        intent == "query"
+        and getattr(settings, "tool_loop_enabled", True)
+        and _is_time_query(user_prompt)
+    ):
+        return {
+            "decompose_decision": _tool_only_decision(
+                "时间/日期类查询 → 快速路径直达动态工具循环",
+            ),
+            "multi_agent": False,
+            "sub_agent_reports": [],
+            "trace": [
+                record_trace(
+                    "decompose",
+                    "ok",
+                    mode="TOOL_ONLY",
+                    reason="time_query_fast_path",
+                )
+            ],
+        }
     if intent == "mutate":
         # 写操作：走工具（内置/MCP 写工具经 HITL 审批），不派生子智能体
         if getattr(settings, "tool_loop_enabled", True):
@@ -78,12 +135,37 @@ async def decompose_node(
             }
         return _skip(f"intent={intent} never decomposed")
 
+    # 1.7) 意图分析快速路径（意图识别重构 2026-08-06）：
+    #      intent_analysis 已给出明确信号时直接路由，省掉编排决策器 LLM 调用。
+    fast = _intent_analysis_fast_path(state)
+    if fast is not None:
+        return fast
+
     # 2) 收集决策器运行时输入（可用工具 / 权限 / 成本 / 安全策略）
     tool_specs = await _list_tools(mcp)
 
     # 3) 调用编排决策器；任何异常 / 缺方法 / fallback → 保守单 Agent
     decision = await _decide(state, llm, tool_specs)
     if decision is None:
+        # 动态工具循环启用时：降级为 TOOL_ONLY 而不是直接 skip ——
+        # skip 会让请求绕过 tool_orchestrator，连 datetime_now 这类
+        # 基础工具都无法触发（responder 只能回"没有可执行的工具调用"）。
+        # 循环自身对 LLM 失败有保守 FINAL_ANSWER 兜底，不会引入新风险。
+        if getattr(settings, "tool_loop_enabled", True):
+            return {
+                "decompose_decision": _tool_only_decision(
+                    "编排决策器降级 → 交给动态工具循环",
+                ),
+                "multi_agent": False,
+                "sub_agent_reports": [],
+                "trace": [
+                    record_trace(
+                        "decompose",
+                        "skipped",
+                        reason="judge fallback → route to tool loop",
+                    )
+                ],
+            }
         return _skip("judge failed or conservative fallback")
 
     inner = decision.get("decision") or {}
@@ -105,10 +187,13 @@ async def decompose_node(
             "decompose_decision": decision,
             "multi_agent": False,
             "sub_agent_reports": [],
-            "trace": [record_trace(
-                "decompose", "skipped",
-                reason=f"confirmation_required: {inner.get('confirmation_message') or ''}",
-            )],
+            "trace": [
+                record_trace(
+                    "decompose",
+                    "skipped",
+                    reason=f"confirmation_required: {inner.get('confirmation_message') or ''}",
+                )
+            ],
         }
 
     # 6) 单 Agent 模式：主智能体直接回答 / 主智能体调用工具
@@ -121,9 +206,7 @@ async def decompose_node(
         }
 
     # 7) SINGLE_SUBAGENT / MULTI_SUBAGENT：并行派生子智能体
-    subagents = [
-        s for s in (decision.get("selected_subagents") or []) if isinstance(s, dict)
-    ]
+    subagents = [s for s in (decision.get("selected_subagents") or []) if isinstance(s, dict)]
     if not subagents:
         return _skip("no selected subagents")
 
@@ -140,13 +223,15 @@ async def decompose_node(
     reports: list[dict] = []
     for item in results:
         if isinstance(item, Exception):
-            reports.append({
-                "status": "err",
-                "summary": "",
-                "error_message": f"{type(item).__name__}: {item}",
-                "confidence": 0.0,
-                "latency_ms": 0,
-            })
+            reports.append(
+                {
+                    "status": "err",
+                    "summary": "",
+                    "error_message": f"{type(item).__name__}: {item}",
+                    "confidence": 0.0,
+                    "latency_ms": 0,
+                }
+            )
         else:
             reports.append(_serialise_report(item))
 
@@ -154,12 +239,15 @@ async def decompose_node(
         "multi_agent": True,
         "decompose_decision": decision,
         "sub_agent_reports": reports,
-        "trace": [record_trace(
-            "decompose", "ok",
-            mode=mode,
-            sub_agents=len(specs),
-            reason=reason,
-        )],
+        "trace": [
+            record_trace(
+                "decompose",
+                "ok",
+                mode=mode,
+                sub_agents=len(specs),
+                reason=reason,
+            )
+        ],
     }
 
 
@@ -191,7 +279,7 @@ async def _decide(state: AgentState, llm: LMRouter, tool_specs: list[dict]) -> d
                 "subagent_read_only": True,
             },
         )
-    except Exception:  # noqa: BLE001 —— 判定失败不阻塞主流程
+    except Exception:
         return None
     if not isinstance(decision, dict) or decision.get("_fallback"):
         return None
@@ -204,7 +292,7 @@ async def _list_tools(mcp: Any) -> list[dict]:
     """用 ToolCatalog 拿统一工具摘要（builtin + MCP）；不可用返回空列表。"""
     try:
         return await ToolCatalog(mcp=mcp).summaries()
-    except Exception:  # noqa: BLE001
+    except Exception:
         return []
 
 
@@ -228,6 +316,168 @@ def _tool_only_decision(reason: str) -> dict:
         "plan": [],
         "fallback": "tool loop",
     }
+
+
+def _ask_user_decision(question: str, missing_fields: list[str]) -> dict:
+    """构造 ASK_USER 决策（追问）—— responder 会把问题输出给用户。"""
+    return {
+        "decision": {
+            "mode": "ASK_USER",
+            "should_enable_subagent": False,
+            "execution_allowed": False,
+            "user_confirmation_required": False,
+            "confidence": 0.9,
+            "reason": "意图分析判定关键信息缺失，需追问",
+            "clarifying_questions": [question],
+            "confirmation_message": None,
+            "refusal_message": None,
+        },
+        "scoring": {},
+        "selected_subagents": [],
+        "tool_calls": [],
+        "plan": [],
+        "fallback": "none",
+        "missing_fields": missing_fields,
+    }
+
+
+def _main_agent_decision(reason: str) -> dict:
+    """构造 MAIN_AGENT 决策（主智能体直接回答，不调工具）。"""
+    return {
+        "decision": {
+            "mode": "MAIN_AGENT",
+            "should_enable_subagent": False,
+            "execution_allowed": True,
+            "user_confirmation_required": False,
+            "confidence": 0.9,
+            "reason": reason,
+            "clarifying_questions": [],
+            "confirmation_message": None,
+            "refusal_message": None,
+        },
+        "scoring": {},
+        "selected_subagents": [],
+        "tool_calls": [],
+        "plan": [],
+        "fallback": "none",
+    }
+
+
+def _intent_analysis_fast_path(state: AgentState) -> dict | None:
+    """根据 intent_analysis 的明确信号直接路由（不调编排决策器 LLM）。
+
+    优先级：追问 > need_tool=true → 工具循环 > need_tool=false → 直接回答。
+    信号不明确（无分析 / 低置信度）返 None → 走既有 LLM 决策路径。
+    """
+    analysis = state.get("intent_analysis")
+    if not isinstance(analysis, dict):
+        return None
+    try:
+        confidence = float(analysis.get("confidence") or 0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+
+    # 拒绝：违法 / 越权 / 危险请求 → REFUSE（规范 §4.1）
+    if analysis.get("intent_category") == "refusal" and confidence >= 0.6:
+        reason = str(analysis.get("reason") or "").strip()
+        message = (
+            f"抱歉，该请求无法执行。{reason}"
+            if reason
+            else "抱歉，该请求涉及不允许的操作，无法执行。"
+        )
+        return {
+            "decompose_decision": {
+                "decision": {
+                    "mode": "REFUSE",
+                    "should_enable_subagent": False,
+                    "execution_allowed": False,
+                    "user_confirmation_required": False,
+                    "confidence": confidence,
+                    "reason": reason or "intent_analysis_refusal",
+                    "clarifying_questions": [],
+                    "confirmation_message": None,
+                    "refusal_message": message,
+                },
+                "scoring": {},
+                "selected_subagents": [],
+                "tool_calls": [],
+                "plan": [],
+                "fallback": "none",
+            },
+            "multi_agent": False,
+            "sub_agent_reports": [],
+            "trace": [
+                record_trace(
+                    "decompose",
+                    "ok",
+                    mode="REFUSE",
+                    reason="intent_analysis_refusal",
+                )
+            ],
+        }
+
+    # 追问：关键参数缺失且无法推断 → ASK_USER（规范 §2.4 / §14）
+    if analysis.get("need_clarification") and confidence >= 0.6:
+        message = str(analysis.get("clarification_message") or "").strip()
+        missing = [str(f) for f in (analysis.get("missing_fields") or [])]
+        if not message:
+            if missing:
+                message = "为了继续，请补充：" + "、".join(missing)
+            else:
+                message = "请补充关键信息后我再继续。"
+        return {
+            "decompose_decision": _ask_user_decision(message, missing),
+            "multi_agent": False,
+            "sub_agent_reports": [],
+            "trace": [
+                record_trace(
+                    "decompose",
+                    "ok",
+                    mode="ASK_USER",
+                    reason="intent_analysis_clarification",
+                )
+            ],
+        }
+
+    if confidence < 0.6:
+        return None  # 低置信度 → 交给编排决策器 LLM 复核
+
+    # 需要工具 → 直达动态工具循环（规范 §5.2）
+    if analysis.get("need_tool") and getattr(settings, "tool_loop_enabled", True):
+        return {
+            "decompose_decision": _tool_only_decision(
+                "意图分析判定需要工具 → 动态工具循环",
+            ),
+            "multi_agent": False,
+            "sub_agent_reports": [],
+            "trace": [
+                record_trace(
+                    "decompose",
+                    "ok",
+                    mode="TOOL_ONLY",
+                    reason="intent_analysis_need_tool",
+                )
+            ],
+        }
+
+    # 不需要工具 → 主智能体直接回答（规范 §5.1）
+    if analysis.get("need_tool") is False:
+        return {
+            "decompose_decision": _main_agent_decision(
+                "意图分析判定无需工具 → 主智能体直接回答",
+            ),
+            "multi_agent": False,
+            "sub_agent_reports": [],
+            "trace": [
+                record_trace(
+                    "decompose",
+                    "ok",
+                    mode="MAIN_AGENT",
+                    reason="intent_analysis_no_tool",
+                )
+            ],
+        }
+    return None
 
 
 def _skip(reason: str) -> dict:
@@ -262,8 +512,7 @@ def _build_specs(
             "task": task,
             "inputs": inputs,
             "allowed_tools": (
-                sub.get("allowed_tools")
-                if isinstance(sub.get("allowed_tools"), list) else []
+                sub.get("allowed_tools") if isinstance(sub.get("allowed_tools"), list) else []
             ),
             "expected_output": str(sub.get("expected_output") or ""),
             "stop_condition": str(sub.get("stop_condition") or ""),
@@ -273,35 +522,37 @@ def _build_specs(
                 "sensitive_local_only": True,
             },
         }
-        specs.append(SubAgentSpec(
-            spec_version=1,
-            sub_agent_id=f"{run_id}-sub{i}",
-            parent_run_id=run_id,
-            parent_sub_agent_id=None,
-            depth=1,
-            task_type=task_type,
-            task_description=task,
-            input_payload={
-                "source_run_id": run_id,
-                "parent_task_description": user_prompt,
-                "parent_plan": plan,
-                "subagent_role": role,
-                "execution_template_fields": exec_fields,
-            },
-            context_policy=ContextPolicy(
-                strategy="passthrough",
-                required_fields=[],
-                shared_keys=[],
-                max_summary_tokens=500,
-            ),
-            model_policy=ModelPolicy(
-                role="execution",
+        specs.append(
+            SubAgentSpec(
+                spec_version=1,
+                sub_agent_id=f"{run_id}-sub{i}",
+                parent_run_id=run_id,
+                parent_sub_agent_id=None,
+                depth=1,
                 task_type=task_type,
-                carries_sensitive_payload=False,
-                preferred_backend=None,
-            ),
-            requires_write=False,
-        ))
+                task_description=task,
+                input_payload={
+                    "source_run_id": run_id,
+                    "parent_task_description": user_prompt,
+                    "parent_plan": plan,
+                    "subagent_role": role,
+                    "execution_template_fields": exec_fields,
+                },
+                context_policy=ContextPolicy(
+                    strategy="passthrough",
+                    required_fields=[],
+                    shared_keys=[],
+                    max_summary_tokens=500,
+                ),
+                model_policy=ModelPolicy(
+                    role="execution",
+                    task_type=task_type,
+                    carries_sensitive_payload=False,
+                    preferred_backend=None,
+                ),
+                requires_write=False,
+            )
+        )
     return specs
 
 

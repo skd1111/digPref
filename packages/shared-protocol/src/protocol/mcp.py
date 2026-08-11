@@ -1,10 +1,10 @@
 """MCP server / tool metadata models."""
+
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel
-
+from pydantic import BaseModel, Field
 
 McpServerStatus = Literal["stopped", "starting", "ready", "error"]
 
@@ -22,4 +22,4 @@ class McpToolSpec(BaseModel):
     server: str
     name: str
     description: str | None = None
-    input_schema: dict = {}
+    input_schema: dict[str, Any] = Field(default_factory=dict)

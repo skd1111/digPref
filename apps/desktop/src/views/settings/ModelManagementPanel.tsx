@@ -154,17 +154,28 @@ export function ModelManagementPanel(): JSX.Element {
     window.setTimeout(() => setToast(null), 4000);
   };
 
-  /** 启用/停用（同类型互斥）：立即持久化；启用时同类型其它模型自动停用。 */
+  /** 热重载 LMRouter：保存/启停/删除模型后调一次，端侧自定义 URL/端口无需重启 Agent。
+   * fire-and-forget：失败只提示，不影响保存结果。 */
+  const reloadRouter = async (): Promise<void> => {
+    try {
+      const { ipc } = await import('@/ipc/invoke');
+      await ipc.routerReloadContext();
+    } catch (e) {
+      flash(`⚠ 模型配置已保存，但 Agent 热重载失败（重启 Agent 后生效）· ${String(e)}`, 'err');
+    }
+  };
+
+  /** 启用/停用（同驻留互斥）：立即持久化；启用时同驻留其它模型自动停用。 */
   const toggleEnabled = async (name: string): Promise<void> => {
     const target = backends.find((b) => b.name === name);
     if (!target) return;
     const nextEnabled = !target.enabled;
     const prev = backends;
-    // 乐观更新：启用时本地同步停用同类型其它项
+    // 乐观更新：启用时本地同步停用同驻留其它项
     setBackends((bs) =>
       bs.map((b) => {
         if (b.name === name) return { ...b, enabled: nextEnabled };
-        if (nextEnabled && b.type === target.type) return { ...b, enabled: false };
+        if (nextEnabled && b.residency === target.residency) return { ...b, enabled: false };
         return b;
       }),
     );
@@ -192,12 +203,13 @@ export function ModelManagementPanel(): JSX.Element {
       }
       const disabled = r.disabled ?? [];
       if (nextEnabled && disabled.length > 0) {
-        flash(`✓ 已启用「${target.name}」 · 同类型「${disabled.join('、')}」已自动停用`);
+        flash(`✓ 已启用「${target.name}」 · 同驻留「${disabled.join('、')}」已自动停用`);
       } else if (nextEnabled) {
         flash(`✓ 已启用「${target.name}」`);
       } else {
         flash(`✓ 已停用「${target.name}」`);
       }
+      void reloadRouter();
     } catch (e) {
       setBackends(prev);
       flash(`⚠ 「${target.name}」启用状态保存失败 · ${String(e)}`, 'err');
@@ -219,7 +231,7 @@ export function ModelManagementPanel(): JSX.Element {
   }, []);
 
   /** 切换某 backend 作为代码导航默认 —— 同时记录单选状态 */
-  const useForCodenav = async (name: string): Promise<void> => {
+  const bindForCodenav = async (name: string): Promise<void> => {
     const prev = codenavBound;
     setCodenavBound(name); // 乐观
     try {
@@ -375,15 +387,16 @@ export function ModelManagementPanel(): JSX.Element {
       } else {
         const disabled = r.disabled ?? [];
         if (b.enabled && disabled.length > 0) {
-          // 同类型互斥：后端自动停用了其它同类型模型，同步本地列表
+          // 同驻留互斥：后端自动停用了其它同驻留模型，同步本地列表
           setBackends((bs) =>
             bs.map((x) => (disabled.includes(x.name) ? { ...x, enabled: false } : x)),
           );
-          flash(`✓ 已保存「${b.name}」 · 同类型「${disabled.join('、')}」已自动停用`);
+          flash(`✓ 已保存「${b.name}」 · 同驻留「${disabled.join('、')}」已自动停用`);
         } else {
           const keyMsg = b.apiKeyRef ? ` · Keyring: ${b.apiKeyRef}` : '';
           flash(`✓ 已保存「${b.name}」到 router.db${keyMsg}`);
         }
+        void reloadRouter();
       }
     } catch (e) {
       flash(`⚠ 「${b.name}」保存失败 · ${String(e)}`, 'err');
@@ -407,6 +420,7 @@ export function ModelManagementPanel(): JSX.Element {
         flash(`✗ 删除「${name}」失败`, 'err');
       } else {
         flash(`✓ 已删除「${name}」（router.db 已同步）`);
+        void reloadRouter();
       }
     } catch (e) {
       setBackends(prev);
@@ -493,7 +507,7 @@ export function ModelManagementPanel(): JSX.Element {
                     {b.enabled && (
                       <button
                         type="button"
-                        onClick={() => void (codenavBound === b.name ? unbindCodenav() : useForCodenav(b.name))}
+                        onClick={() => void (codenavBound === b.name ? unbindCodenav() : bindForCodenav(b.name))}
                         title={codenavBound === b.name ? '点击解绑' : '点击设为代码导航默认'}
                         className="rounded px-1.5 py-0.5 text-2xs"
                         style={{
@@ -612,7 +626,7 @@ function BackendEditModal({
       return setErr(`${b.type} 模型必须配置 base_url`);
     }
     if (b.type === 'cloud' && !apiKey.trim() && isNew) {
-      return setErr('云端必须配置 API Key');
+      return setErr('云端必须配置 API Key（内网模型请选择 private 类型）');
     }
 
     // API Key 直接存入 DB（配置文件模式，不走系统凭据管理器）
@@ -677,7 +691,9 @@ function BackendEditModal({
           <Field
             label={
               apiKeyLoaded
-                ? 'API Key（写入系统 Keyring，仅存占位符引用）'
+                ? b.type === 'cloud'
+                  ? 'API Key（必填 · 写入系统 Keyring，仅存占位符引用）'
+                  : 'API Key（选填 · 写入系统 Keyring，仅存占位符引用）'
                 : 'API Key（从 Keyring 读取中…）'
             }
             type="password"
@@ -685,6 +701,11 @@ function BackendEditModal({
             onChange={setApiKey}
             disabled={!apiKeyLoaded}
           />
+          {b.type !== 'cloud' && (
+            <div className="text-2xs" style={{ color: '#6a9955' }}>
+              内网 / 端侧模型无需 API Key（若内网网关启用鉴权，可在此填写）
+            </div>
+          )}
           {b.apiKeyRef && (
             <div className="text-2xs" style={{ color: '#6a9955' }}>
               🔑 Keyring 占位符：<code>{b.apiKeyRef}</code>

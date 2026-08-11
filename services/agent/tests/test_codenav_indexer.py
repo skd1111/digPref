@@ -1,9 +1,8 @@
 """test_codenav_indexer.py —— Phase 2F AST 提取准确性测试。"""
+
 from __future__ import annotations
 
 from pathlib import Path
-
-import pytest
 
 from agent.codenav.indexer import WorkspaceIndexer
 
@@ -15,12 +14,15 @@ def _write(path: Path, content: str) -> None:
 
 def test_extract_java_class_and_methods(tmp_path):
     f = tmp_path / "InterestService.java"
-    _write(f, """
+    _write(
+        f,
+        """
 public class InterestService {
     public void calculateInterest(java.math.BigDecimal amt) { }
     private int getRate() { return 0; }
 }
-""")
+""",
+    )
     idx = WorkspaceIndexer(db_path=str(tmp_path / "idx.db"), root_paths=[tmp_path])
     syms = idx.extract_symbols(str(f))
     by_name = {(s.kind, s.name): s for s in syms}
@@ -36,14 +38,17 @@ public class InterestService {
 
 def test_extract_python_function_and_class(tmp_path):
     f = tmp_path / "mod.py"
-    _write(f, """
+    _write(
+        f,
+        """
 class Calculator:
     def add(self, a, b):
         return a + b
 
 def helper(x):
     return x * 2
-""")
+""",
+    )
     idx = WorkspaceIndexer(db_path=str(tmp_path / "idx.db"), root_paths=[tmp_path])
     syms = idx.extract_symbols(str(f))
     by_name = {(s.kind, s.name): s for s in syms}
@@ -55,7 +60,9 @@ def helper(x):
 
 def test_extract_typescript_exported_class(tmp_path):
     f = tmp_path / "app.ts"
-    _write(f, """
+    _write(
+        f,
+        """
 export class UserService {
     async findUser(id: string) { return null; }
 }
@@ -63,7 +70,8 @@ export class UserService {
 export function util(x: number) { return x; }
 
 export interface IRepo { save(x: any): void; }
-""")
+""",
+    )
     idx = WorkspaceIndexer(db_path=str(tmp_path / "idx.db"), root_paths=[tmp_path])
     syms = idx.extract_symbols(str(f))
     by_name = {(s.kind, s.name): s for s in syms}
@@ -83,10 +91,13 @@ def test_unsupported_extension_skipped(tmp_path):
 
 def test_java_interface_and_enum(tmp_path):
     f = tmp_path / "Decls.java"
-    _write(f, """
+    _write(
+        f,
+        """
 interface Animal { void speak(); }
 enum Color { RED, GREEN, BLUE }
-""")
+""",
+    )
     idx = WorkspaceIndexer(db_path=str(tmp_path / "idx.db"), root_paths=[tmp_path])
     syms = idx.extract_symbols(str(f))
     names = {s.name for s in syms}
@@ -102,6 +113,7 @@ def test_full_scan_writes_sqlite(tmp_path):
     (tmp_path / "b.py").write_text("def f(): pass", encoding="utf-8")
     idx = WorkspaceIndexer(db_path=str(tmp_path / "idx.db"), root_paths=[tmp_path])
     import asyncio
+
     status = asyncio.run(idx.full_scan())
     assert status.total_files == 2
     assert status.total_symbols >= 3  # A class + m method + f function

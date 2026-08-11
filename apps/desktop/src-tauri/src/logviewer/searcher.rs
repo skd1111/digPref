@@ -161,6 +161,8 @@ impl LogSearcher {
 
     /// Scan `path` for lines that match `pattern` under `mode`. See module
     /// docs for the full contract.
+    // 搜索参数为对外契约（commands 层透传），不拆结构体
+    #[allow(clippy::too_many_arguments)]
     pub fn search(
         &self,
         path: &str,
@@ -867,7 +869,7 @@ mod tests {
 
         assert!(res.truncated, "truncated must be true when max_bytes hit");
         // Exactly 1 match fits in 100 bytes (68 ≤ 100 < 136).
-        assert!(res.matches.len() >= 1, "at least 1 match should fit");
+        assert!(!res.matches.is_empty(), "at least 1 match should fit");
         assert!(
             res.matches.len() <= 2,
             "matches.len()={} should not blow past the byte cap",
@@ -1074,10 +1076,7 @@ mod tests {
     #[test]
     fn extremely_long_line_is_handled() {
         // 2 MiB single line, no '\n'. Files allow this.
-        let mut big = Vec::with_capacity(2 * 1024 * 1024);
-        for _ in 0..(2 * 1024 * 1024) {
-            big.push(b'X');
-        }
+        let big = vec![b'X'; 2 * 1024 * 1024];
         // No trailing newline.
         let (_g, store, path) = setup_indexed("long_line", &big);
         let searcher = LogSearcher::new(store);
@@ -1107,9 +1106,9 @@ mod tests {
     fn line_spanning_block_boundary_is_one_match() {
         // 1 MiB of filler + "MAGIC" + 100 bytes of trailing filler.
         let mut buf = Vec::new();
-        buf.extend(std::iter::repeat(b'.').take(1 << 20));
+        buf.extend(std::iter::repeat_n(b'.', 1 << 20));
         buf.extend_from_slice(b"MAGIC");
-        buf.extend(std::iter::repeat(b'.').take(100));
+        buf.extend(std::iter::repeat_n(b'.', 100));
         let (_g, store, path) = setup_indexed("block_boundary", &buf);
         let searcher = LogSearcher::new(store);
 

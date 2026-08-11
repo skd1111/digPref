@@ -1,4 +1,5 @@
 """Thin httpx async client wrapper."""
+
 from __future__ import annotations
 
 import httpx

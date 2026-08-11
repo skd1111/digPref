@@ -6,11 +6,10 @@
     - restore：占位符 → SecretStr（含缺失报错）
     - 占位符格式合法性
 """
+
 from __future__ import annotations
 
 import pytest
-from pydantic import SecretStr, ValidationError
-
 from agent.envconfig import (
     ApiGateway,
     DatabaseConnection,
@@ -24,7 +23,7 @@ from agent.envconfig import (
     restore_secrets,
     scrub,
 )
-
+from pydantic import SecretStr, ValidationError
 
 # ---- 模型基本构造 -------------------------------------------------------
 
@@ -159,7 +158,10 @@ class TestScrub:
             ],
         )
         dumped = scrub(cfg)
-        assert dumped["api_gateways"][0]["api_key"] == "__KEYRING_REF:api_gateways.internal.llm.api_key__"
+        assert (
+            dumped["api_gateways"][0]["api_key"]
+            == "__KEYRING_REF:api_gateways.internal.llm.api_key__"
+        )
         assert "sk-abc" not in str(dumped)
 
     def test_scrub_handles_none_secrets(self):

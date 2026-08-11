@@ -6,10 +6,9 @@
   - 成功后 breaker state=Half-Open → Closed
   - sleep_between 指数退避（0.5s * 2^attempt）
 """
+
 import asyncio
 import time
-
-import pytest
 
 from agent.llm.circuit_breaker import CircuitBreakerRegistry
 from agent.llm.fallback import (
@@ -34,11 +33,13 @@ def test_open_breaker_skipped_without_trail_entry():
     async def call_b():
         return "ok"
 
-    result = asyncio.run(with_fallback(
-        chain=[("a", call_a), ("b", call_b)],
-        label="test",
-        circuit_breaker_registry=registry,
-    ))
+    result = asyncio.run(
+        with_fallback(
+            chain=[("a", call_a), ("b", call_b)],
+            label="test",
+            circuit_breaker_registry=registry,
+        )
+    )
     assert result.final_status == "ok"
     # a 被 skip（不在 trail）；b 成功
     assert ("a", "ok") not in result.trail
@@ -95,7 +96,9 @@ def test_success_in_half_open_resets_to_closed():
             circuit_breaker_registry=registry,
         )
         assert result.final_status == "ok"
-        assert cb.state.value == "closed", f"expected closed after probe success, got {cb.state.value}"
+        assert cb.state.value == "closed", (
+            f"expected closed after probe success, got {cb.state.value}"
+        )
 
     asyncio.run(driver())
 
@@ -149,13 +152,16 @@ def test_unavailable_error_updates_breaker():
 
 def test_no_breaker_registry_works_as_before():
     """circuit_breaker_registry=None 时，with_fallback 行为与 V1.5 完全一致。"""
+
     async def always_fail():
         raise LLMBackendError("nope")
 
-    result = asyncio.run(with_fallback(
-        chain=[("a", always_fail)],
-        label="no_breaker",
-        circuit_breaker_registry=None,
-    ))
+    result = asyncio.run(
+        with_fallback(
+            chain=[("a", always_fail)],
+            label="no_breaker",
+            circuit_breaker_registry=None,
+        )
+    )
     assert result.final_status == "all_failed"
     assert result.trail == [("a", "error: nope")]

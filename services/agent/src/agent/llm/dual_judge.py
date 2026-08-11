@@ -15,14 +15,16 @@ V3.2 收尾简化：
     - judge backend 可指定，否则用 router.pick('judge')（V3 简化：pick 的不是 _LOCAL_ONLY_TASKS）
     - judge prompt："请对比以下两个候选回答，选最准确的：..." + LLM 返回 "WINNER: 0|1|2"
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, Optional
 
+from agent.llm.prompts import load_prompt
 from agent.llm.router import _LOCAL_ONLY_TASKS
 
 logger = logging.getLogger(__name__)
@@ -56,9 +58,9 @@ async def run_dual_with_judge(
     user_prompt: str,
     backend_callers: dict[str, Callable[[str, str], Awaitable[str]]],
     candidates: list[str],
-    judge_caller: Optional[Callable[[str, str], Awaitable[str]]] = None,
+    judge_caller: Callable[[str, str], Awaitable[str]] | None = None,
     judge_backend_name: str = "judge",
-    judge_prompt_template: Optional[str] = None,
+    judge_prompt_template: str | None = None,
     task_kind: str = "summarise",
     timeout_sec: float = 30.0,
 ) -> DualJudgeResult:
@@ -110,7 +112,7 @@ async def run_dual_with_judge(
                 text=text,
                 latency_ms=int((asyncio.get_running_loop().time() - t0) * 1000),
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("dual_candidate_failed backend=%s err=%s", backend_name, e)
             return CandidateResult(
                 backend_name=backend_name,
@@ -123,8 +125,8 @@ async def run_dual_with_judge(
     successful = [r for r in results if not r.error and r.text]
     if not successful:
         raise RuntimeError(
-            f"all {len(candidates)} candidates failed: " +
-            "; ".join(f"{r.backend_name}={r.error}" for r in results)
+            f"all {len(candidates)} candidates failed: "
+            + "; ".join(f"{r.backend_name}={r.error}" for r in results)
         )
 
     # 2. 仅 1 个 candidate 成功：直接返回（无需裁判）
@@ -157,7 +159,7 @@ async def run_dual_with_judge(
     else:
         try:
             judge_prompt = _build_judge_prompt(
-                judge_prompt_template or _DEFAULT_JUDGE_PROMPT,
+                judge_prompt_template or load_prompt("judge"),
                 user_prompt=user_prompt,
                 candidate_texts=[f"{r.backend_name}:\n{r.text}" for r in successful],
             )
@@ -167,7 +169,7 @@ async def run_dual_with_judge(
             )
             # 解析 "WINNER: <index>"
             winner_idx, judge_reason = _parse_judge_output(judge_text, len(successful))
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("judge_caller_failed err=%s", e)
             winner_idx = 0  # 兜底：选第一个
             judge_reason = f"judge_caller failed: {e}; picked first"
@@ -186,26 +188,17 @@ async def run_dual_with_judge(
     )
 
 
-_DEFAULT_JUDGE_PROMPT = """你是裁判。请对比以下 {len_candidates} 个候选回答，选最准确的（事实正确 + 完整）。
-
-用户问题：
-{user_prompt}
-
-候选回答：
-{candidates}
-
-只输出 "WINNER: <index>" 一行（index 从 0 开始），可加 1-2 句简短理由。
-"""
-
-
 def _build_judge_prompt(template: str, user_prompt: str, candidate_texts: list[str]) -> str:
-    """安全替换占位符：避免 .format 把 prompt 里的 {xxx} 误吞（Python str.format）。"""
-    candidates_str = "\n\n".join(
-        f"[{i}] {t}" for i, t in enumerate(candidate_texts)
+    """安全替换占位符（{{X}} 优先，兼容旧单花括号 {x}），避免 .format 吞花括号。"""
+    candidates_str = "\n\n".join(f"[{i}] {t}" for i, t in enumerate(candidate_texts))
+    out = (
+        template.replace("{{LEN_CANDIDATES}}", str(len(candidate_texts)))
+        .replace("{{USER_PROMPT}}", user_prompt)
+        .replace("{{CANDIDATES}}", candidates_str)
     )
+    # 兼容旧单花括号模板（自定义/测试模板）
     return (
-        template
-        .replace("{len_candidates}", str(len(candidate_texts)))
+        out.replace("{len_candidates}", str(len(candidate_texts)))
         .replace("{user_prompt}", user_prompt)
         .replace("{candidates}", candidates_str)
     )
@@ -224,9 +217,11 @@ def _parse_judge_output(text: str, n_candidates: int) -> tuple[int, str]:
     for ln in lines:
         up = ln.upper()
         # Match "WINNER:...", "WINNER =...", "WINNER=..." but not "WINNERS:..."
-        if re.match(r'^WINNER\s*[:=]', up):
+        if re.match(r"^WINNER\s*[:=]", up):
             # 解析 ": <int>" 或 "= <int>"；拒绝负数（避免 "-1" 被误解析为 "1"）
-            after = ln.split(":", 1)[-1] if ":" in ln else (ln.split("=", 1)[-1] if "=" in ln else ln)
+            after = (
+                ln.split(":", 1)[-1] if ":" in ln else (ln.split("=", 1)[-1] if "=" in ln else ln)
+            )
             after = after.strip()
             # 第一个字符必须是数字；否则不是合法 WINNER（避免 "-1" → "1"）
             if not after or not after[0].isdigit():
@@ -262,7 +257,7 @@ def _parse_judge_output(text: str, n_candidates: int) -> tuple[int, str]:
         for line_text in reason_lines:
             head = f"{line_text}; "
             if total + len(head) > 500:
-                reason_parts.append(line_text[:500 - total])
+                reason_parts.append(line_text[: 500 - total])
                 break
             reason_parts.append(line_text)
             total += len(head)

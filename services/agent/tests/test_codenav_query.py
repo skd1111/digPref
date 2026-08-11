@@ -1,11 +1,10 @@
 """test_codenav_query.py —— SQLite 符号查询测试。"""
+
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 
 import pytest
-
 from agent.codenav.indexer import WorkspaceIndexer
 from agent.codenav.query import SymbolQuery
 

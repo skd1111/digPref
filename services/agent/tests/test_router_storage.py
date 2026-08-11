@@ -3,10 +3,10 @@
 依赖 conftest.py 的 autouse _isolate fixture：chdir 到 tmp_path，
 settings.llm_router_db_path 默认相对路径 "router.db" → 自动落在临时目录，测试隔离。
 """
+
 from __future__ import annotations
 
 import pytest
-
 from agent.llm import storage
 from agent.llm.models import (
     LLMBackend,
@@ -76,28 +76,40 @@ async def test_delete_backend():
     assert await storage.delete_backend("ghost") is False
 
 
-async def test_upsert_enabled_disables_same_type_others():
-    """同类型只允许 1 个启用：启用 cloud-b 时 cloud-a 自动停用。"""
-    await storage.upsert_backend(_backend(name="cloud-a", type="cloud", enabled=True))
-    await storage.upsert_backend(_backend(name="cloud-b", type="cloud", enabled=True))
+async def test_upsert_enabled_disables_same_residency_others():
+    """同驻留只允许 1 个启用：启用 private-b 时，类型为 cloud 但驻留 private 的 cloud-a 自动停用。"""
+    await storage.upsert_backend(
+        _backend(name="cloud-a", type="cloud", residency="private", enabled=True)
+    )
+    await storage.upsert_backend(
+        _backend(name="private-b", type="private", residency="private", enabled=True)
+    )
     all_b = {b.name: b.enabled for b in await storage.list_backends()}
     assert all_b["cloud-a"] is False
-    assert all_b["cloud-b"] is True
+    assert all_b["private-b"] is True
 
 
-async def test_upsert_enabled_does_not_disable_other_types():
-    """不同类型互不影响：启用 local 不触碰已启用的 cloud。"""
-    await storage.upsert_backend(_backend(name="cloud-a", type="cloud", enabled=True))
-    await storage.upsert_backend(_backend(name="local-a", type="local", enabled=True))
+async def test_upsert_enabled_does_not_disable_other_residencies():
+    """不同驻留互不影响：启用驻留 private 的模型不触碰已启用的 cloud 驻留模型。"""
+    await storage.upsert_backend(
+        _backend(name="cloud-a", type="cloud", residency="cloud", enabled=True)
+    )
+    await storage.upsert_backend(
+        _backend(name="private-a", type="private", residency="private", enabled=True)
+    )
     all_b = {b.name: b.enabled for b in await storage.list_backends()}
     assert all_b["cloud-a"] is True
-    assert all_b["local-a"] is True
+    assert all_b["private-a"] is True
 
 
 async def test_upsert_disabled_does_not_trigger_exclusion():
-    """停用/保存 disabled 不触发互斥（不自动停用同类型其它）。"""
-    await storage.upsert_backend(_backend(name="cloud-a", type="cloud", enabled=True))
-    await storage.upsert_backend(_backend(name="cloud-b", type="cloud", enabled=False))
+    """停用/保存 disabled 不触发互斥（不自动停用同驻留其它）。"""
+    await storage.upsert_backend(
+        _backend(name="cloud-a", type="cloud", residency="cloud", enabled=True)
+    )
+    await storage.upsert_backend(
+        _backend(name="cloud-b", type="cloud", residency="cloud", enabled=False)
+    )
     all_b = {b.name: b.enabled for b in await storage.list_backends()}
     assert all_b["cloud-a"] is True
     assert all_b["cloud-b"] is False
@@ -124,15 +136,19 @@ async def test_record_decision_and_recent():
 async def test_cost_daily_aggregation():
     """两次同 (date,user,backend,category) 调用 → 聚合成一行，call_count=2。"""
     d1 = RoutingDecision(
-        request_id="r1", user_id="bob",
+        request_id="r1",
+        user_id="bob",
         task_category=TaskCategory.COMPLEX,
-        primary_backend="cloud", actual_backend="cloud",
+        primary_backend="cloud",
+        actual_backend="cloud",
         actual_cost=0.03,
     )
     d2 = RoutingDecision(
-        request_id="r2", user_id="bob",
+        request_id="r2",
+        user_id="bob",
         task_category=TaskCategory.COMPLEX,
-        primary_backend="cloud", actual_backend="cloud",
+        primary_backend="cloud",
+        actual_backend="cloud",
         actual_cost=0.05,
     )
     ts = 1_700_000_000  # 同一天
@@ -150,10 +166,13 @@ async def test_cost_daily_aggregation():
 async def test_cache_hit_not_counted_in_cost():
     """cache_hit=True → actual_cost 记 0，tokens 记 0。"""
     d = RoutingDecision(
-        request_id="cached", user_id="carol",
+        request_id="cached",
+        user_id="carol",
         task_category=TaskCategory.SIMPLE,
-        primary_backend="local_small", actual_backend="local_small",
-        cache_hit=True, actual_cost=0.0,
+        primary_backend="local_small",
+        actual_backend="local_small",
+        cache_hit=True,
+        actual_cost=0.0,
     )
     await storage.record_decision(d, est_tokens=999, now=1_700_000_000)
     summary = await storage.cost_summary()

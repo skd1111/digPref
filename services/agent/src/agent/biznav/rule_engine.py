@@ -7,9 +7,10 @@ V1.1 极简：仅校验 text 非空 + 长度 < 500。V1.5 上结构化字段（s
 - storage.upsert() 录入前对每条 BusinessRule 调 validate_syntax
 - extractor / api 把 to_system_prompt_snippet 注入 LLM context
 """
+
 from __future__ import annotations
 
-from typing import Iterable, Union
+from collections.abc import Iterable
 
 from .models import BusinessRule
 
@@ -40,7 +41,7 @@ def validate_syntax(rule: BusinessRule) -> list[str]:
 
 
 def to_system_prompt_snippet(
-    rules: Iterable[Union[BusinessRule, str]],
+    rules: Iterable[BusinessRule | str],
 ) -> str:
     """把规则列表拼成 system prompt 片段。
 

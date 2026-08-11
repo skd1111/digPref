@@ -14,14 +14,14 @@ CLAUDE.md §6 红线：
 - api.py `POST /sessions/{id}/recall-episode` —— BFS 检索
 - ContextManager V2 L3 压缩路径
 """
+
 from __future__ import annotations
 
-import json
 import logging
 import re
 from typing import Any
 
-from agent.sessions.models_macc import EventNode, EventStatus
+from agent.sessions.models_macc import EventNode
 from agent.sessions.storage import SessionStorage
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,13 @@ logger = logging.getLogger(__name__)
 
 # SQL 模式：<VERB> <entity> —— 简单抽出 (entity, action)
 _SQL_VERBS: tuple[str, ...] = (
-    "select", "insert", "update", "delete", "create", "drop", "alter",
+    "select",
+    "insert",
+    "update",
+    "delete",
+    "create",
+    "drop",
+    "alter",
 )
 # 匹配 tool_call / tool: / mcp_xxx 多种 tool 调用模式
 _TOOL_PATTERN = re.compile(
@@ -88,14 +94,16 @@ def heuristic_extract_from_messages(
         if sql_match:
             verb = sql_match.group(1).upper()
             target = sql_match.group(2).strip().rstrip(",;")
-            nodes.append(EventNode.new(
-                session_id=session_id,
-                entity=target,
-                action=f"{verb} (user request)",
-                result="",
-                status="ok",
-                metadata={"source": "heuristic", "role": role},
-            ))
+            nodes.append(
+                EventNode.new(
+                    session_id=session_id,
+                    entity=target,
+                    action=f"{verb} (user request)",
+                    result="",
+                    status="ok",
+                    metadata={"source": "heuristic", "role": role},
+                )
+            )
             continue
 
         # 3. tool_result 模式（关联最近 tool_call）
@@ -183,22 +191,28 @@ async def extract_events_with_llm(
         try:
             extracted = await llm.extract_events(messages)
             for item in extracted:
-                nodes.append(EventNode.new(
-                    session_id=session_id,
-                    entity=str(item.get("entity", "")),
-                    action=str(item.get("action", "")),
-                    result=str(item.get("result", "")),
-                    status=item.get("status", "ok"),
-                    metadata={"source": "llm"},
-                ))
+                nodes.append(
+                    EventNode.new(
+                        session_id=session_id,
+                        entity=str(item.get("entity", "")),
+                        action=str(item.get("action", "")),
+                        result=str(item.get("result", "")),
+                        status=item.get("status", "ok"),
+                        metadata={"source": "llm"},
+                    )
+                )
         except Exception as e:
             logger.warning("LLM extract_events failed, fallback heuristic: %s", e)
             nodes = heuristic_extract_from_messages(
-                session_id, messages, storage=storage,
+                session_id,
+                messages,
+                storage=storage,
             )
     else:
         nodes = heuristic_extract_from_messages(
-            session_id, messages, storage=storage,
+            session_id,
+            messages,
+            storage=storage,
         )
 
     # 写入 storage

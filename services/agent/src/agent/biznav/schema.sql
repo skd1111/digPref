@@ -11,6 +11,8 @@ CREATE TABLE IF NOT EXISTS features (
     category TEXT NOT NULL,
     project_name TEXT NOT NULL,
     project_root TEXT NOT NULL,
+    skill_id TEXT,                -- Phase 2H：绑定业务 Skill 的 id（历史字段，保留兼容）
+    expert_team_ids TEXT,         -- 中期改造：功能点直连专家团预设（JSON 数组）
     related_files TEXT,           -- JSON 数组
     related_apis TEXT,            -- JSON 数组
     related_tables TEXT,          -- JSON 数组
@@ -60,3 +62,13 @@ CREATE TABLE IF NOT EXISTS feature_edit_history (
     editor_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_edit_history_feature ON feature_edit_history(feature_id);
+
+-- project_profiles: 项目画像（init 风格，2026-08-05）
+-- 导入工程时生成（仿 Claude/Codex init 指令），后续 chat 发送时前置注入提示词，
+-- 让模型预先知道项目技术栈 / 目录结构，不再反问「哪个项目 / 什么语言」。
+CREATE TABLE IF NOT EXISTS project_profiles (
+    project_name TEXT PRIMARY KEY,
+    project_root TEXT,
+    profile_text TEXT NOT NULL,
+    updated_at   INTEGER
+);

@@ -9,6 +9,7 @@ V0 简化实现：
 
 CLAUDE.md 红线：熔断器**仅**影响请求是否放行，**不**改请求内容。
 """
+
 from __future__ import annotations
 
 import logging
@@ -16,7 +17,6 @@ import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +98,8 @@ class CircuitBreaker:
                     self._stats.last_state_change = time.monotonic()
                     logger.info(
                         "circuit_breaker %s CLOSED -> OPEN (failures=%d)",
-                        self.name, self._stats.failure_count,
+                        self.name,
+                        self._stats.failure_count,
                     )
 
     def reset(self) -> None:

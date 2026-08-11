@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Enterprise AI IDE — desktop shell"
 authors = ["EAIDE Team"]
 edition = "2021"
-rust-version = "1.78"
+rust-version = "1.85"
 
 [lib]
 name = "eaide_desktop_lib"
@@ -25,6 +25,8 @@ tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", features = ["stream", "json", "blocking"] }
 reqwest-eventsource = "0.6"
 futures-util = "0.3"
+# Phase 7 补齐：大结果集 WS + Arrow 中继（连 Python Agent /data/stream）
+tokio-tungstenite = "0.24"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 anyhow = "1"

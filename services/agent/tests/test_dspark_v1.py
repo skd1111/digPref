@@ -11,20 +11,18 @@ CLAUDE.md §2 红线：
 - _LOCAL_ONLY_TASKS（intent / repair / local_intent / data_summary / log_level_classify / biznav_extract）
   强制 n_draft=1, draft_p_min=1.0（DSpark 永远不绕过本地 Ollama）
 """
+
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
-
 from agent.llm.dspark.config import (
+    DEFAULT_POLICIES,
     DSPARK_DRAFT_P_MIN_DEFAULT_AGGRESSIVE,
     DSPARK_DRAFT_P_MIN_DEFAULT_OFF,
     DSPARK_DRAFT_P_MIN_DEFAULT_STANDARD,
-    DEFAULT_POLICIES,
     DSparkConfig,
-    SPECULATIVE_OFF,
     SpeculativePolicy,
 )
 
@@ -37,7 +35,6 @@ from agent.llm.dspark.policy import (
     load_speculative_policies,
     set_local_only_tasks,
 )
-
 
 # ---- 数据类 --------------------------------------------------------------
 
@@ -72,10 +69,19 @@ def _restore_local_only_tasks():
     """每个测试后还原 _LOCAL_ONLY_TASKS，避免污染其他测试。"""
     yield
     from agent.llm.dspark import policy as policy_mod
-    policy_mod._LOCAL_ONLY_TASKS = frozenset({
-        "intent", "repair", "skill_router", "data_summary", "biznav_extract",
-        "local_intent", "vision_understand", "log_level_classify",
-    })
+
+    policy_mod._LOCAL_ONLY_TASKS = frozenset(
+        {
+            "intent",
+            "repair",
+            "skill_router",
+            "data_summary",
+            "biznav_extract",
+            "local_intent",
+            "vision_understand",
+            "log_level_classify",
+        }
+    )
 
 
 def test_decide_local_only_task_forced_off():
@@ -84,7 +90,9 @@ def test_decide_local_only_task_forced_off():
     policies = {
         "intent": SpeculativePolicy(
             task_category="intent",
-            mode="aggressive", n_draft=8, draft_p_min=DRAFT_P_MIN_AGGRESSIVE,
+            mode="aggressive",
+            n_draft=8,
+            draft_p_min=DRAFT_P_MIN_AGGRESSIVE,
         ),
     }
     pol = decide_dspark(
@@ -103,8 +111,10 @@ def test_decide_local_intent_task_forced_off():
     """Phase 4 V0 新增的 local_intent 也必须强制 off。"""
     cfg = DSparkConfig(enable_global=True, draft_model_path=CFG_DRAFT_PATH)
     pol = decide_dspark(
-        config=cfg, policies={},
-        task_category="local_intent", max_tokens=200,
+        config=cfg,
+        policies={},
+        task_category="local_intent",
+        max_tokens=200,
         local_only_tasks=frozenset({"local_intent"}),
     )
     assert pol.mode == "off"
@@ -114,8 +124,10 @@ def test_decide_log_level_classify_forced_off():
     """Phase 2F+ V1 新增的 log_level_classify 也必须强制 off。"""
     cfg = DSparkConfig(enable_global=True, draft_model_path=CFG_DRAFT_PATH)
     pol = decide_dspark(
-        config=cfg, policies={},
-        task_category="log_level_classify", max_tokens=100,
+        config=cfg,
+        policies={},
+        task_category="log_level_classify",
+        max_tokens=100,
         local_only_tasks=frozenset({"log_level_classify"}),
     )
     assert pol.mode == "off"
@@ -127,18 +139,23 @@ def test_decide_log_level_classify_forced_off():
 def test_decide_short_output_skipped():
     """短输出（< 20 tokens）跳过 DSpark —— 避免猜测开销 > 节省时间。"""
     cfg = DSparkConfig(
-        enable_global=True, draft_model_path=CFG_DRAFT_PATH,
+        enable_global=True,
+        draft_model_path=CFG_DRAFT_PATH,
         short_output_threshold=20,
     )
     policies = {
         "sql_generation": SpeculativePolicy(
-            task_category="sql_generation", mode="aggressive",
-            n_draft=8, draft_p_min=DRAFT_P_MIN_AGGRESSIVE,
+            task_category="sql_generation",
+            mode="aggressive",
+            n_draft=8,
+            draft_p_min=DRAFT_P_MIN_AGGRESSIVE,
         ),
     }
     pol = decide_dspark(
-        config=cfg, policies=policies,
-        task_category="sql_generation", max_tokens=15,
+        config=cfg,
+        policies=policies,
+        task_category="sql_generation",
+        max_tokens=15,
         local_only_tasks=frozenset(),
     )
     assert pol.mode == "off"
@@ -148,18 +165,23 @@ def test_decide_short_output_skipped():
 def test_decide_short_output_boundary():
     """max_tokens = 20 = 阈值 → 应启用 aggressive（边界包含）。"""
     cfg = DSparkConfig(
-        enable_global=True, draft_model_path=CFG_DRAFT_PATH,
+        enable_global=True,
+        draft_model_path=CFG_DRAFT_PATH,
         short_output_threshold=20,
     )
     policies = {
         "sql_generation": SpeculativePolicy(
-            task_category="sql_generation", mode="aggressive",
-            n_draft=8, draft_p_min=DRAFT_P_MIN_AGGRESSIVE,
+            task_category="sql_generation",
+            mode="aggressive",
+            n_draft=8,
+            draft_p_min=DRAFT_P_MIN_AGGRESSIVE,
         ),
     }
     pol = decide_dspark(
-        config=cfg, policies=policies,
-        task_category="sql_generation", max_tokens=20,
+        config=cfg,
+        policies=policies,
+        task_category="sql_generation",
+        max_tokens=20,
         local_only_tasks=frozenset(),
     )
     assert pol.mode == "aggressive"
@@ -173,13 +195,17 @@ def test_decide_global_disabled_forces_off():
     cfg = DSparkConfig(enable_global=False, draft_model_path=CFG_DRAFT_PATH)
     policies = {
         "sql_generation": SpeculativePolicy(
-            task_category="sql_generation", mode="aggressive",
-            n_draft=8, draft_p_min=DRAFT_P_MIN_AGGRESSIVE,
+            task_category="sql_generation",
+            mode="aggressive",
+            n_draft=8,
+            draft_p_min=DRAFT_P_MIN_AGGRESSIVE,
         ),
     }
     pol = decide_dspark(
-        config=cfg, policies=policies,
-        task_category="sql_generation", max_tokens=500,
+        config=cfg,
+        policies=policies,
+        task_category="sql_generation",
+        max_tokens=500,
         local_only_tasks=frozenset(),
     )
     assert pol.mode == "off"
@@ -193,29 +219,37 @@ def test_decide_5_categories():
     cfg = DSparkConfig(enable_global=True, draft_model_path=CFG_DRAFT_PATH)
     # 注：DEFAULT_POLICIES 的 chat_qa=conservative；complex_reasoning 不在 default → 兜底 conservative
     pol_sql = decide_dspark(
-        config=cfg, policies=DEFAULT_POLICIES,
-        task_category="sql_generation", max_tokens=500,
+        config=cfg,
+        policies=DEFAULT_POLICIES,
+        task_category="sql_generation",
+        max_tokens=500,
         local_only_tasks=frozenset(),
     )
     assert pol_sql.mode == "aggressive"
 
     pol_code = decide_dspark(
-        config=cfg, policies=DEFAULT_POLICIES,
-        task_category="code_completion", max_tokens=500,
+        config=cfg,
+        policies=DEFAULT_POLICIES,
+        task_category="code_completion",
+        max_tokens=500,
         local_only_tasks=frozenset(),
     )
     assert pol_code.mode == "aggressive"
 
     pol_log = decide_dspark(
-        config=cfg, policies=DEFAULT_POLICIES,
-        task_category="log_analysis", max_tokens=500,
+        config=cfg,
+        policies=DEFAULT_POLICIES,
+        task_category="log_analysis",
+        max_tokens=500,
         local_only_tasks=frozenset(),
     )
     assert pol_log.mode == "standard"
 
     pol_chat = decide_dspark(
-        config=cfg, policies=DEFAULT_POLICIES,
-        task_category="chat_qa", max_tokens=500,
+        config=cfg,
+        policies=DEFAULT_POLICIES,
+        task_category="chat_qa",
+        max_tokens=500,
         local_only_tasks=frozenset(),
     )
     assert pol_chat.mode == "conservative"
@@ -225,8 +259,10 @@ def test_decide_unknown_category_falls_back_to_conservative():
     """未知类别 → conservative fallback。"""
     cfg = DSparkConfig(enable_global=True, draft_model_path=CFG_DRAFT_PATH)
     pol = decide_dspark(
-        config=cfg, policies={},
-        task_category="unknown_task_xyz", max_tokens=500,
+        config=cfg,
+        policies={},
+        task_category="unknown_task_xyz",
+        max_tokens=500,
         local_only_tasks=frozenset(),
     )
     assert pol.mode == "conservative"
@@ -297,6 +333,7 @@ def test_set_local_only_tasks_round_trip():
 def test_sse_python_channel_registered():
     """Python stream.py _CHANNEL_BY_KIND 含 dspark_acceleration_status。"""
     from agent.graph.stream import _CHANNEL_BY_KIND
+
     assert "dspark_acceleration_status" in _CHANNEL_BY_KIND
     assert _CHANNEL_BY_KIND["dspark_acceleration_status"] == "agent://dspark_acceleration_status"
 
@@ -311,8 +348,10 @@ def test_decide_returns_off_policy_object():
     """off 模式下返 SpeculativePolicy(mode='off', n_draft=1, draft_p_min=1.0)。"""
     cfg = DSparkConfig(enable_global=True, draft_model_path=CFG_DRAFT_PATH)
     pol = decide_dspark(
-        config=cfg, policies={},
-        task_category="any", max_tokens=100,
+        config=cfg,
+        policies={},
+        task_category="any",
+        max_tokens=100,
         local_only_tasks=frozenset({"any"}),  # any in local-only → off
     )
     assert isinstance(pol, SpeculativePolicy)

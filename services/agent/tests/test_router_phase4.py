@@ -1,4 +1,5 @@
 """Phase 4 V0: Router inference mode tests."""
+
 from __future__ import annotations
 
 import pytest
@@ -9,17 +10,20 @@ class TestInferenceMode:
 
     def test_default_mode_is_normal(self):
         from agent.llm.router import LMRouter
+
         r = LMRouter()
         assert r.inference_mode == "normal"
 
     def test_set_performance_mode(self):
         from agent.llm.router import LMRouter
+
         r = LMRouter()
         r.set_inference_mode("performance")
         assert r.inference_mode == "performance"
 
     def test_set_normal_mode(self):
         from agent.llm.router import LMRouter
+
         r = LMRouter()
         r.set_inference_mode("performance")
         r.set_inference_mode("normal")
@@ -27,6 +31,7 @@ class TestInferenceMode:
 
     def test_invalid_mode_raises(self):
         from agent.llm.router import LMRouter
+
         r = LMRouter()
         with pytest.raises(ValueError):
             r.set_inference_mode("invalid")  # type: ignore[arg-type]
@@ -37,6 +42,7 @@ class TestNormalModeChain:
 
     def test_intent_chain_starts_with_local_small(self):
         from agent.llm.router import LMRouter
+
         r = LMRouter()
         r.set_inference_mode("normal")
         chain = r._chain_for("intent")
@@ -44,6 +50,7 @@ class TestNormalModeChain:
 
     def test_plan_chain_starts_with_local_small(self):
         from agent.llm.router import LMRouter
+
         r = LMRouter()
         r.set_inference_mode("normal")
         chain = r._chain_for("plan")
@@ -51,6 +58,7 @@ class TestNormalModeChain:
 
     def test_chain_ends_with_mock(self):
         from agent.llm.router import LMRouter
+
         r = LMRouter()
         for kind in ("intent", "plan", "repair", "summarise"):
             chain = r._chain_for(kind)
@@ -62,6 +70,7 @@ class TestPerformanceModeChain:
 
     def test_intent_chain_skips_local_small(self):
         from agent.llm.router import LMRouter
+
         r = LMRouter()
         r.set_inference_mode("performance")
         chain = r._chain_for("intent")
@@ -69,6 +78,7 @@ class TestPerformanceModeChain:
 
     def test_plan_chain_skips_local_small(self):
         from agent.llm.router import LMRouter
+
         r = LMRouter()
         r.set_inference_mode("performance")
         chain = r._chain_for("plan")
@@ -80,8 +90,10 @@ class TestLocalOnlyTasks:
 
     def test_local_intent_is_local_only(self):
         from agent.llm.router import _LOCAL_ONLY_TASKS
+
         assert "local_intent" in _LOCAL_ONLY_TASKS
 
     def test_vision_understand_is_local_only(self):
         from agent.llm.router import _LOCAL_ONLY_TASKS
+
         assert "vision_understand" in _LOCAL_ONLY_TASKS

@@ -5,8 +5,6 @@
   - 测试时 chdir tmp_path + 默认 settings → router.db 落 tmp_path
   - 生产绝对路径 → 直接用
 """
-import os
-from pathlib import Path
 
 from agent.llm.metrics import _router_db_path
 
@@ -19,7 +17,6 @@ def test_default_relative_path_resolves_against_cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     # 显式重设 settings（pydantic-settings 实例可能缓存）
     monkeypatch.setenv("EAIDE_LLM_ROUTER_DB_PATH", "router.db")
-    from agent.config import settings
     p = _router_db_path()
     assert p.is_absolute()
     assert p.parent == tmp_path

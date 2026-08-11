@@ -4,18 +4,32 @@
  * 重要：每个 tab 拥有独立的 messages（多会话线程隔离）。activeTabId 切换时
  * 看到的是那个 tab 的消息流。新建 tab 切换并清空消息。
  *
+ * 持久化（2026-08-07）：tabs / activeTabId / inferenceMode 进 localStorage，
+ * 重启不再丢对话。busy / runId / autonomy / 各类上下文不进 persist（运行态
+ * 与安全默认值重启重置）。写入前裁剪：最多 20 个 tab，每 tab 最近 500 条消息。
+ *
  * Updated by:
  *   - ChatInput (append user message)
  *   - subscribeAgentStream (append / mutate assistant / tool messages)
  */
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import type { ChatMessage } from '@eaide/shared-protocol';
 import type { FeatureContextPayload } from '@/types/biznav';
+import type { Skill } from '@/types/skill';
+import type { ExpertTeam } from '@/types/expertTeam';
+import type { WorkMode } from '@/store/uiStore';
+import { useSkillsStore } from '@/store/skillsStore';
+import { useExpertTeamStore } from '@/store/expertTeamStore';
 
 export interface ChatTab {
   id: string;
   title: string;
   messages: ChatMessage[];
+  /** 后端 sessions 归档用的 session id（2026-08-07，首次发送时懒创建） */
+  backendSessionId?: string;
+  /** 页签所属模式（2026-08-11 模式隔离）；旧数据无值按 'full' 处理 */
+  mode?: WorkMode;
 }
 
 interface ChatState {
@@ -26,6 +40,11 @@ interface ChatState {
 
   // Phase 2G 业务功能点上下文（由 BiznavChatBridge 写入，headless 订阅者单向桥接）
   selectedFeatureContext: FeatureContextPayload | null;
+  // Phase 2H 运营工作台上下文（由 OperationsWorkbench 写入；优先于 feature 树上下文）
+  opsNavContext: FeatureContextPayload | null;
+
+  // reqflow V1 需求对齐上下文：多功能点（功能点树「发起改造需求」写入）
+  alignmentFeatures: FeatureContextPayload[] | null;
 
   // Phase 2D V0 业务技能上下文（由 agentStream 写入，SKILL_MATCHED 事件）
   selectedSkill: { skill_id: string; skill_name: string; matched_keywords: string[] } | null;
@@ -33,17 +52,28 @@ interface ChatState {
   // Phase 4 V0 推理模式：normal = 端侧优先，performance = 全走云端
   inferenceMode: 'normal' | 'performance';
 
+  // 整轮耗时统计（2026-08-07）：runStartTs 发送时记；done 时算差值进 lastRunMs。
+  // 不进 persist（运行态）。
+  runStartTs: number | null;
+  lastRunMs: number | null;
+
   // Phase 18 会话级自主性：interactive = 每步等人；auto = 按推荐项自动继续。
   // 不持久化（不进 persist）：重启/新会话回落 interactive，需重新开关 + 弹窗确认。
   autonomy: 'interactive' | 'auto';
 
   // tab 操作
-  newTab: (title?: string) => void;
+  newTab: (title?: string, mode?: WorkMode) => void;
   closeTab: (id: string) => void;
   switchTab: (id: string) => void;
   renameTab: (id: string, title: string) => void;
   /** 把 srcId 拖到 dstId 之前（或末尾如果 dstId 为 null） */
   moveTab: (srcId: string, dstId: string | null) => void;
+  /**
+   * 模式隔离（2026-08-11）：切到该模式的页签组；没有则新建。
+   * 只区分 operator 与 full（其余模式不渲染对话，归入 full），
+   * 保证运营专家团对话与开发对话互不串场。
+   */
+  ensureModeTab: (mode: WorkMode) => void;
 
   // 消息操作（始终作用于 active tab）
   append: (m: ChatMessage) => void;
@@ -53,6 +83,8 @@ interface ChatState {
   setBusy: (b: boolean) => void;
   setRunId: (id: string | null) => void;
   setFeatureContext: (ctx: FeatureContextPayload | null) => void;
+  setOpsNavContext: (ctx: FeatureContextPayload | null) => void;
+  setAlignmentFeatures: (fs: FeatureContextPayload[] | null) => void;
   setSelectedSkill: (s: { skill_id: string; skill_name: string; matched_keywords: string[] } | null) => void;
 
   // Phase 4 V0
@@ -61,6 +93,12 @@ interface ChatState {
 
   // Phase 18
   setAutonomy: (a: 'interactive' | 'auto') => void;
+
+  // 2026-08-07
+  setRunStartTs: (ts: number | null) => void;
+  setLastRunMs: (ms: number | null) => void;
+  /** 给指定 tab 绑定后端 session id（sessions 归档） */
+  setTabSessionId: (tabId: string, sessionId: string) => void;
 }
 
 const newId = (): string => `tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -71,21 +109,64 @@ const initialTab = (): ChatTab => ({
   messages: [],
 });
 
-export const useChatStore = create<ChatState>((set, get) => {
-  const t0 = initialTab();
-  return {
+// ---- 持久化裁剪与恢复清洗（2026-08-07）----------------------------------
+
+/** localStorage 约 5MB 上限保护：只留最近 N 个 tab / 每 tab 最近 M 条消息 */
+const MAX_PERSIST_TABS = 20;
+const MAX_PERSIST_MESSAGES = 500;
+
+function trimForPersist(tabs: ChatTab[]): ChatTab[] {
+  return tabs.slice(-MAX_PERSIST_TABS).map((t) => ({
+    ...t,
+    messages: t.messages.slice(-MAX_PERSIST_MESSAGES),
+  }));
+}
+
+/** 恢复时把上次关机卡住的 running 执行步骤降为 ok，避免永久转圈 */
+function sanitizeRestored(tabs: ChatTab[]): ChatTab[] {
+  return tabs.map((t) => ({
+    ...t,
+    messages: t.messages.map((m) =>
+      m.kind === 'execution' && m.status === 'running' ? { ...m, status: 'ok' as const } : m,
+    ),
+  }));
+}
+
+export const useChatStore = create<ChatState>()(
+  persist(
+    (set, get) => {
+      const t0 = initialTab();
+      return {
     tabs: [t0],
     activeTabId: t0.id,
     busy: false,
     runId: null,
     selectedFeatureContext: null,
+    opsNavContext: null,
+    alignmentFeatures: null,
     selectedSkill: null,
     inferenceMode: 'normal',  // Phase 4 V0: 默认正常模式（端侧优先）
     autonomy: 'interactive',  // Phase 18: 默认交互模式（安全默认值）
+    runStartTs: null,
+    lastRunMs: null,
 
-    newTab: (title) => {
-      const t: ChatTab = { id: newId(), title: title ?? '新会话', messages: [] };
+    newTab: (title, mode) => {
+      const t: ChatTab = { id: newId(), title: title ?? '新会话', messages: [], mode: mode ?? 'full' };
       set((s) => ({ tabs: [...s.tabs, t], activeTabId: t.id, runId: null }));
+    },
+
+    ensureModeTab: (mode) => {
+      const target: WorkMode = mode === 'operator' ? 'operator' : 'full';
+      const { tabs, activeTabId } = get();
+      const own = tabs.filter((t) => (t.mode ?? 'full') === target);
+      if (own.length === 0) {
+        const t: ChatTab = { id: newId(), title: '新会话', messages: [], mode: target };
+        set((s) => ({ tabs: [...s.tabs, t], activeTabId: t.id, runId: null }));
+        return;
+      }
+      if (!own.some((t) => t.id === activeTabId)) {
+        set({ activeTabId: own[own.length - 1].id, runId: null });
+      }
     },
 
     closeTab: (id) => {
@@ -196,6 +277,8 @@ export const useChatStore = create<ChatState>((set, get) => {
     setRunId: (id) => set({ runId: id }),
     setSelectedSkill: (s) => set({ selectedSkill: s }),
     setFeatureContext: (ctx) => set({ selectedFeatureContext: ctx }),
+    setOpsNavContext: (ctx) => set({ opsNavContext: ctx }),
+    setAlignmentFeatures: (fs) => set({ alignmentFeatures: fs }),
 
     // Phase 4 V0
     setInferenceMode: (mode) => set({ inferenceMode: mode }),
@@ -206,8 +289,48 @@ export const useChatStore = create<ChatState>((set, get) => {
 
     // Phase 18
     setAutonomy: (a) => set({ autonomy: a }),
-  };
-});
+
+    // 2026-08-07
+    setRunStartTs: (ts) => set({ runStartTs: ts }),
+    setLastRunMs: (ms) => set({ lastRunMs: ms }),
+    setTabSessionId: (tabId, sessionId) =>
+      set((s) => ({
+        tabs: s.tabs.map((t) =>
+          t.id === tabId ? { ...t, backendSessionId: sessionId } : t,
+        ),
+      })),
+      };
+    },
+    {
+      name: 'eaide-chat-v1',
+      storage: createJSONStorage(() => localStorage),
+      // 只持久化会话本体；busy/runId/autonomy/上下文不进（运行态重启重置）
+      partialize: (s) => ({
+        tabs: trimForPersist(s.tabs),
+        activeTabId: s.activeTabId,
+        inferenceMode: s.inferenceMode,
+      }),
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<
+          Pick<ChatState, 'tabs' | 'activeTabId' | 'inferenceMode'>
+        >;
+        let tabs =
+          Array.isArray(p.tabs) && p.tabs.length > 0 ? sanitizeRestored(p.tabs) : current.tabs;
+        // 保底：至少一个 tab，activeTabId 必须落在实际存在的 tab 上
+        if (tabs.length === 0) tabs = [initialTab()];
+        const activeTabId = tabs.some((t) => t.id === p.activeTabId)
+          ? (p.activeTabId as string)
+          : tabs[0].id;
+        return {
+          ...current,
+          tabs,
+          activeTabId,
+          inferenceMode: p.inferenceMode ?? current.inferenceMode,
+        };
+      },
+    },
+  ),
+);
 
 // ---------------------------------------------------------------------------
 // Phase 2G V1.2：业务功能点上下文 → prompt 注入片段（纯选择器，不消费）
@@ -222,41 +345,172 @@ export const useChatStore = create<ChatState>((set, get) => {
 
 export function useFeatureContextPromptSnippet(): string {
   const ctx = useChatStore((s) => s.selectedFeatureContext);
-  if (!ctx) return '';
+  const opsCtx = useChatStore((s) => s.opsNavContext);
+  const alignment = useChatStore((s) => s.alignmentFeatures);
+  const skills = useSkillsStore((s) => s.skills);
+
+  // reqflow V1 需求对齐模式优先：多功能点 + 需求分析角色设定
+  if (alignment && alignment.length > 0) {
+    const lines: string[] = ['【需求改造对齐上下文】'];
+    for (const f of alignment) {
+      lines.push(...renderFeatureBlock(f));
+      const skill = skills.find((s) => s.id === f.skill_id);
+      if (skill) lines.push(...renderSkillBlock(skill));
+    }
+    lines.push('');
+    lines.push(
+      '（当前为需求改造对齐会话。用户是不懂技术的业务人员（运营/柜员/业务主管），\n' +
+      '你必须严格遵守以下沟通规则：\n' +
+      '1. 全程用业务语言，禁止出现任何技术术语：不得提 表名/字段类型/VARCHAR/DDL/Entity/Mapper/DTO/驼峰命名/索引/接口路径 等，\n' +
+      '   也不得反问用户“哪个类/哪个表/什么数据类型”这类只有开发才能回答的问题；\n' +
+      '2. 需要补充信息时，只问业务问题：新字段做什么用、展示在哪里、谁来填/谁能看、是否必填、\n' +
+      '   存量记录怎么办、是否影响现有业务流程等；\n' +
+      '3. 可行性与影响分析用大白话表达：说“会影响到 XX 页面的展示和 XX 流程”，\n' +
+      '   不要说“需要改数据库脚本和实体类”；实现难度用“小改动/中等/较大改造”表达；\n' +
+      '4. 实现方案只作为给开发人员的附注简要提及（一两句通俗描述即可），\n' +
+      '   不展开技术细节，不要求用户提供技术方案，你只输出文字不实际改代码；\n' +
+      '5. 对齐充分后用户会点击「生成需求卡片」，卡片会把结论转交给审批和开发人员。\n' +
+      '你的职责：帮用户把需求说清楚 → 用业务语言分析可行性、对其他功能的影响、涉及的外部系统。）'
+    );
+    return lines.join('\n');
+  }
+
+  // Phase 2H：运营工作台选中业务 > 功能点树选中 > 无上下文
+  const activeCtx = opsCtx ?? ctx;
+  if (!activeCtx) return '';
 
   const lines: string[] = ['【当前业务功能点上下文】'];
+  lines.push(...renderFeatureBlock(activeCtx));
+  const skill = skills.find((s) => s.id === activeCtx.skill_id);
+  if (skill) lines.push(...renderSkillBlock(skill));
+  lines.push('');
+  lines.push('（以上为已导入工程中选定的业务功能点；项目、功能、关联代码均已明确，直接基于这些信息回答，不要再反问功能名称、项目位置、技术栈等已知信息。如用户提出与该功能无关的问题，可正常脱离上下文。）');
+  return lines.join('\n');
+}
+
+/** 绑定 Skill 经验注入：业务流程 / 材料清单 / 风险控制 / 数据字典引用规则 */
+export function renderSkillBlock(skill: Skill): string[] {
+  const lines: string[] = [];
+  lines.push('');
+  lines.push(`【绑定 Skill 经验：${skill.name}（${skill.id}）】`);
+  if (skill.system_prompt) {
+    lines.push(skill.system_prompt);
+  }
+  if (skill.few_shot_examples.length > 0) {
+    lines.push('参考示例：');
+    for (const ex of skill.few_shot_examples.slice(0, 5)) {
+      lines.push(`[${ex.role}] ${ex.content.slice(0, 600)}`);
+    }
+  }
+  // 专家团预设（本业务默认专家团 / 办理材料 / 交付物，供模型判断与执行）
+  if ((skill.required_expert_team_ids ?? []).length > 0) {
+    lines.push(`默认专家团：${skill.required_expert_team_ids.join('、')}`);
+  }
+  if ((skill.materials ?? []).length > 0) {
+    lines.push(`办理材料清单：${skill.materials.join('、')}`);
+  }
+  if ((skill.deliverables ?? []).length > 0) {
+    lines.push(`最终交付物：${skill.deliverables.join('、')}`);
+  }
+  lines.push('');
+  lines.push(
+    '（当前会话已自动加载该功能点绑定的 Skill。请严格按 Skill 中的业务流程、' +
+    '材料清单与风险控制执行；Skill 中标注的公共参数请到「数据字典」按 key 查询，' +
+    '不要臆造参数值；涉及外部系统（如 OCR）时按占位说明提示人工接入。）'
+  );
+  return lines;
+}
+
+// ---------------------------------------------------------------------------
+// 专家团上下文注入（运营工作台自动/手动选择后，发送时拼接）
+// ---------------------------------------------------------------------------
+
+/** 纯函数版（便于测试）：把选中的专家团拼成上下文字符串 */
+export function buildExpertTeamSnippet(ids: string[], teams: ExpertTeam[]): string {
+  if (ids.length === 0) return '';
+  const lines: string[] = [];
+  for (const id of ids) {
+    const t = teams.find((x) => x.id === id);
+    if (t) lines.push(...renderExpertTeamBlock(t));
+  }
+  return lines.join('\n');
+}
+
+/**
+ * 专家团上下文片段：ChatInput 发送时拼到 prompt 前缀。
+ * 选中团为空 → 返回 '' 不注入。与 useFeatureContextPromptSnippet 同机制。
+ */
+export function useExpertTeamPromptSnippet(): string {
+  const ids = useExpertTeamStore((s) => s.selectedTeamIds);
+  const teams = useExpertTeamStore((s) => s.teams);
+  return buildExpertTeamSnippet(ids, teams);
+}
+
+/** 单个专家团渲染：团定位 + 逐成员（角色/职责/关注点/输出/Prompt）+ 协作规则 */
+export function renderExpertTeamBlock(team: ExpertTeam): string[] {
+  const lines: string[] = [];
+  lines.push('');
+  lines.push(`【专家团上下文：${team.name}（${team.id}）】`);
+  if (team.description) lines.push(team.description);
+  if (team.applicable_scenarios.length > 0) {
+    lines.push(`适用场景：${team.applicable_scenarios.join('、')}`);
+  }
+  lines.push('本专家团成员：');
+  for (const m of team.members) {
+    lines.push(`■ ${m.name}（${m.role}）`);
+    if (m.responsibilities.length > 0) {
+      lines.push(`  职责：${m.responsibilities.join('；')}`);
+    }
+    if (m.focus_points.length > 0) {
+      lines.push(`  关注点：${m.focus_points.join('；')}`);
+    }
+    if (m.outputs.length > 0) {
+      lines.push(`  输出：${m.outputs.join('、')}`);
+    }
+    if (m.prompt) lines.push(`  角色指令：${m.prompt}`);
+  }
+  lines.push('');
+  lines.push(
+    '（你将以该专家团身份协同工作：项目经理统筹任务与资料判断，各专家按职责' +
+    '输出结构化意见，报告主笔汇总成稿，质量控制复核；资料不足不得给出确定性' +
+    '结论，最终判断由人工负责。）'
+  );
+  return lines;
+}
+
+/** 单个功能点上下文渲染（首行含功能名，其余缩进子项） */
+function renderFeatureBlock(ctx: FeatureContextPayload): string[] {
+  const lines: string[] = [];
   lines.push(`- 功能：${ctx.feature_name} (${ctx.feature_id})`);
   if (ctx.feature_description) {
-    lines.push(`- 描述：${ctx.feature_description}`);
+    lines.push(`  - 描述：${ctx.feature_description}`);
   }
   if (ctx.related_files.length > 0) {
-    lines.push('- 关联文件：');
+    lines.push('  - 关联文件：');
     for (const f of ctx.related_files.slice(0, 10)) {
-      lines.push(`  - ${f.path}`);
+      lines.push(`    - ${f.path}`);
     }
     if (ctx.related_files.length > 10) {
-      lines.push(`  - …（还有 ${ctx.related_files.length - 10} 个）`);
+      lines.push(`    - …（还有 ${ctx.related_files.length - 10} 个）`);
     }
   }
   if (ctx.related_apis.length > 0) {
-    lines.push('- 关联 API：');
+    lines.push('  - 关联 API：');
     for (const a of ctx.related_apis.slice(0, 5)) {
-      lines.push(`  - ${a.method} ${a.path}`);
+      lines.push(`    - ${a.method} ${a.path}`);
     }
   }
   if (ctx.related_tables.length > 0) {
-    lines.push('- 关联表：');
+    lines.push('  - 关联表：');
     for (const t of ctx.related_tables.slice(0, 5)) {
-      lines.push(`  - ${t.name}`);
+      lines.push(`    - ${t.name}`);
     }
   }
   if (ctx.business_rules.length > 0) {
-    lines.push('- 业务规则：');
+    lines.push('  - 业务规则：');
     for (const r of ctx.business_rules.slice(0, 10)) {
-      lines.push(`  - ${r}`);
+      lines.push(`    - ${r}`);
     }
   }
-  lines.push('');
-  lines.push('（以上为运营专家模式选中的业务功能点上下文，请在回答时主动结合；如用户提出与该功能无关的问题，可正常脱离上下文。）');
-  return lines.join('\n');
+  return lines;
 }

@@ -13,13 +13,12 @@ V1 接力（V1 阶段）：
   - 文件传输进度回调
   - 会话自动重连 + 心跳
 """
+
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Literal
-
 
 # ---- 常量 ---------------------------------------------------------------------
 
@@ -39,15 +38,18 @@ _MAX_SESSIONS = 32
 
 # ---- 枚举 ---------------------------------------------------------------------
 
+
 class AuthMethod(str, Enum):
     """认证方式。"""
+
     PASSWORD = "password"
-    PUBLICKEY = "publickey"   # V1 接力
-    NONE = "none"             # V1 接力
+    PUBLICKEY = "publickey"  # V1 接力
+    NONE = "none"  # V1 接力
 
 
 class ConnectionStatus(str, Enum):
     """会话状态。"""
+
     DISCONNECTED = "disconnected"
     CONNECTING = "connecting"
     CONNECTED = "connected"
@@ -56,12 +58,14 @@ class ConnectionStatus(str, Enum):
 
 class PtyMode(str, Enum):
     """PTY 交互模式（V1 接力；V0 仅 echo 模式）。"""
+
     NONE = "none"
-    ECHO = "echo"             # V0 默认：单命令执行
+    ECHO = "echo"  # V0 默认：单命令执行
     INTERACTIVE = "interactive"  # V1 接力：双向 stdin/stdout 流
 
 
 # ---- 数据类 -------------------------------------------------------------------
+
 
 @dataclass
 class SshSession:
@@ -78,6 +82,7 @@ class SshSession:
         last_used: 最后一次使用时间。
         pty_mode: PTY 模式（V0 = echo）。
     """
+
     session_id: str
     host: str
     port: int = 22
@@ -99,6 +104,7 @@ class SshExecRequest:
         command: 要执行的命令（V0 echo 模式直接传完整命令行）。
         timeout_sec: 命令超时（默认 30s）。
     """
+
     session_id: str
     command: str
     timeout_sec: float = 30.0
@@ -117,6 +123,7 @@ class SshExecResponse:
         elapsed_ms: 命令耗时。
         ok: 是否成功（exit_code == 0 且未超时）。
     """
+
     session_id: str
     command: str
     exit_code: int | None = None
@@ -139,6 +146,7 @@ class SftpEntry:
         mtime: 修改时间（Unix timestamp；None 表示未知）。
         permissions: 权限位（如 0o755）。
     """
+
     path: str
     name: str
     is_dir: bool
@@ -150,6 +158,7 @@ class SftpEntry:
 @dataclass
 class PtyRequest:
     """PTY 交互请求（V1 接力；V0 占位）。"""
+
     session_id: str
     cols: int = 80
     rows: int = 24
@@ -157,6 +166,7 @@ class PtyRequest:
 
 
 # ---- 异常 ---------------------------------------------------------------------
+
 
 class SshError(Exception):
     """SSH 通用错误。"""
@@ -187,6 +197,7 @@ class SshPathSecurityError(SshError):
 
 
 # ---- 工具函数 ---------------------------------------------------------------
+
 
 def sanitize_host(host: str) -> str:
     """校验主机名合法性（防止命令注入到 ssh 命令行）。

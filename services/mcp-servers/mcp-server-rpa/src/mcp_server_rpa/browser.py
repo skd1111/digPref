@@ -5,11 +5,12 @@
     - 使用 asyncio.Lock 保护全局状态，避免并发工具调用竞态
     - 支持优雅关闭（server shutdown 时调用 cleanup()）
 """
+
 from __future__ import annotations
 
 import asyncio
 
-from playwright.async_api import async_playwright, Browser, BrowserContext
+from playwright.async_api import Browser, BrowserContext, async_playwright
 
 from mcp_server_rpa.config import Settings
 

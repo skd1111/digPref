@@ -7,10 +7,19 @@
  *   - 顶部右上角加 2 个 icon 按钮：[↻ 重建索引] + [✏️ 编辑器]
  *   - 选中态高亮（仿 2F CodeNavSearch 选中态 #094771 + 3px #007acc border）
  *
+ * 导入工程提炼（2026-08-04）：
+ *   - 空态与头部均有「导入工程」按钮：选目录 → addOpenedProject →
+ *     biznavStore.importProjectAndExtract（后端 AI 提取 + 轮询）→ 自动展示
+ *
  * Hook 顺序约束（BUGFIX #15 教训）：所有 hook 无条件在 early-return 之前调用。
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { open } from '@tauri-apps/plugin-dialog';
 import { useEnvStore } from '@/store/envStore';
+import { useCodeNavStore } from '@/store/codeNavStore';
+import { useChatStore } from '@/store/chatStore';
+import { useReqcardStore } from '@/store/reqcardStore';
+import type { FeatureContextPayload } from '@/types/biznav';
 import {
   useBiznavStore,
   selectFeaturesByCategory,
@@ -20,6 +29,13 @@ import {
 const RISK_ICON = { high: '🔴', medium: '🟡', low: '🟢' } as const;
 const RISK_COLOR = { high: '#cd3131', medium: '#795e26', low: '#059669' } as const;
 
+/** 后台提取阶段 → 中文提示（不写死后端：降级链本地→内网→云端自动切换） */
+const EXTRACT_STAGE_TEXT: Record<string, string> = {
+  pending: '提取任务排队中…',
+  scanning: '正在扫描工程代码…',
+  extracting: 'AI 正在提炼业务功能点，可能需要几分钟…',
+};
+
 export function BusinessFeatureTree(): JSX.Element {
   // ===== 所有 hook 必须无条件在 early-return 之前（BUGFIX #15 教训）=====
   const activeEnv = useEnvStore((s) => s.activeEnv);
@@ -28,8 +44,101 @@ export function BusinessFeatureTree(): JSX.Element {
   const reindex = useBiznavStore((s) => s.reindex);
   const openEditor = useBiznavStore((s) => s.openEditor);
   const openDrawer = useBiznavStore((s) => s.openDrawer);
+  const loadFeatures = useBiznavStore((s) => s.loadFeatures);
+  const importProjectAndExtract = useBiznavStore((s) => s.importProjectAndExtract);
+  const extracting = useBiznavStore((s) => s.extracting);
+  const extractStage = useBiznavStore((s) => s.extractStage);
+  const extractError = useBiznavStore((s) => s.extractError);
+  const extractProgress = useBiznavStore((s) => s.extractProgress);
+  const openedProjects = useCodeNavStore((s) => s.openedProjects);
 
-  const grouped = useBiznavStore(selectFeaturesByCategory);
+  // 挂载时 + open/关闭工程变化时自动拉取后端功能点（不传 project_name → 跨项目全量，
+  // 避免因提取时 project_name 与工程目录名不一致而查不到）。此前仅靠 SSE 事件触发，
+  // 而 BIZNAV_EXTRACTION_DONE 事件 V1.3 才真发 → 列表始终为空。
+  useEffect(() => {
+    void loadFeatures();
+  }, [loadFeatures, openedProjects]);
+
+  /** 导入工程 → AI 提炼功能点：选目录 → 加入已打开工程 → 触发后端提取 */
+  const handleImportProject = async (): Promise<void> => {
+    if (extracting) return;
+    let selected: string | string[] | null = null;
+    try {
+      selected = await open({
+        multiple: false,
+        directory: true,
+        title: '选择工程文件夹（AI 提炼业务功能点）',
+      });
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[BusinessFeatureTree] folder dialog failed:', e);
+      window.alert(`打开文件夹对话框失败：${String(e)}\n请确认在 Tauri 桌面端运行（非浏览器）。`);
+      return;
+    }
+    if (!selected) return; // 用户取消
+    const folder = Array.isArray(selected) ? selected[0] : selected;
+    if (!folder) return;
+    // 同步加入左侧工程文件树（去重由 store 内部保证）
+    useCodeNavStore.getState().addOpenedProject(folder);
+    void importProjectAndExtract(folder);
+  };
+
+  // ===== reqflow V1：多选功能点发起改造需求 =====
+  const [selectedForReq, setSelectedForReq] = useState<Set<string>>(new Set());
+
+  const toggleReqSelect = (id: string): void => {
+    setSelectedForReq((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  /** 发起改造需求：多功能点上下文写入对话 + 进入对齐模式 */
+  const handleStartAlignment = (): void => {
+    const ids = Array.from(selectedForReq);
+    if (ids.length === 0) return;
+    const payloads: FeatureContextPayload[] = ids
+      .map((id) => features.find((f) => f.id === id))
+      .filter((f): f is NonNullable<typeof f> => Boolean(f))
+      .map((f) => ({
+        feature_id: f.id,
+        feature_name: f.name,
+        feature_description: f.description,
+        ...(f.skill_id != null ? { skill_id: f.skill_id } : {}),
+        related_files: f.related_files,
+        related_apis: f.related_apis,
+        related_tables: f.related_tables,
+        business_rules: f.business_rules,
+        source: f.source,
+      }));
+    useChatStore.getState().setAlignmentFeatures(payloads);
+    useReqcardStore.getState().startAlignment(ids, useBiznavStore.getState().projectName);
+    setSelectedForReq(new Set());
+  };
+
+  const groupedRaw = useBiznavStore(selectFeaturesByCategory);
+
+  // 功能点搜索：按 名称 / 分类 / 描述 过滤（不区分大小写）
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const grouped = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return groupedRaw;
+    const m = new Map<string, typeof features>();
+    for (const [cat, items] of groupedRaw) {
+      const filtered = items.filter(
+        (f) =>
+          f.name.toLowerCase().includes(q) ||
+          f.category.toLowerCase().includes(q) ||
+          f.description.toLowerCase().includes(q)
+      );
+      if (filtered.length > 0) m.set(cat, filtered);
+    }
+    return m;
+  }, [groupedRaw, searchQuery, features]);
+
   const stats = useBiznavStore(selectStats);
 
   // 本地 UI 状态（不进 store）
@@ -48,7 +157,7 @@ export function BusinessFeatureTree(): JSX.Element {
   }, [expandedCategories, grouped]);
 
   // ===== Hook 完毕，再 early-return =====
-  if (features.length === 0) {
+  if (features.length === 0 && !extracting) {
     return (
       <div
         className="flex h-full flex-col items-center justify-center p-6 text-center text-2xs"
@@ -56,7 +165,21 @@ export function BusinessFeatureTree(): JSX.Element {
       >
         <div className="mb-2 text-3xl">🧩</div>
         <div>暂无业务功能点</div>
-        <div className="mt-1">V1 接后端后可加载真实项目</div>
+        <div className="mt-1">导入工程后由 AI 自动提炼，或导入 YAML</div>
+        {extractError && (
+          <div className="mt-2 max-w-[220px] break-all" style={{ color: '#cd3131' }}>
+            ⚠ {extractError}
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={() => void handleImportProject()}
+          className="mt-4 rounded px-3 py-1.5 text-ui font-semibold transition-colors hover:brightness-110"
+          style={{ backgroundColor: '#0e639c', color: '#ffffff' }}
+          title="选择工程文件夹，AI 自动提炼业务功能点"
+        >
+          📁 导入工程提炼功能点
+        </button>
       </div>
     );
   }
@@ -114,6 +237,37 @@ export function BusinessFeatureTree(): JSX.Element {
             )}
             <button
               type="button"
+              onClick={() => void handleImportProject()}
+              disabled={extracting}
+              className="rounded px-1.5 py-0.5 text-2xs transition-colors hover:bg-vscode-border"
+              style={{
+                color: extracting ? '#a0a0a0' : '#0451a5',
+                cursor: extracting ? 'wait' : 'pointer',
+              }}
+              title="导入工程，AI 提炼业务功能点"
+            >
+              📁
+            </button>
+            {/* reqflow V1：勾选功能点后发起改造需求 */}
+            <button
+              type="button"
+              onClick={handleStartAlignment}
+              disabled={selectedForReq.size === 0}
+              className="rounded px-1.5 py-0.5 text-2xs transition-colors hover:bg-vscode-border"
+              style={{
+                color: selectedForReq.size > 0 ? '#0451a5' : '#a0a0a0',
+                cursor: selectedForReq.size > 0 ? 'pointer' : 'not-allowed',
+              }}
+              title={
+                selectedForReq.size > 0
+                  ? `对已勾选的 ${selectedForReq.size} 个功能点发起改造需求`
+                  : '先勾选功能点（列表左侧 ☐），再发起改造需求'
+              }
+            >
+              📝{selectedForReq.size > 0 ? ` ${selectedForReq.size}` : ''}
+            </button>
+            <button
+              type="button"
               onClick={reindex}
               className="rounded px-1.5 py-0.5 text-2xs transition-colors hover:bg-vscode-border"
               style={{ color: '#0451a5' }}
@@ -146,10 +300,82 @@ export function BusinessFeatureTree(): JSX.Element {
             <Stat label="高危" value={stats.highRisk} color="#f48771" />
           )}
         </div>
+
+        {/* 功能点搜索 */}
+        <div className="relative mt-2">
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="🔍 搜索功能点…"
+            className="w-full rounded border px-2 py-1 text-2xs outline-none focus:border-[#007acc]"
+            style={{
+              backgroundColor: '#ffffff',
+              borderColor: '#d4d4d4',
+              color: '#1f1f1f',
+            }}
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="absolute right-1 top-1/2 -translate-y-1/2 rounded px-1 text-2xs hover:bg-vscode-border"
+              style={{ color: '#616161' }}
+              title="清除搜索"
+            >
+              ✕
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* AI 提取进度 / 失败提示横幅（含进度条） */}
+      {(extracting || extractError) && (
+        <div
+          className="flex-shrink-0 border-b px-3 py-1.5 text-2xs"
+          style={{
+            borderColor: '#d4d4d4',
+            backgroundColor: '#f8f8f8',
+            color: extracting ? '#0451a5' : '#cd3131',
+          }}
+        >
+          <div>
+            {extracting
+              ? `⏳ ${EXTRACT_STAGE_TEXT[extractStage ?? 'pending'] ?? extractStage}${
+                  extractProgress !== null ? ` ${extractProgress}%` : ''
+                }`
+              : `⚠ ${extractError}`}
+          </div>
+          {extracting && (
+            <div
+              className="mt-1 h-1 w-full overflow-hidden rounded"
+              style={{ backgroundColor: '#e0e0e0' }}
+            >
+              <div
+                className={`h-full transition-all duration-700 ease-out${
+                  extractProgress === null ? ' animate-pulse' : ''
+                }`}
+                style={{
+                  backgroundColor: '#007acc',
+                  // pending/scanning 阶段无百分比 → 细条呼吸动画提示进行中
+                  width: `${extractProgress ?? 4}%`,
+                }}
+              />
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 分类树 */}
       <div className="flex-1 overflow-auto p-1">
+        {expandedCategoriesList.length === 0 && searchQuery.trim() && (
+          <div
+            className="px-2 py-4 text-center text-2xs"
+            style={{ color: '#616161' }}
+          >
+            没有匹配「{searchQuery.trim()}」的功能点
+          </div>
+        )}
         {expandedCategoriesList.map((category) => {
           const items = grouped.get(category) ?? [];
           const catOpen = expandedCategories.has(category);
@@ -196,6 +422,25 @@ export function BusinessFeatureTree(): JSX.Element {
                             color: '#1f1f1f',
                           }}
                         >
+                          {/* reqflow V1 多选勾选框（发起改造需求用） */}
+                          <span
+                            role="checkbox"
+                            aria-checked={selectedForReq.has(f.id)}
+                            aria-label={`勾选 ${f.name} 发起改造需求`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleReqSelect(f.id);
+                            }}
+                            className="cursor-pointer select-none"
+                            style={{
+                              color: selectedForReq.has(f.id)
+                                ? '#007acc'
+                                : '#a0a0a0',
+                              fontSize: 11,
+                            }}
+                          >
+                            {selectedForReq.has(f.id) ? '☑' : '☐'}
+                          </span>
                           <span
                             className="transition-transform duration-150"
                             style={{

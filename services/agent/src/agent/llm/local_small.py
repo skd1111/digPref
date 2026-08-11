@@ -4,14 +4,17 @@ Phase 4 V0：端侧模型只做"思考"（分类 + 列计划），不执行。
 - 正常模式：简单任务先走端侧 → 失败回退 Ollama/云端
 - 性能模式：跳过端侧，直走云端
 """
+
 from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
+from agent.llm.json_discipline import extract_json, parse_with_retry
+from agent.llm.token_usage import record_openai_usage
 from agent.llm.types import Intent
 
 logger = logging.getLogger("agent.llm.local_small")
@@ -67,7 +70,16 @@ class LocalSmallLLMClient:
                 r = await c.post(f"{self.base_url}/chat/completions", json=payload)
                 r.raise_for_status()
                 body = r.json()
-                return body["choices"][0]["message"]
+                msg = body["choices"][0]["message"]
+                # Token 计量（端侧小模型）；usage 缺失时按字符数估算
+                record_openai_usage(
+                    body,
+                    backend="local_small",
+                    model=self.model,
+                    fallback_messages=messages,
+                    fallback_output=str(msg.get("content", "") or ""),
+                )
+                return msg
         except httpx.ConnectError as exc:
             logger.debug("local_small: connection refused at %s", self.base_url)
             raise LocalSmallUnavailableError(
@@ -75,9 +87,7 @@ class LocalSmallLLMClient:
             ) from exc
         except httpx.TimeoutException as exc:
             logger.debug("local_small: request timed out")
-            raise LocalSmallUnavailableError(
-                "Local small model request timed out"
-            ) from exc
+            raise LocalSmallUnavailableError("Local small model request timed out") from exc
         except (KeyError, IndexError) as exc:
             logger.debug("local_small: unexpected response shape: %s", exc)
             raise LocalSmallUnavailableError(
@@ -91,32 +101,39 @@ class LocalSmallLLMClient:
         if not text or not text.strip():
             return "query"
         try:
-            msg = await self._chat(
-                [
-                    {
-                        "role": "system",
-                        "content": (
-                            "你是一个意图分类器。分析用户输入，返回以下意图之一：\n"
-                            "- query: 查询/读取数据\n"
-                            "- mutate: 修改/写入数据\n"
-                            "- orchestrate: 跨系统编排/部署\n"
-                            "- chitchat: 闲聊/问候\n\n"
-                            "只返回 JSON：{\"intent\": \"<意图>\"}"
-                        ),
-                    },
-                    {"role": "user", "content": text},
-                ],
-                max_tokens=32,
-                temperature=0.0,
-                timeout=3.0,
-                response_format={"type": "json_object"},
-            )
-            payload = json.loads(msg["content"])
+
+            async def _call(hint: str, last: str) -> str:
+                user_content = text + (f"\n\n{hint}" if hint else "")
+                msg = await self._chat(
+                    [
+                        {
+                            "role": "system",
+                            "content": (
+                                "你是一个意图分类器。分析用户输入，返回以下意图之一：\n"
+                                "- query: 查询/读取数据\n"
+                                "- mutate: 修改/写入数据\n"
+                                "- orchestrate: 跨系统编排/部署\n"
+                                "- chitchat: 闲聊/问候\n\n"
+                                '只返回 JSON：{"intent": "<意图>"}'
+                            ),
+                        },
+                        {"role": "user", "content": user_content},
+                    ],
+                    max_tokens=32,
+                    temperature=0.0,
+                    timeout=3.0,
+                    response_format={"type": "json_object"},
+                )
+                return str(msg["content"])
+
+            payload = await parse_with_retry(_call, lambda t: extract_json(t, want="object"))
+            if not isinstance(payload, dict):
+                return "query"
             intent = payload.get("intent", "query")
             if intent not in ("query", "mutate", "orchestrate", "chitchat"):
                 return "query"
-            return intent  # type: ignore[return-value]
-        except (LocalSmallUnavailableError, json.JSONDecodeError, TypeError, KeyError):
+            return cast(Intent, intent)
+        except (LocalSmallUnavailableError, TypeError, KeyError):
             return "query"  # 安全兜底
 
     # ---- Plan generation (端侧核心能力 #2) ---------------------------------
@@ -133,26 +150,36 @@ class LocalSmallLLMClient:
         try:
             sys_prompt = (
                 "你是一个任务规划器。根据用户请求和可用工具，生成执行计划。\n"
-                "返回 JSON：{\"explanation\": \"<简短说明>\", \"steps\": [...]}\n"
-                "每个 step：{\"server\": \"<MCP server>\", \"name\": \"<工具名>\", "
-                "\"args\": {}, \"risk_level\": \"read|low|medium|high|critical\", "
-                "\"rationale\": \"<原因>\"}"
+                '返回 JSON：{"explanation": "<简短说明>", "steps": [...]}\n'
+                '每个 step：{"server": "<MCP server>", "name": "<工具名>", '
+                '"args": {}, "risk_level": "read|low|medium|high|critical", '
+                '"rationale": "<原因>"}'
             )
             tools_text = json.dumps(tool_specs, ensure_ascii=False, indent=2)
-            msg = await self._chat(
-                [
-                    {"role": "system", "content": f"{sys_prompt}\n\n可用工具：\n{tools_text}"},
-                    {"role": "user", "content": user_prompt},
-                ],
-                max_tokens=512,
-                temperature=0.1,
-                timeout=5.0,
-                response_format={"type": "json_object"},
-            )
-            payload = json.loads(msg["content"])
+
+            async def _call(hint: str, last: str) -> str:
+                user_content = user_prompt + (f"\n\n{hint}" if hint else "")
+                msg = await self._chat(
+                    [
+                        {
+                            "role": "system",
+                            "content": f"{sys_prompt}\n\n可用工具：\n{tools_text}",
+                        },
+                        {"role": "user", "content": user_content},
+                    ],
+                    max_tokens=512,
+                    temperature=0.1,
+                    timeout=5.0,
+                    response_format={"type": "json_object"},
+                )
+                return str(msg["content"])
+
+            payload = await parse_with_retry(_call, lambda t: extract_json(t, want="object"))
+            if not isinstance(payload, dict):
+                return [], ""
             steps = payload.get("steps") or []
             return steps, payload.get("explanation", "")
-        except (LocalSmallUnavailableError, json.JSONDecodeError, TypeError, KeyError):
+        except (LocalSmallUnavailableError, TypeError, KeyError):
             return [], ""  # 安全兜底：空计划
 
     # ---- Repair (端侧不擅长，走云端；保留接口兼容) --------------------------

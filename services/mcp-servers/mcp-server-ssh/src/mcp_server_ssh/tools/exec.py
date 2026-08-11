@@ -1,4 +1,5 @@
 """ssh.exec —— 在远程主机上执行命令。"""
+
 from __future__ import annotations
 
 from mcp_server_ssh.client import connect
@@ -28,7 +29,7 @@ async def run(args: dict) -> dict:
     return {
         "ok": proc.exit_status == 0,
         "exit_status": proc.exit_status,
-        "stdout": stdout[:8000],   # 取前 8000 字符（而非末尾）
+        "stdout": stdout[:8000],  # 取前 8000 字符（而非末尾）
         "stderr": stderr[:4000],
         "truncated": truncated,
     }

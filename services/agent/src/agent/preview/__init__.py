@@ -49,34 +49,28 @@ from agent.preview.vite_manager import (
 )
 
 __all__ = [
-    # 枚举 / 数据模型
-    "Framework",
-    "PreviewStatus",
-    "DeviceMode",
-    "StartPreviewRequest",
-    "PreviewSession",
-    "HmrStatusEvent",
-    "BuildErrorEvent",
-    "InstallProgressEvent",
-    # 框架检测
-    "detect_framework",
-    "find_project_root",
-    "get_package_manager",
-    # 端口分配
-    "PortAllocator",
-    "get_default_allocator",
-    # 会话 / Vite 子进程管理
-    "SessionManager",
-    "get_default_manager",
-    "reset_default_manager",
-    "VitePreviewManager",
-    "get_default_vite_manager",
-    "reset_default_vite_manager",
-    # 事件常量（与 graph/stream.py + sse_bridge.rs + events.ts 三处同步）
+    "EVT_PREVIEW_BUILD_ERROR",
     "EVT_PREVIEW_HMR_CONNECTED",
     "EVT_PREVIEW_HMR_DISCONNECTED",
-    "EVT_PREVIEW_BUILD_ERROR",
     "EVT_PREVIEW_INSTALL_PROGRESS",
-    # API router
+    "BuildErrorEvent",
+    "DeviceMode",
+    "Framework",
+    "HmrStatusEvent",
+    "InstallProgressEvent",
+    "PortAllocator",
+    "PreviewSession",
+    "PreviewStatus",
+    "SessionManager",
+    "StartPreviewRequest",
+    "VitePreviewManager",
+    "detect_framework",
+    "find_project_root",
+    "get_default_allocator",
+    "get_default_manager",
+    "get_default_vite_manager",
+    "get_package_manager",
     "preview_api_router",
+    "reset_default_manager",
+    "reset_default_vite_manager",
 ]

@@ -13,6 +13,7 @@ V2 增量：
       `graph/stream.py` 的 `consume_router_events()` 拉出来转 SSE 推到前端。
       解决 CLAUDE.md §4 SSE 三处同步红线（Python 漏发 3 个 llm_* 事件）。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -26,7 +27,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
-from agent.llm.models import LLMBackend, RoutingDecision
+from agent.llm.models import RoutingDecision
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,7 @@ def _router_db_path() -> Path:
         p = Path(env_path)
     else:
         from agent.config import settings
+
         p = Path(settings.llm_router_db_path)
     if not p.is_absolute():
         # 相对路径 + 当前 cwd；测试时 cwd 已被 chdir 到 tmp_path

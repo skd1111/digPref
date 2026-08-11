@@ -15,15 +15,25 @@ use std::sync::Arc;
 
 use futures_util::StreamExt;
 use reqwest_eventsource::Event;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, Mutex};
 
 use crate::error::{AppError, AppResult};
 
+/// 会话上下文单条消息（2026-08-06）：前端把当前 tab 最近几轮对话
+/// 随 agent_chat 传进来，Rust 侧不解析语义，原样拼进 chat 请求体的
+/// `history` 字段，后端注入 graph 初始 messages（解决跨轮次上下文丢失）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryMsg {
+    pub role: String,
+    pub content: String,
+}
+
 
 /// Channel name mapping. Must match `apps/desktop/src/ipc/events.ts::EVT`.
-mod channel {
+pub mod channel {
     pub const MESSAGE:  &str = "agent://message";
     pub const TOOL_CALL: &str = "agent://tool_call";
     pub const TOOL_RESULT: &str = "agent://tool_result";
@@ -37,6 +47,8 @@ mod channel {
     pub const LLM_ROUTE_DECIDED: &str = "agent://llm_route_decided";
     pub const LLM_DEGRADED: &str = "agent://llm_degraded";
     pub const LLM_BUDGET_ALERT: &str = "agent://llm_budget_alert";
+    // Phase 17 缓存命中统计
+    pub const LLM_CACHE_STATS: &str = "agent://llm_cache_stats";
 
     // Phase 2G V1.3 业务功能点导航 —— SSE 三处同步（CLAUDE.md §4）
     pub const BIZNAV_YAML_RELOADED: &str = "agent://biznav_yaml_reloaded";
@@ -98,6 +110,10 @@ mod channel {
     pub const DATA_PYTHON_RESULT: &str = "agent://data_python_result";
     pub const DATA_CHART_READY: &str = "agent://data_chart_ready";
     pub const DATA_EXPORT_DONE: &str = "agent://data_export_done";
+    // Phase 7 补齐：大结果集 WS + Arrow 中继事件（非 SSE，Rust 主动 emit）
+    // data_stream_chunk：Arrow 批/元数据帧；data_stream_done：流结束
+    pub const DATA_STREAM_CHUNK: &str = "agent://data_stream_chunk";
+    pub const DATA_STREAM_DONE: &str = "agent://data_stream_done";
 
     // Phase 6 V1.5 会话管理 —— SSE 三处同步（CLAUDE.md §4）
     // compression_applied：CompressionRouter 选策略后实际执行压缩 → 前端可显示压缩提示
@@ -178,12 +194,15 @@ impl SseBridge {
     /// Start a new chat run. Returns a handle for later cancellation.
     ///
     /// Phase 18：work_mode / autonomy 可选透传进 chat 请求体（Rust 不解析语义）。
+    /// history：会话上下文（当前 tab 最近几轮对话），透传进请求体。
     pub async fn start_run(
         self: Arc<Self>,
         run_id: String,
         prompt: String,
         work_mode: Option<String>,
         autonomy: Option<String>,
+        inference_mode: Option<String>,
+        history: Option<Vec<HistoryMsg>>,
     ) -> AppResult<RunHandle> {
         crate::agent_manager::app_log(&format!("[sse_bridge] start_run 进入 run_id={}, prompt.len={}", run_id, prompt.len()));
         // Cancel any pre-existing run with the same id
@@ -216,6 +235,15 @@ impl SseBridge {
                 }
                 if let Some(am) = autonomy {
                     body["autonomy"] = Value::String(am);
+                }
+                if let Some(im) = inference_mode {
+                    body["inferenceMode"] = Value::String(im);
+                }
+                if let Some(h) = history {
+                    if !h.is_empty() {
+                        body["history"] = serde_json::to_value(&h)
+                            .unwrap_or(Value::Array(vec![]));
+                    }
                 }
                 body
             });
@@ -279,6 +307,12 @@ impl SseBridge {
                     es.close();
                     let _ = app.emit(channel::LOG, serde_json::json!({
                         "line": format!("[run {}] cancelled by user", run_id_for_task),
+                    }));
+                    // 2026-08-07：取消后补发 done 事件，让前端解除 busy 状态
+                    // （否则 ThinkingIndicator / 停止按钮会卡在运行态）
+                    let _ = app.emit(channel::DONE, serde_json::json!({
+                        "runId": run_id_for_task,
+                        "reason": "cancelled",
                     }));
                 }
             }
@@ -368,6 +402,7 @@ fn map_event_to_channel(event_name: &str) -> &'static str {
         "llm_route_decided" => channel::LLM_ROUTE_DECIDED,   // Phase 2C V0
         "llm_degraded"      => channel::LLM_DEGRADED,
         "llm_budget_alert"  => channel::LLM_BUDGET_ALERT,
+        "llm_cache_stats"   => channel::LLM_CACHE_STATS,     // Phase 17
         // Phase 2G V1.3：业务功能点 SSE 三处同步（CLAUDE.md §4）
         "biznav_yaml_reloaded"   => channel::BIZNAV_YAML_RELOADED,
         "biznav_feature_affected" => channel::BIZNAV_FEATURE_AFFECTED,

@@ -1,0 +1,139 @@
+"""Phase 7 补齐 · sql/run 真实链路测试（缺口 1/4/10）。
+
+覆盖：
+  - SELECT 白名单第一层（DELETE 等非 SELECT → 403）
+  - 重查询 HITL：多表 JOIN 未确认 → needs_confirm（不执行）
+  - confirmed=true 后真实执行（mock ReadOnlyPool）
+  - 结果落 analysis_tasks（/data/tasks 可查）
+  - 大小结果分流：≤500 行内联；>500 行落 Parquet + stream_ref
+"""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, patch
+
+import pandas as pd
+import pytest
+from agent.config import settings
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "data_expert_db_path", str(tmp_path / "d.db"))
+    monkeypatch.setattr(settings, "data_result_dir", str(tmp_path / "results"))
+    monkeypatch.setattr(settings, "env", "prod")
+    monkeypatch.setattr(settings, "data_allow_non_select_in_dev", False)
+    from agent.dataexpert.storage import reset_default_storage
+
+    reset_default_storage()
+    from agent.dataexpert.api import router
+
+    app = FastAPI()
+    app.include_router(router)
+    with TestClient(app) as c:
+        yield c
+    reset_default_storage()
+
+
+def test_run_sql_write_blocked(client):
+    """写操作 → 403（白名单/黑名单双层）。"""
+    r = client.post("/data/sql/run", json={"sql": "DELETE FROM t"})
+    assert r.status_code == 403
+
+
+def test_run_sql_non_select_blocked(client):
+    """缺口 10：非 SELECT（SET）→ 403。"""
+    r = client.post("/data/sql/run", json={"sql": "SET @x = 1"})
+    assert r.status_code == 403
+
+
+def test_run_sql_needs_confirm(client):
+    """多表 JOIN 未确认 → needs_confirm，不执行。"""
+    r = client.post(
+        "/data/sql/run",
+        json={"sql": "SELECT a.x, b.y FROM a JOIN b ON a.id=b.id WHERE a.x>0"},
+    )
+    body = r.json()
+    assert body["needs_confirm"] is True
+
+
+def test_run_sql_missing_connection(client):
+    """无 connection 且无 source_id → 400。"""
+    r = client.post("/data/sql/run", json={"sql": "SELECT * FROM t WHERE id=1"})
+    assert r.status_code == 400
+
+
+def test_run_sql_executes_and_persists(client):
+    """真实执行 + 任务落库。"""
+    df = pd.DataFrame({"id": [1, 2], "name": ["a", "b"]})
+    with patch("agent.dataexpert.api.ReadOnlyPool") as pool_cls:
+        pool_cls.return_value.execute_sql = AsyncMock(return_value=df)
+        pool_cls.return_value.close = AsyncMock()
+        r = client.post(
+            "/data/sql/run",
+            json={
+                "sql": "SELECT * FROM t WHERE id=1",
+                "connection": {"type": "sqlite", "path": ":memory:"},
+            },
+        )
+    body = r.json()
+    assert body["ok"] is True
+    assert body["row_count"] == 2
+    assert body["columns"] == ["id", "name"]
+    assert body["rows"] == [[1, "a"], [2, "b"]]
+    assert body["task_id"]
+    assert body["stream_ref"] == ""  # 小结果内联
+
+    t = client.get("/data/tasks").json()
+    assert t["count"] == 1
+    assert t["tasks"][0]["query_sql"].startswith("SELECT")
+
+
+def test_run_sql_large_result_goes_parquet(client):
+    """>500 行 → Parquet + stream_ref，rows 为空。"""
+    df = pd.DataFrame({"n": list(range(600))})
+    with patch("agent.dataexpert.api.ReadOnlyPool") as pool_cls:
+        pool_cls.return_value.execute_sql = AsyncMock(return_value=df)
+        pool_cls.return_value.close = AsyncMock()
+        r = client.post(
+            "/data/sql/run",
+            json={
+                "sql": "SELECT n FROM t WHERE n>0",
+                "connection": {"type": "sqlite", "path": ":memory:"},
+            },
+        )
+    body = r.json()
+    assert body["rows"] == []
+    assert body["result_data_ref"]
+    assert body["stream_ref"] == f"/data/stream/{body['task_id']}"
+
+
+def test_run_sql_confirmed_heavy_executes(client):
+    """confirmed=true 的重查询放行执行。"""
+    df = pd.DataFrame({"x": [1]})
+    with patch("agent.dataexpert.api.ReadOnlyPool") as pool_cls:
+        pool_cls.return_value.execute_sql = AsyncMock(return_value=df)
+        pool_cls.return_value.close = AsyncMock()
+        r = client.post(
+            "/data/sql/run",
+            json={
+                "sql": "SELECT a.x, b.y FROM a JOIN b ON a.id=b.id WHERE a.x>0",
+                "confirmed": True,
+                "connection": {"type": "sqlite", "path": ":memory:"},
+            },
+        )
+    assert r.json()["ok"] is True
+
+
+def test_nl2sql_rejects_non_select_generated(client):
+    """缺口 10：LLM 生成非 SELECT → 丢弃不下发（sql 为空 + error 说明）。"""
+    with patch(
+        "agent.dataexpert.nl2sql.generator.to_sql",
+        new=AsyncMock(return_value="DROP TABLE t_order"),
+    ):
+        r = client.post("/data/nl2sql", json={"question": "删表"})
+    body = r.json()
+    assert body["sql"] == ""
+    assert "拒绝" in body["error"]

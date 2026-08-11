@@ -4,6 +4,7 @@
   - 导出文件嵌入隐形水印（操作人 + 时间 + IP），泄露可溯源
   - 导出前必过 Phase 4 PII 脱敏引擎（卡号/身份证/手机/金额形态）
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -30,7 +31,9 @@ def generate_watermark_text(
     return f"EAIDE | {operator} | {ts} | {ip}"
 
 
-def embed_watermark_metadata(export_meta: dict[str, Any], operator: str = "current_user") -> dict[str, Any]:
+def embed_watermark_metadata(
+    export_meta: dict[str, Any], operator: str = "current_user"
+) -> dict[str, Any]:
     """在导出元数据中嵌入水印信息。
 
     Args:
@@ -44,9 +47,9 @@ def embed_watermark_metadata(export_meta: dict[str, Any], operator: str = "curre
         return export_meta
 
     export_meta["watermark"] = generate_watermark_text(operator)
-    export_meta["watermark_hash"] = hashlib.sha256(
-        export_meta["watermark"].encode()
-    ).hexdigest()[:16]
+    export_meta["watermark_hash"] = hashlib.sha256(export_meta["watermark"].encode()).hexdigest()[
+        :16
+    ]
     return export_meta
 
 
@@ -66,8 +69,18 @@ def mask_pii_columns(columns: list[str], rows: list[list[Any]]) -> list[list[Any
     if not settings.data_require_mask_on_export:
         return rows
 
-    pii_keywords = ("phone", "mobile", "id_card", "idcard", "card_no", "bank_card",
-                    "手机", "身份证", "卡号", "电话")
+    pii_keywords = (
+        "phone",
+        "mobile",
+        "id_card",
+        "idcard",
+        "card_no",
+        "bank_card",
+        "手机",
+        "身份证",
+        "卡号",
+        "电话",
+    )
 
     # 找出需要脱敏的列索引
     mask_indices: set[int] = set()

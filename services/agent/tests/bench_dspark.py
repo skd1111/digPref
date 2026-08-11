@@ -10,11 +10,11 @@
     # 或：
     uv run python -m agent.tests.bench_dspark  # 无依赖（脚本）
 """
+
 from __future__ import annotations
 
 import asyncio
 import json
-import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -24,11 +24,12 @@ from agent.llm.dspark.llamacpp_backend import MockDSparkBackend
 @dataclass
 class BenchScenario:
     """单个测试场景。"""
+
     name: str
     task_category: str
     prompt: str
     max_tokens: int
-    expected_mode: str        # 'aggressive' / 'standard' / 'conservative' / 'off'
+    expected_mode: str  # 'aggressive' / 'standard' / 'conservative' / 'off'
 
 
 SCENARIOS: list[BenchScenario] = [
@@ -73,6 +74,7 @@ SCENARIOS: list[BenchScenario] = [
 @dataclass
 class BenchResult:
     """单个场景的基准结果。"""
+
     scenario: str
     task_category: str
     expected_mode: str
@@ -80,9 +82,9 @@ class BenchResult:
     speedup_ratio: float
     drafted_tokens: int
     accepted_tokens: int
-    acceptance_rate: float       # accepted / drafted
+    acceptance_rate: float  # accepted / drafted
     duration_ms: int
-    meets_threshold: bool         # 是否达到验收阈值（≥ 50% CPU / ≥ 40% GPU）
+    meets_threshold: bool  # 是否达到验收阈值（≥ 50% CPU / ≥ 40% GPU）
 
 
 _THRESHOLD_CPU = 1.5  # MockDSparkBackend 用 2.0x；真实 GPU/CPU 期望 ≥ 1.5x 加速
@@ -97,12 +99,20 @@ async def run_scenario(scenario: BenchScenario, backend: MockDSparkBackend) -> B
         max_tokens=scenario.max_tokens,
         temperature=0.0,
         task_category=scenario.task_category,
-        n_draft=8 if scenario.expected_mode == "aggressive" else
-                4 if scenario.expected_mode == "standard" else
-                2 if scenario.expected_mode == "conservative" else 1,
-        draft_p_min=0.75 if scenario.expected_mode == "aggressive" else
-                   0.85 if scenario.expected_mode == "standard" else
-                   0.90 if scenario.expected_mode == "conservative" else 1.0,
+        n_draft=8
+        if scenario.expected_mode == "aggressive"
+        else 4
+        if scenario.expected_mode == "standard"
+        else 2
+        if scenario.expected_mode == "conservative"
+        else 1,
+        draft_p_min=0.75
+        if scenario.expected_mode == "aggressive"
+        else 0.85
+        if scenario.expected_mode == "standard"
+        else 0.90
+        if scenario.expected_mode == "conservative"
+        else 1.0,
         draft_model_path="models/draft/qwen2.5-0.1b-instruct-q4_k_m.gguf",
     )
     # 基线：禁用 DSpark（n_draft=1, draft_p_min=1.0）
@@ -111,7 +121,8 @@ async def run_scenario(scenario: BenchScenario, backend: MockDSparkBackend) -> B
         max_tokens=scenario.max_tokens,
         temperature=0.0,
         task_category=scenario.task_category,
-        n_draft=1, draft_p_min=1.0,
+        n_draft=1,
+        draft_p_min=1.0,
         draft_model_path=None,
     )
     # 加速比 = baseline_time / dspark_time（越大越好）
@@ -122,9 +133,7 @@ async def run_scenario(scenario: BenchScenario, backend: MockDSparkBackend) -> B
     accepted = r_dspark.accepted_tokens
     drafted = r_dspark.drafted_tokens or scenario.max_tokens
     accept_rate = accepted / max(1, drafted)
-    meets = (
-        speedup >= _THRESHOLD_CPU and accept_rate >= _THRESHOLD_ACCEPTANCE
-    )
+    meets = speedup >= _THRESHOLD_CPU and accept_rate >= _THRESHOLD_ACCEPTANCE
     return BenchResult(
         scenario=scenario.name,
         task_category=scenario.task_category,
@@ -169,19 +178,23 @@ async def main() -> int:
     # 写入报告
     report_path = Path(__file__).parent / "bench_dspark_report.json"
     report_path.write_text(
-        json.dumps({
-            "summary": {
-                "passed": passed,
-                "total": len(results),
-                "avg_speedup_ratio": round(avg_speedup, 2),
-                "avg_acceptance_rate": round(avg_accept, 2),
-                "thresholds": {
-                    "speedup_cpu_min": _THRESHOLD_CPU,
-                    "acceptance_rate_min": _THRESHOLD_ACCEPTANCE,
+        json.dumps(
+            {
+                "summary": {
+                    "passed": passed,
+                    "total": len(results),
+                    "avg_speedup_ratio": round(avg_speedup, 2),
+                    "avg_acceptance_rate": round(avg_accept, 2),
+                    "thresholds": {
+                        "speedup_cpu_min": _THRESHOLD_CPU,
+                        "acceptance_rate_min": _THRESHOLD_ACCEPTANCE,
+                    },
                 },
+                "scenarios": [asdict(r) for r in results],
             },
-            "scenarios": [asdict(r) for r in results],
-        }, indent=2, ensure_ascii=False),
+            indent=2,
+            ensure_ascii=False,
+        ),
         encoding="utf-8",
     )
     print(f"[bench] report written to {report_path}")
@@ -191,4 +204,5 @@ async def main() -> int:
 
 if __name__ == "__main__":
     import sys
+
     sys.exit(asyncio.run(main()))

@@ -18,6 +18,7 @@ CLAUDE.md §6 红线：
 - L3 只存元数据（entity / action / 摘要）；原始对话不入库
 - compression_log 完整记录策略 + ratio（可观测性 + 未来 PPO 训练数据）
 """
+
 from __future__ import annotations
 
 import logging
@@ -25,10 +26,10 @@ import time
 from typing import Any
 
 from agent.sessions.models_macc import (
+    DEFAULT_ANCHORS,
     CompressionContext,
     CompressionResult,
     CompressionStrategy,
-    DEFAULT_ANCHORS,
     EventNode,
     GistToken,
     SemanticRule,
@@ -41,10 +42,10 @@ logger = logging.getLogger(__name__)
 # ---- 阈值常量（设计 §5.2）-----------------------------------------------
 
 _TOKEN_THRESHOLDS: dict[str, int] = {
-    "tiny": 8_000,         # < 8K → NONE
-    "small": 32_000,        # 8K-32K → WORKING_ONLY
-    "medium": 128_000,      # 32K-128K → MEMORY
-    "large": 1_000_000,     # 128K-1M → HYBRID（含 L1）
+    "tiny": 8_000,  # < 8K → NONE
+    "small": 32_000,  # 8K-32K → WORKING_ONLY
+    "medium": 128_000,  # 32K-128K → MEMORY
+    "large": 1_000_000,  # 128K-1M → HYBRID（含 L1）
 }
 
 _MSG_THRESHOLDS: dict[str, int] = {
@@ -123,16 +124,25 @@ class CompressionRouter:
         if ctx.idle_time_s >= _IDLE_TRIGGER_S:
             return "MEMORY"
         # 超长 → HYBRID（含 L1）
-        if ctx.token_count >= _TOKEN_THRESHOLDS["medium"] and ctx.message_count > _MSG_THRESHOLDS["medium"]:
+        if (
+            ctx.token_count >= _TOKEN_THRESHOLDS["medium"]
+            and ctx.message_count > _MSG_THRESHOLDS["medium"]
+        ):
             return "HYBRID"
         # 多模态 → GIST
         if ctx.has_multimodal and ctx.token_count >= 64_000:
             return "GIST"
         # 长会话 → MEMORY
-        if ctx.token_count >= _TOKEN_THRESHOLDS["small"] and ctx.message_count > _MSG_THRESHOLDS["small"]:
+        if (
+            ctx.token_count >= _TOKEN_THRESHOLDS["small"]
+            and ctx.message_count > _MSG_THRESHOLDS["small"]
+        ):
             return "MEMORY"
         # 中等 → WORKING_ONLY
-        if ctx.token_count >= _TOKEN_THRESHOLDS["tiny"] and ctx.message_count > _MSG_THRESHOLDS["tiny"]:
+        if (
+            ctx.token_count >= _TOKEN_THRESHOLDS["tiny"]
+            and ctx.message_count > _MSG_THRESHOLDS["tiny"]
+        ):
             return "WORKING_ONLY"
         # 默认 → NONE（短对话）
         return "NONE"
@@ -209,7 +219,9 @@ class CompressionRouter:
     # ---- L3 工作记忆 ----------------------------------------------------
 
     def _build_working_memory(
-        self, ctx: CompressionContext, messages: list[dict[str, Any]],
+        self,
+        ctx: CompressionContext,
+        messages: list[dict[str, Any]],
     ) -> list[str]:
         """滑动窗口 + 关键状态锚点（设计 §2.1）。
 
@@ -228,7 +240,7 @@ class CompressionRouter:
             )
         # 2. 滑动窗口
         if messages:
-            tail = messages[-self.window_size:]
+            tail = messages[-self.window_size :]
             for m in tail:
                 role = m.get("role", "?")
                 content = str(m.get("content", "")).strip()
@@ -268,7 +280,8 @@ class CompressionRouter:
     def _load_semantic_rules(self, ctx: CompressionContext) -> list[SemanticRule]:
         """从 storage 读 session 的语义规则（按 confidence 排序 + top 5）。"""
         rules_dicts = self.storage.list_semantic_rules(
-            min_confidence=0.3, limit=5,
+            min_confidence=0.3,
+            limit=5,
         )
         return [
             SemanticRule(

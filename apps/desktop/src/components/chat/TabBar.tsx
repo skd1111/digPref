@@ -4,11 +4,20 @@
  * 显示当前所有打开的会话；单击切换；右侧 "+" 新建；右上角关闭按钮。
  * 当前 active tab 顶部有蓝色 2px 边框，背景与编辑器同色。
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { ipc } from '@/ipc/invoke';
 import { useChatStore, type ChatTab } from '@/store/chatStore';
+import { useUIStore } from '@/store/uiStore';
+
+/** AI 标题摘要每个 tab 只尝试一次（2026-08-07，失败不重试避免刷屏） */
+const aiTitledTabs = new Set<string>();
 
 export function TabBar(): JSX.Element {
-  const tabs = useChatStore((s) => s.tabs);
+  const allTabs = useChatStore((s) => s.tabs);
+  // 模式隔离（2026-08-11）：只展示当前模式的页签，专家团对话不串进开发模式
+  const mode = useUIStore((s) => s.mode);
+  const targetMode = mode === 'operator' ? 'operator' : 'full';
+  const tabs = allTabs.filter((t) => (t.mode ?? 'full') === targetMode);
   const activeId = useChatStore((s) => s.activeTabId);
   const newTab = useChatStore((s) => s.newTab);
   const closeTab = useChatStore((s) => s.closeTab);
@@ -19,6 +28,29 @@ export function TabBar(): JSX.Element {
   const [editing, setEditing] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
   const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const busy = useChatStore((s) => s.busy);
+
+  // AI 标题（2026-08-07）：首轮对话完成后（user + assistant 都有且流已停），
+  // 用 AI 摘要替换自动截断标题；手动改过的标题不动；失败保留截断标题
+  useEffect(() => {
+    if (busy) return;
+    for (const tab of allTabs) {
+      if (aiTitledTabs.has(tab.id)) continue;
+      const firstUser = tab.messages.find((m) => m.role === 'user' && m.content);
+      const firstAssistant = tab.messages.find((m) => m.role === 'assistant' && m.content);
+      if (!firstUser || !firstAssistant) continue;
+      const provisional = (firstUser.content ?? '').slice(0, 30).replace(/\n/g, ' ');
+      if (tab.title !== '新会话' && tab.title !== provisional) continue;
+      aiTitledTabs.add(tab.id);
+      void ipc
+        .summarizeTitle(firstUser.content ?? '', firstAssistant.content ?? '')
+        .then((r) => {
+          const t = (r.title ?? '').trim();
+          if (t) renameTab(tab.id, t);
+        })
+        .catch(() => undefined);
+    }
+  }, [allTabs, busy, renameTab]);
 
   // 当用户发首条消息时，自动从首条 user 消息更新 tab 标题
   const autoTitleIfEmpty = (tab: ChatTab): void => {
@@ -34,7 +66,7 @@ export function TabBar(): JSX.Element {
   return (
     <div
       className="flex h-[35px] select-none items-stretch overflow-x-auto"
-      style={{ backgroundColor: '#f3f3f3', borderBottom: '1px solid #e0e0e0' }}
+      style={{ backgroundColor: '#f5f5f4', borderBottom: '1px solid #e7e5e4' }}
     >
       {tabs.map((tab) => {
         // 第一次见到时尝试自动标题
@@ -75,11 +107,11 @@ export function TabBar(): JSX.Element {
             style={{
               minWidth: 120,
               maxWidth: 240,
-              backgroundColor: isActive ? '#ffffff' : '#ececec',
-              color: isActive ? '#1f1f1f' : '#6e6e6e',
-              borderColor: '#e0e0e0',
-              borderTop: isActive ? '1px solid #007acc' : '1px solid transparent',
-              borderLeft: dragOverId === tab.id ? '2px solid #007acc' : '2px solid transparent',
+              backgroundColor: isActive ? '#ffffff' : '#f5f5f4',
+              color: isActive ? '#202124' : '#6b7280',
+              borderColor: '#e7e5e4',
+              borderTop: isActive ? '1px solid #10a37f' : '1px solid transparent',
+              borderLeft: dragOverId === tab.id ? '2px solid #10a37f' : '2px solid transparent',
             }}
           >
             {/* 关闭按钮 */}
@@ -116,7 +148,7 @@ export function TabBar(): JSX.Element {
                   }
                 }}
                 className="flex-1 bg-transparent text-ui outline-none"
-                style={{ color: '#1f1f1f' }}
+                style={{ color: '#202124' }}
               />
             ) : (
               <span className="flex-1 truncate">

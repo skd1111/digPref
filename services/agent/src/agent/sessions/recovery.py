@@ -10,6 +10,7 @@ CLAUDE.md §1 HITL 不可绕过：恢复动作（打开会话 → 触发 LangGra
 本身不是写操作，不需 HITL；写入的消息走 hitl_gate。
 CLAUDE.md §6 物理隔离：扫描 sessions.db 单表，不跨 db。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -54,7 +55,7 @@ class RecoveryReport:
 
 
 def scan_resumable_sessions(
-    storage: "SessionStorage",
+    storage: SessionStorage,
     *,
     idle_threshold_ms: int = DEFAULT_IDLE_THRESHOLD_MS,
     limit: int = 50,
@@ -89,7 +90,7 @@ def scan_resumable_sessions(
 
 
 __all__ = [
+    "DEFAULT_IDLE_THRESHOLD_MS",
     "RecoveryReport",
     "scan_resumable_sessions",
-    "DEFAULT_IDLE_THRESHOLD_MS",
 ]

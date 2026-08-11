@@ -11,6 +11,7 @@
 V0 全部走 mock 后端（不真做处理，仅走通完整链路 + 写审计）。
 V1 接力时自动切换 ONNX / OpenCV / PaddleOCR（get_default_backend 检测）。
 """
+
 from __future__ import annotations
 
 import uuid
@@ -19,8 +20,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from agent.image_processing.correct import get_correct_backend, reset_correct_backend
-from agent.image_processing.enhance import get_enhance_backend, reset_enhance_backend
+from agent.image_processing.correct import get_correct_backend
+from agent.image_processing.enhance import get_enhance_backend
 from agent.image_processing.events import (
     EVT_IMG_PROCESSING_DONE,
     EVT_IMG_PROCESSING_ERROR,
@@ -41,14 +42,14 @@ from agent.image_processing.models import (
     OcrResponse,
     UnsupportedFormatError,
 )
-from agent.image_processing.ocr import get_ocr_backend, reset_ocr_backend
-from agent.image_processing.storage import get_default_storage, reset_default_storage
-
+from agent.image_processing.ocr import get_ocr_backend
+from agent.image_processing.storage import get_default_storage
 
 router = APIRouter(prefix="/image", tags=["image-processing"])
 
 
 # ---- Pydantic schemas ----------------------------------------------------
+
 
 class EnhanceAPIRequest(BaseModel):
     input_path: str
@@ -93,6 +94,7 @@ class TaskResponse(BaseModel):
 
 # ---- 5 端点 --------------------------------------------------------------
 
+
 @router.post("/enhance", response_model=EnhanceResponse)
 async def enhance(req: EnhanceAPIRequest) -> EnhanceResponse:
     """超分（V0 mock；V1 ONNX Real-ESRGAN 接力）。"""
@@ -106,31 +108,40 @@ async def enhance(req: EnhanceAPIRequest) -> EnhanceResponse:
         device=req.device,
     )
 
-    emit_event_sync(EVT_IMG_PROCESSING_STARTED, {
-        "kind": EVT_IMG_PROCESSING_STARTED,
-        "task_id": task_id,
-        "processing_type": "enhance",
-        "input_path": req.input_path,
-        "algorithm": req.algorithm.value,
-    })
+    emit_event_sync(
+        EVT_IMG_PROCESSING_STARTED,
+        {
+            "kind": EVT_IMG_PROCESSING_STARTED,
+            "task_id": task_id,
+            "processing_type": "enhance",
+            "input_path": req.input_path,
+            "algorithm": req.algorithm.value,
+        },
+    )
 
     try:
         result = await backend.enhance(enhance_req)
     except (UnsupportedFormatError, FileSizeExceededError) as exc:
-        emit_event_sync(EVT_IMG_PROCESSING_ERROR, {
-            "kind": EVT_IMG_PROCESSING_ERROR,
-            "task_id": task_id,
-            "processing_type": "enhance",
-            "error": str(exc),
-        })
+        emit_event_sync(
+            EVT_IMG_PROCESSING_ERROR,
+            {
+                "kind": EVT_IMG_PROCESSING_ERROR,
+                "task_id": task_id,
+                "processing_type": "enhance",
+                "error": str(exc),
+            },
+        )
         raise HTTPException(status_code=400, detail=str(exc))
     except ImageProcessingError as exc:
-        emit_event_sync(EVT_IMG_PROCESSING_ERROR, {
-            "kind": EVT_IMG_PROCESSING_ERROR,
-            "task_id": task_id,
-            "processing_type": "enhance",
-            "error": str(exc),
-        })
+        emit_event_sync(
+            EVT_IMG_PROCESSING_ERROR,
+            {
+                "kind": EVT_IMG_PROCESSING_ERROR,
+                "task_id": task_id,
+                "processing_type": "enhance",
+                "error": str(exc),
+            },
+        )
         raise HTTPException(status_code=422, detail=str(exc))
 
     # 写 storage（best-effort，不阻塞响应）
@@ -159,13 +170,16 @@ async def enhance(req: EnhanceAPIRequest) -> EnhanceResponse:
     except Exception:
         pass
 
-    emit_event_sync(EVT_IMG_PROCESSING_DONE, {
-        "kind": EVT_IMG_PROCESSING_DONE,
-        "task_id": task_id,
-        "processing_type": "enhance",
-        "ok": result.ok,
-        "elapsed_ms": result.elapsed_ms,
-    })
+    emit_event_sync(
+        EVT_IMG_PROCESSING_DONE,
+        {
+            "kind": EVT_IMG_PROCESSING_DONE,
+            "task_id": task_id,
+            "processing_type": "enhance",
+            "ok": result.ok,
+            "elapsed_ms": result.elapsed_ms,
+        },
+    )
     return result
 
 
@@ -181,31 +195,40 @@ async def correct(req: CorrectAPIRequest) -> CorrectResponse:
         auto_detect=req.auto_detect,
     )
 
-    emit_event_sync(EVT_IMG_PROCESSING_STARTED, {
-        "kind": EVT_IMG_PROCESSING_STARTED,
-        "task_id": task_id,
-        "processing_type": "correct",
-        "input_path": req.input_path,
-        "correction_type": req.correction_type.value,
-    })
+    emit_event_sync(
+        EVT_IMG_PROCESSING_STARTED,
+        {
+            "kind": EVT_IMG_PROCESSING_STARTED,
+            "task_id": task_id,
+            "processing_type": "correct",
+            "input_path": req.input_path,
+            "correction_type": req.correction_type.value,
+        },
+    )
 
     try:
         result = await backend.correct(correct_req)
     except (UnsupportedFormatError, FileSizeExceededError) as exc:
-        emit_event_sync(EVT_IMG_PROCESSING_ERROR, {
-            "kind": EVT_IMG_PROCESSING_ERROR,
-            "task_id": task_id,
-            "processing_type": "correct",
-            "error": str(exc),
-        })
+        emit_event_sync(
+            EVT_IMG_PROCESSING_ERROR,
+            {
+                "kind": EVT_IMG_PROCESSING_ERROR,
+                "task_id": task_id,
+                "processing_type": "correct",
+                "error": str(exc),
+            },
+        )
         raise HTTPException(status_code=400, detail=str(exc))
     except ImageProcessingError as exc:
-        emit_event_sync(EVT_IMG_PROCESSING_ERROR, {
-            "kind": EVT_IMG_PROCESSING_ERROR,
-            "task_id": task_id,
-            "processing_type": "correct",
-            "error": str(exc),
-        })
+        emit_event_sync(
+            EVT_IMG_PROCESSING_ERROR,
+            {
+                "kind": EVT_IMG_PROCESSING_ERROR,
+                "task_id": task_id,
+                "processing_type": "correct",
+                "error": str(exc),
+            },
+        )
         raise HTTPException(status_code=422, detail=str(exc))
 
     try:
@@ -229,13 +252,16 @@ async def correct(req: CorrectAPIRequest) -> CorrectResponse:
     except Exception:
         pass
 
-    emit_event_sync(EVT_IMG_PROCESSING_DONE, {
-        "kind": EVT_IMG_PROCESSING_DONE,
-        "task_id": task_id,
-        "processing_type": "correct",
-        "ok": result.ok,
-        "elapsed_ms": result.elapsed_ms,
-    })
+    emit_event_sync(
+        EVT_IMG_PROCESSING_DONE,
+        {
+            "kind": EVT_IMG_PROCESSING_DONE,
+            "task_id": task_id,
+            "processing_type": "correct",
+            "ok": result.ok,
+            "elapsed_ms": result.elapsed_ms,
+        },
+    )
     return result
 
 
@@ -252,31 +278,40 @@ async def ocr(req: OcrAPIRequest) -> OcrResponse:
         device=req.device,
     )
 
-    emit_event_sync(EVT_IMG_PROCESSING_STARTED, {
-        "kind": EVT_IMG_PROCESSING_STARTED,
-        "task_id": task_id,
-        "processing_type": "ocr",
-        "input_path": req.input_path,
-        "languages": list(req.languages),
-    })
+    emit_event_sync(
+        EVT_IMG_PROCESSING_STARTED,
+        {
+            "kind": EVT_IMG_PROCESSING_STARTED,
+            "task_id": task_id,
+            "processing_type": "ocr",
+            "input_path": req.input_path,
+            "languages": list(req.languages),
+        },
+    )
 
     try:
         result = await backend.ocr(ocr_req)
     except (UnsupportedFormatError, FileSizeExceededError) as exc:
-        emit_event_sync(EVT_IMG_PROCESSING_ERROR, {
-            "kind": EVT_IMG_PROCESSING_ERROR,
-            "task_id": task_id,
-            "processing_type": "ocr",
-            "error": str(exc),
-        })
+        emit_event_sync(
+            EVT_IMG_PROCESSING_ERROR,
+            {
+                "kind": EVT_IMG_PROCESSING_ERROR,
+                "task_id": task_id,
+                "processing_type": "ocr",
+                "error": str(exc),
+            },
+        )
         raise HTTPException(status_code=400, detail=str(exc))
     except ImageProcessingError as exc:
-        emit_event_sync(EVT_IMG_PROCESSING_ERROR, {
-            "kind": EVT_IMG_PROCESSING_ERROR,
-            "task_id": task_id,
-            "processing_type": "ocr",
-            "error": str(exc),
-        })
+        emit_event_sync(
+            EVT_IMG_PROCESSING_ERROR,
+            {
+                "kind": EVT_IMG_PROCESSING_ERROR,
+                "task_id": task_id,
+                "processing_type": "ocr",
+                "error": str(exc),
+            },
+        )
         raise HTTPException(status_code=422, detail=str(exc))
 
     try:
@@ -300,13 +335,16 @@ async def ocr(req: OcrAPIRequest) -> OcrResponse:
     except Exception:
         pass
 
-    emit_event_sync(EVT_IMG_PROCESSING_DONE, {
-        "kind": EVT_IMG_PROCESSING_DONE,
-        "task_id": task_id,
-        "processing_type": "ocr",
-        "ok": result.ok,
-        "elapsed_ms": result.elapsed_ms,
-    })
+    emit_event_sync(
+        EVT_IMG_PROCESSING_DONE,
+        {
+            "kind": EVT_IMG_PROCESSING_DONE,
+            "task_id": task_id,
+            "processing_type": "ocr",
+            "ok": result.ok,
+            "elapsed_ms": result.elapsed_ms,
+        },
+    )
     return result
 
 

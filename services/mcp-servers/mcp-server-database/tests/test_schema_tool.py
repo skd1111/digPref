@@ -1,11 +1,11 @@
 """Tests for the schema introspection tool."""
+
 from __future__ import annotations
 
 import asyncio
 import sqlite3
 
 import pytest
-
 from mcp_server_database.tools import schema
 
 

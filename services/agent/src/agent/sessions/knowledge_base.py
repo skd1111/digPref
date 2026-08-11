@@ -18,18 +18,20 @@ CLAUDE.md §2 红线：
     - KB 缓存（Phase 4 SQLite-vec）
     - KB 权限校验（Phase 10 IAM）
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Optional, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
 
 # ---- 配置 ------------------------------------------------------------------
+
 
 @dataclass
 class KBConfig:
@@ -40,6 +42,7 @@ class KBConfig:
       - `EAIDE_KB_BASE_URL`: e.g. 'https://wiki.company.com/api/v1'
       - `EAIDE_KB_API_KEY_REF`: Keyring 占位符名（V1 接入 IAM 鉴权后填）
     """
+
     backend: str = "mock"
     base_url: str = ""
     api_key_ref: str = ""  # 占位符名（不存真值）
@@ -48,7 +51,7 @@ class KBConfig:
     extra: dict = field(default_factory=dict)
 
     @classmethod
-    def from_env(cls) -> "KBConfig":
+    def from_env(cls) -> KBConfig:
         """从环境变量读 KB 配置（与 envconfig.from_env 同风格）。"""
         return cls(
             backend=os.environ.get("EAIDE_KB_BACKEND", "mock"),
@@ -60,9 +63,11 @@ class KBConfig:
 
 # ---- 适配器协议 ----------------------------------------------------------
 
+
 @dataclass
 class KBQueryResult:
     """单条 KB 检索结果（统一返回形态）。"""
+
     doc_id: str
     title: str
     snippet: str  # 已 PII 脱敏的文本片段
@@ -74,6 +79,7 @@ class KBQueryResult:
 @dataclass
 class KBContext:
     """一次 KB 检索返回的 context（注入 LLM system prompt 前缀）。"""
+
     query: str
     results: list[KBQueryResult] = field(default_factory=list)
     backend: str = "mock"
@@ -109,6 +115,7 @@ class KnowledgeBaseAdapter(Protocol):
 
 
 # ---- V0 Mock 适配器 ------------------------------------------------------
+
 
 class MockKBAdapter:
     """V0 Mock 适配器：返回固定示例 context + 短 sleep（模拟外部 KB 延迟）。
@@ -160,8 +167,12 @@ class MockKBAdapter:
         ][:top_k]
 
         elapsed_ms = int((time.monotonic() - t0) * 1000)
-        logger.debug("[KB.mock] query=%s results=%d elapsed=%dms",
-                     query[:50], len(sample_results), elapsed_ms)
+        logger.debug(
+            "[KB.mock] query=%s results=%d elapsed=%dms",
+            query[:50],
+            len(sample_results),
+            elapsed_ms,
+        )
         return KBContext(
             query=query,
             results=sample_results,
@@ -189,14 +200,13 @@ def build_adapter(config: KBConfig | None = None) -> KnowledgeBaseAdapter:
     cfg = config or KBConfig.from_env()
     cls = _ADAPTERS.get(cfg.backend)
     if cls is None:
-        logger.warning(
-            "[KB] unknown backend=%s, fallback to MockKBAdapter", cfg.backend
-        )
+        logger.warning("[KB] unknown backend=%s, fallback to MockKBAdapter", cfg.backend)
         return MockKBAdapter(cfg)
     return cls(cfg)
 
 
 # ---- build_kb_context（Phase 6 调用点） ---------------------------------
+
 
 async def build_kb_context(
     query: str,
@@ -218,7 +228,7 @@ async def build_kb_context(
         return KBContext(query=query, backend=ad.name)
     try:
         return await ad.search(query, top_k=top_k)
-    except Exception as e:  # noqa: BLE001 —— KB 失败 best-effort
+    except Exception as e:
         logger.warning("[KB] search failed backend=%s err=%s", ad.name, e)
         return KBContext(query=query, backend=ad.name)
 

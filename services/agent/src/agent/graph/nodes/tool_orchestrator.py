@@ -6,6 +6,7 @@ REQUEST_FULL_TOOLS / ASK_USER / FINAL_ANSWER），系统按协议执行；写 / 
 
 设计文档：docs/superpowers/specs/2026-08-03-dynamic-tool-loop-design.md
 """
+
 from __future__ import annotations
 
 from typing import Any

@@ -9,6 +9,7 @@ V0 实现：
   - CRUD：insert_task / list_tasks / get_task / get_stats
   - WAL + foreign_keys=ON + asyncio
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -20,7 +21,6 @@ from typing import Any
 import aiosqlite
 
 from agent.config import settings
-
 
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -77,10 +77,19 @@ class ImageProcessingStorage:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        task_id, processing_type, backend,
-                        input_path, output_path, input_size, output_size,
-                        elapsed_ms, 1 if ok else 0, error,
-                        ocr_text, ocr_confidence, ocr_block_count,
+                        task_id,
+                        processing_type,
+                        backend,
+                        input_path,
+                        output_path,
+                        input_size,
+                        output_size,
+                        elapsed_ms,
+                        1 if ok else 0,
+                        error,
+                        ocr_text,
+                        ocr_confidence,
+                        ocr_block_count,
                         json.dumps(meta, ensure_ascii=False, default=str),
                         _now_iso(),
                     ),
@@ -154,11 +163,22 @@ class ImageProcessingStorage:
 def _row_to_dict(row: tuple) -> dict:
     """SQLite 行 → dict（与列序匹配 schema.sql）。"""
     cols = [
-        "id", "task_id", "processing_type", "backend",
-        "input_path", "output_path", "input_size", "output_size",
-        "elapsed_ms", "ok", "error",
-        "ocr_text", "ocr_confidence", "ocr_block_count",
-        "meta_json", "ts",
+        "id",
+        "task_id",
+        "processing_type",
+        "backend",
+        "input_path",
+        "output_path",
+        "input_size",
+        "output_size",
+        "elapsed_ms",
+        "ok",
+        "error",
+        "ocr_text",
+        "ocr_confidence",
+        "ocr_block_count",
+        "meta_json",
+        "ts",
     ]
     d = dict(zip(cols, row))
     if d.get("meta_json"):

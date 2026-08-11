@@ -2,10 +2,10 @@
 
 仅保留最小接口定义以满足其他模块 import 依赖。
 """
+
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +38,9 @@ class KnowledgeIngestion:
 
 
 def build_default_ingestion() -> KnowledgeIngestion:
-    from agent.knowledge.storage import get_default_storage
     from agent.knowledge.retriever import build_default_embedding_client
+    from agent.knowledge.storage import get_default_storage
+
     storage = get_default_storage()
     embedding = build_default_embedding_client()
     return KnowledgeIngestion(storage, embedding)

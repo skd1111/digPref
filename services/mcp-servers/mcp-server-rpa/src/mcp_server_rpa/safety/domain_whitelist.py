@@ -1,4 +1,5 @@
 """Hard domain whitelist — refuses navigation to non-listed domains."""
+
 from __future__ import annotations
 
 from urllib.parse import urlparse

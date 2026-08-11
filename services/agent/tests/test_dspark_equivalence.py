@@ -9,16 +9,14 @@ CLAUDE.md §6 红线：
 - DSpark 启用/禁用前后输出分布严格等价（不可降低质量）
 - 单元测试 fixed seed + temperature=0.0 下 8 类 prompt 100% 一致
 """
+
 from __future__ import annotations
 
 import pytest
-
 from agent.llm.dspark.llamacpp_backend import (
     DSparkBackend,
-    DSparkResult,
     MockDSparkBackend,
 )
-
 
 # ---- 测试 fixtures ---------------------------------------------------------
 
@@ -59,14 +57,20 @@ async def test_equivalence_with_and_without_dspark(baseline_backend, dspark_back
     路径都返完全相同的字符串。这模拟了 Leviathan 2023 的"接受/拒绝采样严格保持主模型分布"。
     """
     r_baseline = await baseline_backend.generate(
-        prompt=prompt, max_tokens=200, temperature=0.0,
+        prompt=prompt,
+        max_tokens=200,
+        temperature=0.0,
         task_category="sql_generation",
-        n_draft=1, draft_p_min=1.0,
+        n_draft=1,
+        draft_p_min=1.0,
     )
     r_dspark = await dspark_backend.generate(
-        prompt=prompt, max_tokens=200, temperature=0.0,
+        prompt=prompt,
+        max_tokens=200,
+        temperature=0.0,
         task_category="sql_generation",
-        n_draft=8, draft_p_min=0.75,
+        n_draft=8,
+        draft_p_min=0.75,
         draft_model_path="models/draft/qwen2.5-0.1b-instruct-q4_k_m.gguf",
     )
     # 等价性：text 完全一致
@@ -85,9 +89,12 @@ async def test_dspark_speedup_when_draft_model_loaded():
     """草稿模型加载成功 → speedup_ratio > 1.0。"""
     backend = MockDSparkBackend(fixed_output="ok", mock_speedup=2.0)
     r = await backend.generate(
-        prompt="x", max_tokens=100, temperature=0.0,
+        prompt="x",
+        max_tokens=100,
+        temperature=0.0,
         task_category="sql_generation",
-        n_draft=8, draft_p_min=0.75,
+        n_draft=8,
+        draft_p_min=0.75,
         draft_model_path="models/draft/qwen2.5-0.1b-instruct-q4_k_m.gguf",
     )
     assert r.speculative_enabled is True
@@ -99,9 +106,12 @@ async def test_no_speedup_when_draft_model_missing():
     """草稿模型路径为空 → speedup_ratio = 1.0（关闭 DSpark）。"""
     backend = MockDSparkBackend(fixed_output="ok", mock_speedup=2.0)
     r = await backend.generate(
-        prompt="x", max_tokens=100, temperature=0.0,
+        prompt="x",
+        max_tokens=100,
+        temperature=0.0,
         task_category="sql_generation",
-        n_draft=8, draft_p_min=0.75,
+        n_draft=8,
+        draft_p_min=0.75,
         draft_model_path=None,  # ← 缺失
     )
     assert r.speculative_enabled is False
@@ -113,9 +123,12 @@ async def test_no_speedup_when_n_draft_lt_2():
     """n_draft < 2 → 关闭 DSpark（避免猜测开销大于节省）。"""
     backend = MockDSparkBackend(fixed_output="ok", mock_speedup=2.0)
     r = await backend.generate(
-        prompt="x", max_tokens=100, temperature=0.0,
+        prompt="x",
+        max_tokens=100,
+        temperature=0.0,
         task_category="sql_generation",
-        n_draft=1, draft_p_min=0.75,
+        n_draft=1,
+        draft_p_min=0.75,
         draft_model_path="models/draft/qwen2.5-0.1b-instruct-q4_k_m.gguf",
     )
     assert r.speculative_enabled is False
@@ -127,6 +140,7 @@ async def test_no_speedup_when_n_draft_lt_2():
 def test_backend_factory_falls_back_to_mock_without_llamacpp():
     """llama_cpp import 失败 → MockDSparkBackend fallback。"""
     from agent.llm.dspark.llamacpp_backend import build_default_backend
+
     backend = build_default_backend(
         target_model_path="models/qwen2.5-0.5b-instruct-q4_k_m.gguf",
         draft_model_path=None,
@@ -138,6 +152,7 @@ def test_backend_factory_falls_back_to_mock_without_llamacpp():
 def test_backend_factory_with_missing_model_falls_back():
     """target_model_path 为空 → MockDSparkBackend。"""
     from agent.llm.dspark.llamacpp_backend import build_default_backend
+
     backend = build_default_backend(
         target_model_path=None,
         draft_model_path=None,
@@ -151,6 +166,7 @@ def test_backend_factory_with_missing_model_falls_back():
 def test_dspark_backend_unavailable_exception():
     """DSparkBackendUnavailable 应被 api.py 捕获（不抛给上层）。"""
     from agent.llm.dspark.llamacpp_backend import DSparkBackendUnavailable
+
     err = DSparkBackendUnavailable("test")
     assert isinstance(err, Exception)
     assert "test" in str(err)
@@ -163,12 +179,16 @@ def test_dspark_backend_unavailable_exception():
 async def test_first_token_latency_under_30ms():
     """首字延迟（TTFT）DSpark 启用后增加 ≤ 30ms（架构师红线）。"""
     import asyncio
+
     backend = MockDSparkBackend(fixed_output="ok", mock_speedup=2.0)
     t0 = asyncio.get_event_loop().time()
     r = await backend.generate(
-        prompt="x", max_tokens=10, temperature=0.0,
+        prompt="x",
+        max_tokens=10,
+        temperature=0.0,
         task_category="sql_generation",
-        n_draft=8, draft_p_min=0.75,
+        n_draft=8,
+        draft_p_min=0.75,
         draft_model_path="models/draft/x.gguf",
     )
     elapsed_ms = (asyncio.get_event_loop().time() - t0) * 1000

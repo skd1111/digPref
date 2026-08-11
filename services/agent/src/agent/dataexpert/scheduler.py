@@ -11,10 +11,10 @@
   - 导出仍过 PII 脱敏 + 数字水印
   - 推送内容不含明文密码（Webhook URL 存 Keyring 引用）
 """
+
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import time
@@ -127,7 +127,7 @@ class ReportScheduler:
             # 推送失败通知
             await self._notifier.send(
                 title=f"❌ 报表执行失败：{tpl_name}",
-                body=f"错误：{str(e)}\n时间：{time.strftime('%Y-%m-%d %H:%M')}",
+                body=f"错误：{e!s}\n时间：{time.strftime('%Y-%m-%d %H:%M')}",
             )
 
 
@@ -174,10 +174,10 @@ class Notifier:
     async def _send_smtp(self, title: str, body: str, attachment: str | None) -> bool:
         """SMTP 邮件发送。"""
         import smtplib
-        from email.mime.text import MIMEText
-        from email.mime.multipart import MIMEMultipart
-        from email.mime.base import MIMEBase
         from email import encoders
+        from email.mime.base import MIMEBase
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
 
         cfg = self._config
         host = cfg.get("smtp_host", "localhost")
@@ -194,12 +194,15 @@ class Notifier:
 
         if attachment:
             import os
+
             if os.path.isfile(attachment):
                 with open(attachment, "rb") as f:
                     part = MIMEBase("application", "octet-stream")
                     part.set_payload(f.read())
                 encoders.encode_base64(part)
-                part.add_header("Content-Disposition", f"attachment; filename={os.path.basename(attachment)}")
+                part.add_header(
+                    "Content-Disposition", f"attachment; filename={os.path.basename(attachment)}"
+                )
                 msg.attach(part)
 
         with smtplib.SMTP(host, port, timeout=30) as server:
@@ -220,10 +223,12 @@ class Notifier:
             logger.warning("企微 Webhook 未配置")
             return False
 
-        payload = json.dumps({
-            "msgtype": "markdown",
-            "markdown": {"content": f"### {title}\n{body}"},
-        }).encode("utf-8")
+        payload = json.dumps(
+            {
+                "msgtype": "markdown",
+                "markdown": {"content": f"### {title}\n{body}"},
+            }
+        ).encode("utf-8")
 
         req = urllib.request.Request(
             webhook_url,
@@ -243,10 +248,12 @@ class Notifier:
             logger.warning("钉钉 Webhook 未配置")
             return False
 
-        payload = json.dumps({
-            "msgtype": "markdown",
-            "markdown": {"title": title, "text": f"### {title}\n{body}"},
-        }).encode("utf-8")
+        payload = json.dumps(
+            {
+                "msgtype": "markdown",
+                "markdown": {"title": title, "text": f"### {title}\n{body}"},
+            }
+        ).encode("utf-8")
 
         req = urllib.request.Request(
             webhook_url,
@@ -259,6 +266,7 @@ class Notifier:
 
 
 # ---- Cron 匹配工具 -----------------------------------------------------------
+
 
 def _cron_matches(cron: str, t: time.struct_time) -> bool:
     """简单 cron 匹配（分 时 日 月 周）。

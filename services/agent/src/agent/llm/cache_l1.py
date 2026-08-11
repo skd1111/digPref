@@ -7,18 +7,19 @@
 零外部依赖：OrderedDict 实现 LRU，手写 TTL。进程内单实例即可（LLM 调用不是热路径）。
 时间注入：now_fn 便于测试控制 TTL 过期，不依赖真实时钟 sleep。
 """
+
 from __future__ import annotations
 
 import hashlib
 import time
 from collections import OrderedDict
-from typing import Callable, Optional
+from collections.abc import Callable
 
 
 def make_key(model: str, prompt: str) -> str:
     """规范化 prompt（strip + 折叠空白）后与 model 一起哈希。"""
     normalized = " ".join(prompt.split())
-    raw = f"{model}\x00{normalized}".encode("utf-8")
+    raw = f"{model}\x00{normalized}".encode()
     return hashlib.sha256(raw).hexdigest()
 
 
@@ -42,11 +43,11 @@ class L1Cache:
         self._ttl = ttl_sec
         self._now = now_fn
         # key -> (value, expires_at)
-        self._store: "OrderedDict[str, tuple[str, float]]" = OrderedDict()
+        self._store: OrderedDict[str, tuple[str, float]] = OrderedDict()
         self.hits = 0
         self.misses = 0
 
-    def get(self, key: str) -> Optional[str]:
+    def get(self, key: str) -> str | None:
         entry = self._store.get(key)
         if entry is None:
             self.misses += 1
@@ -72,7 +73,10 @@ class L1Cache:
             self._store.popitem(last=False)
 
     def clear(self) -> None:
+        """清空缓存并重置命中计数（与 L2Cache.clear 语义一致）。"""
         self._store.clear()
+        self.hits = 0
+        self.misses = 0
 
     @property
     def size(self) -> int:

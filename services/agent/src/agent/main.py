@@ -16,11 +16,18 @@ from agent.driver_bootstrap import load_drivers
 
 load_drivers()
 
+# LLM active 后端统一配置 —— 必须在 agent.config 加载前应用
+# （router.db llm_kv 为唯一长期事实源；遗留 llm-config.json 启动时迁移）
+from agent.llm.active_config import apply_active
+
+apply_active()
+
 import asyncio
 import logging
 import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -34,11 +41,17 @@ from agent.graph.compile import Runtime, compile_graph
 from agent.llm.router import LMRouter
 from agent.mcp.registry import ServerRegistry
 
+if TYPE_CHECKING:
+    from agent.mcp.client import McpClient
 
 # ---- 独立文件日志（PyInstaller / 子进程被 Rust 拉起时方便排查）---------
-
-_AGENT_LOG = Path.home() / ".eaide" / "agent.log"
-_AGENT_LOG.parent.mkdir(parents=True, exist_ok=True)
+# 日志落在工作目录（打包后 = 安装目录）logs/；失败时回退用户目录。
+try:
+    _AGENT_LOG = Path("logs") / "agent.log"
+    _AGENT_LOG.parent.mkdir(parents=True, exist_ok=True)
+except OSError:
+    _AGENT_LOG = Path.home() / ".eaide" / "agent.log"
+    _AGENT_LOG.parent.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     filename=str(_AGENT_LOG),
     level=logging.DEBUG,
@@ -83,7 +96,6 @@ def _build_mcp():
         registry = ServerRegistry.from_yaml(settings.mcp_config_path)
         if not registry.servers:
             return None
-        from agent.mcp.client import McpClient
 
         # We can't await here (sync __init__). Caller must wrap in async context.
         # We return a factory that chat.py can call inside its endpoint.
@@ -154,7 +166,7 @@ async def lifespan(app: FastAPI):
         from agent.builtin._tauri_runtime import clear_tauri_runtime
 
         clear_tauri_runtime()
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     # Best-effort: discover which MCP servers are configured (only works for
     # the lazy wrapper, not for test-injected mocks — silently skip).
@@ -164,9 +176,26 @@ async def lifespan(app: FastAPI):
     if registry is not None and hasattr(registry, "servers"):
         servers = list(registry.servers.keys())
     await audit("agent.startup", {"mcp_servers": servers})
+    # Phase 7 补齐：定时报表调度器启动（缺口 7；失败不阻断 Agent 启动）
+    data_scheduler = None
+    try:
+        from agent.dataexpert.scheduler import ReportScheduler
+        from agent.dataexpert.storage import get_default_storage
+
+        data_scheduler = ReportScheduler(get_default_storage())
+        await data_scheduler.start()
+    except Exception:
+        log.exception("data scheduler startup failed")
+    app.state.data_scheduler = data_scheduler
     try:
         yield
     finally:
+        # Phase 7 补齐：停止定时报表调度器（幂等）
+        if data_scheduler is not None:
+            try:
+                await data_scheduler.stop()
+            except Exception:
+                log.exception("data scheduler shutdown failed")
         # Shutdown: 关闭 MCP 客户端连接池
         if isinstance(mcp, _LazyMcp):
             await mcp.close()
@@ -175,7 +204,7 @@ async def lifespan(app: FastAPI):
             from agent.preview.session_manager import get_default_manager
 
             await get_default_manager().shutdown()
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.exception("preview shutdown failed")
         await audit("agent.shutdown", {})
 
@@ -204,6 +233,11 @@ def create_app() -> FastAPI:
 
     app.include_router(engine_api.router)
 
+    # Token 用量（状态栏实时速率 + 当日总量；前端 2s 轮询）
+    from agent.llm import usage_api
+
+    app.include_router(usage_api.router)
+
     # Phase 2F: 代码导航（jump / index / status / symbols）
     from agent.codenav import api as codenav_api
 
@@ -213,6 +247,22 @@ def create_app() -> FastAPI:
     from agent.biznav import api as biznav_api
 
     app.include_router(biznav_api.router)
+
+    # reqflow V1 (2026-08-05): 运营专家需求改造工作流（需求卡片，11 路由）
+    from agent.reqflow import api as reqflow_api
+
+    app.include_router(reqflow_api.router)
+
+    # Phase 2H (2026-08-07): 运营工作台业务记录（业务小结卡片，可审计）
+    from agent.ops import api as ops_api
+
+    app.include_router(ops_api.router)
+
+    # Phase 2H (2026-08-07): 数据字典（公共参数独立维护，Skill 按 key 引用）
+    from agent.datadict import api as dict_api
+
+    app.include_router(dict_api.router)
+
     from agent.sessions import api as sessions_api
 
     app.include_router(sessions_api.router)
@@ -232,6 +282,12 @@ def create_app() -> FastAPI:
 
     app.include_router(skills_api.router)
     skills_api.init_loader()
+
+    # 专家团资产（list/get/save/delete/import/export/recommend）
+    from agent.expert_teams import api as expert_teams_api
+
+    app.include_router(expert_teams_api.router)
+    expert_teams_api.init_loader()
 
     # Phase 2F+ V1: 日志分析（extract / root-cause / log-level-classify / cache）
     from agent.loganalysis import api as loganalysis_api
@@ -280,8 +336,8 @@ def create_app() -> FastAPI:
 
     # Phase 12 V0: 启动时把 LMRouter 注入 Orchestrator（V1：lifespan 内就绪后注入）
     try:
-        from agent.orchestrator.orchestrator import reset_orchestrator
         from agent.main import get_runtime
+        from agent.orchestrator.orchestrator import reset_orchestrator
 
         reset_orchestrator(router=get_runtime().llm)
     except Exception as e:
@@ -290,7 +346,7 @@ def create_app() -> FastAPI:
 
     # Phase 13 DSpark V0: 推测解码决策层（4 端点 + 启动时初始化 runtime）
     try:
-        from agent.llm.dspark.api import init_dspark_runtime, _load_dspark_config
+        from agent.llm.dspark.api import _load_dspark_config, init_dspark_runtime
         from agent.llm.dspark.config import DSparkConfig
         from agent.llm.router import _LOCAL_ONLY_TASKS
 
@@ -324,7 +380,7 @@ def create_app() -> FastAPI:
 
     # 全局异常处理 —— 把 traceback 写文件 + 返 500 JSON
     @app.exception_handler(Exception)
-    async def _global_exc(request: Request, exc: Exception):  # noqa: ARG001
+    async def _global_exc(request: Request, exc: Exception):
         tb = traceback.format_exc()
         log.error("unhandled exception on %s %s: %s", request.method, request.url.path, exc)
         log.error("%s", tb)

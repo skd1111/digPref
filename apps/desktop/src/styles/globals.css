@@ -8,10 +8,11 @@
   #root {
     height: 100%;
     margin: 0;
-    /* VSCode 默认用 Segoe UI Variable；这里给一个系统级 fallback */
-    font-family: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system,
-      BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    /* 与 tailwind fontFamily.sans 保持一致：Inter 优先，中文回退到苹方/鸿蒙黑体/雅黑 */
+    font-family: Inter, "Segoe UI Variable", "Segoe UI", "PingFang SC",
+      "HarmonyOS Sans SC", "Microsoft YaHei UI", system-ui, sans-serif;
     font-size: 12px;
+    letter-spacing: 0.01em;
     color: theme('colors.vscode.editor-fg');
     background-color: theme('colors.vscode.editor-bg');
     -webkit-font-smoothing: antialiased;
@@ -57,3 +58,239 @@
 .codenav-flash-highlight {
   animation: codenav-flash 0.6s ease-out;
 }
+
+/* 文档审核：点击原文高亮 → 右侧风险卡片强调闪烁（粗边框 + 呼吸光环，约 2.1s） */
+@keyframes finding-card-flash {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(205, 49, 49, 0); }
+  50%      { box-shadow: 0 0 0 5px rgba(205, 49, 49, 0.45); }
+}
+.finding-card-flash {
+  border-color: #cd3131 !important;
+  border-width: 2px !important;
+  outline: 2px solid rgba(205, 49, 49, 0.75);
+  outline-offset: 1px;
+  animation: finding-card-flash 0.7s ease-in-out 3;
+}
+
+/* 文档审核：风险卡片长文本 3 行截断 + 省略号（点击卡片看完整版） */
+.finding-card-clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  line-height: 1.5;
+}
+
+/* 文档审核：卡片→正文定位时，目标高亮闪烁强调（约 2.1s） */
+@keyframes finding-mark-flash {
+  0%, 100% { outline-color: rgba(205, 49, 49, 0); box-shadow: 0 0 0 0 rgba(205, 49, 49, 0); }
+  50%      { outline-color: rgba(205, 49, 49, 0.95); box-shadow: 0 0 0 4px rgba(205, 49, 49, 0.35); }
+}
+.finding-mark-flash {
+  outline: 2px solid rgba(205, 49, 49, 0.9);
+  outline-offset: 1px;
+  animation: finding-mark-flash 0.7s ease-in-out 3;
+}
+
+/* —— Codex 风格思考动效（2026-08-07）—— */
+
+/* 思考星形图标：自转 + 呼吸缩放 */
+@keyframes thinking-spark {
+  0%   { transform: rotate(0deg) scale(1); }
+  50%  { transform: rotate(180deg) scale(0.8); }
+  100% { transform: rotate(360deg) scale(1); }
+}
+.animate-thinking-spark {
+  animation: thinking-spark 2.4s ease-in-out infinite;
+}
+
+/* 思考文字：渐变流光扫过 */
+@keyframes thinking-shimmer {
+  0%   { background-position: 150% 0; }
+  100% { background-position: -50% 0; }
+}
+.animate-thinking-shimmer {
+  background: linear-gradient(90deg, #6b7280 20%, #10a37f 45%, #202124 55%, #6b7280 80%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: thinking-shimmer 2.2s linear infinite;
+}
+
+/* 执行链路 running 状态的细环 spinner */
+@keyframes spin-ring {
+  to { transform: rotate(360deg); }
+}
+.animate-spin-ring {
+  animation: spin-ring 0.8s linear infinite;
+}
+
+/* —— aicss 风格 AI 状态组件（2026-08-10）—— */
+
+/* 思考中：星芒 orb 外圈呼吸光晕 */
+@keyframes thinking-orb-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(16, 163, 127, 0.25); }
+  50%      { box-shadow: 0 0 0 5px rgba(16, 163, 127, 0); }
+}
+.ai-thinking-orb {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 9999px;
+  background: rgba(16, 163, 127, 0.1);
+  animation: thinking-orb-glow 2.2s ease-in-out infinite;
+}
+
+/* 联网搜索：地球图标缓慢自转 */
+@keyframes search-globe {
+  to { transform: rotate(360deg); }
+}
+.animate-search-globe {
+  display: inline-block;
+  animation: search-globe 1.6s linear infinite;
+}
+
+/* 流式输出末尾的打字机光标（2026-08-07） */
+@keyframes cursor-blink {
+  0%, 45% { opacity: 1; }
+  50%, 95% { opacity: 0; }
+  100% { opacity: 1; }
+}
+.stream-cursor {
+  display: inline-block;
+  width: 7px;
+  height: 13px;
+  margin-left: 2px;
+  vertical-align: -2px;
+  border-radius: 1px;
+  background-color: #10a37f;
+  animation: cursor-blink 1s steps(1) infinite;
+}
+
+/* 会话内搜索命中高亮（2026-08-07） */
+.search-hit {
+  outline: 2px solid #10a37f;
+  outline-offset: 2px;
+}
+
+/* —— 轻量 Markdown 渲染排版（2026-08-07，助手消息用）—— */
+.md-body {
+  font-size: 12px;
+  line-height: 1.65;
+  word-break: break-word;
+  user-select: text;
+}
+.md-body > *:first-child { margin-top: 0; }
+.md-body > *:last-child { margin-bottom: 0; }
+.md-body p { margin: 4px 0; }
+.md-body h1, .md-body h2, .md-body h3, .md-body h4 {
+  margin: 10px 0 4px;
+  font-weight: 600;
+  color: #202124;
+  line-height: 1.4;
+}
+.md-body h1 { font-size: 15px; }
+.md-body h2 { font-size: 14px; }
+.md-body h3 { font-size: 13px; }
+.md-body h4 { font-size: 12px; }
+.md-body ul, .md-body ol { margin: 4px 0; padding-left: 20px; }
+.md-body ul { list-style: disc; }
+.md-body ol { list-style: decimal; }
+.md-body li { margin: 2px 0; }
+.md-body li > ul, .md-body li > ol { margin: 2px 0; }
+.md-body blockquote {
+  margin: 6px 0;
+  padding: 2px 10px;
+  border-left: 3px solid #e7e5e4;
+  color: #6b7280;
+}
+.md-body blockquote p { margin: 2px 0; }
+.md-body hr { margin: 10px 0; border: none; border-top: 1px solid #e7e5e4; }
+.md-body table {
+  margin: 6px 0;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.md-body th, .md-body td {
+  border: 1px solid #e7e5e4;
+  padding: 3px 8px;
+  text-align: left;
+}
+.md-body th { background-color: #f5f5f4; font-weight: 600; color: #202124; }
+.md-body td { color: #374151; }
+/* 行内代码 */
+.md-ic {
+  padding: 0 4px;
+  border-radius: 3px;
+  background-color: #eef0f2;
+  border: 1px solid #e3e6e9;
+  font-family: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  font-size: 11px;
+  color: #0f766e;
+}
+.md-link { color: #0891b2; text-decoration: underline; text-underline-offset: 2px; }
+/* 围栏代码块（aicss 风格，2026-08-10：语言头 + Copy 勾选态 + 行号） */
+.md-code {
+  position: relative;
+  margin: 6px 0;
+  border: 1px solid #2e2e2e;
+  border-radius: 8px;
+  background-color: #1e1e1e;
+  overflow: hidden;
+}
+.md-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 10px;
+  border-bottom: 1px solid #2e2e2e;
+  background-color: #252526;
+}
+.md-code-lang {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #9d9d9d;
+}
+.md-code pre {
+  margin: 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  font-family: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  color: #d4d4d4;
+  user-select: text;
+  counter-reset: mdline;
+}
+/* 行号：CSS 计数器生成（::before 内容不进 textContent，兼容既有测试） */
+.md-code pre .md-line::before {
+  content: counter(mdline);
+  counter-increment: mdline;
+  display: inline-block;
+  width: 2.2em;
+  margin-right: 10px;
+  text-align: right;
+  color: #5a5a5a;
+  user-select: none;
+}
+.md-code-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 10px;
+  color: #9d9d9d;
+  background-color: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+.md-code-copy:hover { background-color: #333333; color: #e0e0e0; }

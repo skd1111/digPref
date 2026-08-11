@@ -9,6 +9,7 @@
 红线：本模块只处理"确定性失败"（语法/编译/测试），不触碰 HITL 审批；
 写工具本身的风险闸门（medium）照旧由 hitl_gate/dispatcher 负责。
 """
+
 from __future__ import annotations
 
 import os
@@ -27,9 +28,7 @@ def coding_budget(state: dict) -> int:
     """coding 子任务的 repair 预算（取 execution_policies 中 coding 策略上限）。"""
     policies = state.get("execution_policies") or []
     budgets = [
-        int(p.get("max_repair_attempts", 3))
-        for p in policies
-        if p.get("framework") == "coding"
+        int(p.get("max_repair_attempts", 3)) for p in policies if p.get("framework") == "coding"
     ]
     return budgets[0] if budgets else 3
 
@@ -83,38 +82,44 @@ def validate_written_files(state: dict, pairs: list[tuple[dict, dict]]) -> dict 
     exhausted = attempt >= budget
 
     feedback = list(state.get("error_feedback") or [])
-    feedback.append({
-        "attempt": attempt,
-        "error": (vr.error or "")[:2000],
-        "files": files,
-        "validator_level": vr.level,
-        "ts": datetime.now(timezone.utc).isoformat(),
-    })
+    feedback.append(
+        {
+            "attempt": attempt,
+            "error": (vr.error or "")[:2000],
+            "files": files,
+            "validator_level": vr.level,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+    )
     feedback = feedback[-_FEEDBACK_MAX:]
 
-    extra_results = [{
-        "id": str(uuid.uuid4()),
-        "name": "coding_validation",
-        "ok": False,
-        "error": (
-            f"代码验证失败（第 {attempt}/{budget} 次修复预算）：\n{vr.error}\n"
-            "请修复上述问题后重新写入。"
-        ),
-    }]
+    extra_results = [
+        {
+            "id": str(uuid.uuid4()),
+            "name": "coding_validation",
+            "ok": False,
+            "error": (
+                f"代码验证失败（第 {attempt}/{budget} 次修复预算）：\n{vr.error}\n"
+                "请修复上述问题后重新写入。"
+            ),
+        }
+    ]
 
     return {
         "extra_results": extra_results,
         "error_feedback": feedback,
         "repair_attempt": attempt,
         "needs_human_intervention": exhausted,
-        "trace": [{
-            "node": "tool_orchestrator",
-            "status": "fail",
-            "kind": "repair_attempt",
-            "attempt": attempt,
-            "max_attempts": budget,
-            "validator_level": vr.level,
-            "error_summary": (vr.error or "")[:200],
-            "ts": datetime.now(timezone.utc).isoformat(),
-        }],
+        "trace": [
+            {
+                "node": "tool_orchestrator",
+                "status": "fail",
+                "kind": "repair_attempt",
+                "attempt": attempt,
+                "max_attempts": budget,
+                "validator_level": vr.level,
+                "error_summary": (vr.error or "")[:200],
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }
+        ],
     }

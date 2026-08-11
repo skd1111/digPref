@@ -11,6 +11,7 @@
 
 所有函数懒加载依赖模块：索引库缺失 / 模块异常时返回友好错误而不是崩溃。
 """
+
 from __future__ import annotations
 
 import os
@@ -58,7 +59,7 @@ def builtin_symbol_search(
             meta={"count": len(symbols)},
             risk_level="read",
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return ToolResult.from_exception(exc, risk_level="read")
 
 
@@ -78,7 +79,7 @@ def builtin_file_symbols(*, file_path: str) -> ToolResult:
             meta={"count": len(symbols), "file": file_path},
             risk_level="read",
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return ToolResult.from_exception(exc, risk_level="read")
 
 
@@ -126,12 +127,12 @@ def builtin_biznav_features(
             meta={"count": len(rows), "project": project_name},
             risk_level="read",
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return ToolResult.from_exception(exc, risk_level="read")
 
 
 __all__: list[str] = [
-    "builtin_symbol_search",
-    "builtin_file_symbols",
     "builtin_biznav_features",
+    "builtin_file_symbols",
+    "builtin_symbol_search",
 ]

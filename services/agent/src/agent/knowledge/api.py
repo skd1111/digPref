@@ -11,6 +11,7 @@
 
 V0/V1 共存：V0 路由不动；新功能全部走 /v1 前缀。
 """
+
 from __future__ import annotations
 
 import logging
@@ -23,10 +24,8 @@ from pydantic import BaseModel, Field
 from agent.knowledge.adapter import KBContext, build_kb_context
 from agent.knowledge.ingestion import IngestionError, KnowledgeIngestion
 from agent.knowledge.models import (
-    KnowledgeDoc,
     KnowledgeStats,
     RAGContext,
-    RetrievalResult,
 )
 from agent.knowledge.retriever import RAGRetriever
 from agent.knowledge.storage import KnowledgeStorage
@@ -47,6 +46,7 @@ def _get_storage() -> KnowledgeStorage:
     global _storage
     if _storage is None:
         from agent.knowledge.storage import get_default_storage
+
         _storage = get_default_storage()
     return _storage
 
@@ -55,6 +55,7 @@ def _get_retriever() -> RAGRetriever:
     global _retriever
     if _retriever is None:
         from agent.knowledge.retriever import get_default_retriever
+
         _retriever = get_default_retriever()
     return _retriever
 
@@ -63,6 +64,7 @@ def _get_ingestion() -> KnowledgeIngestion:
     global _ingestion
     if _ingestion is None:
         from agent.knowledge.ingestion import build_default_ingestion
+
         _ingestion = build_default_ingestion()
     return _ingestion
 
@@ -232,9 +234,13 @@ async def v1_list_docs(
         total=total,
         docs=[
             V1DocSummary(
-                id=d.id, title=d.title, source_type=d.source_type,
-                source_path=d.source_path, chunk_count=d.chunk_count,
-                created_at=d.created_at, updated_at=d.updated_at,
+                id=d.id,
+                title=d.title,
+                source_type=d.source_type,
+                source_path=d.source_path,
+                chunk_count=d.chunk_count,
+                created_at=d.created_at,
+                updated_at=d.updated_at,
             )
             for d in docs
         ],
@@ -261,9 +267,13 @@ async def v1_upload_doc(body: V1UploadRequest):
         raise HTTPException(404, str(e))
     return V1UploadResponse(
         doc=V1DocSummary(
-            id=doc.id, title=doc.title, source_type=doc.source_type,
-            source_path=doc.source_path, chunk_count=doc.chunk_count,
-            created_at=doc.created_at, updated_at=doc.updated_at,
+            id=doc.id,
+            title=doc.title,
+            source_type=doc.source_type,
+            source_path=doc.source_path,
+            chunk_count=doc.chunk_count,
+            created_at=doc.created_at,
+            updated_at=doc.updated_at,
         ),
         chunks=doc.chunk_count,
     )

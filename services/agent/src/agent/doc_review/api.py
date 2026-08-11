@@ -5,10 +5,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from agent.config import settings
@@ -30,6 +33,48 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/doc-review", tags=["doc-review"])
 
 _background_tasks: set[asyncio.Task[Any]] = set()
+
+# 分析进度（run_id → 0..1）：内存态，供 /status 轮询；Agent 重启归零不影响主流程
+_run_progress: dict[str, float] = {}
+
+
+def _attach_kb_refs(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """为每条 finding 附加知识库引用 kb_refs（grep 式匹配，best-effort）。
+
+    带耗时日志：用于对比"模型返回慢 vs 知识库 grep 慢"。
+    """
+    if not findings:
+        return findings
+    t0 = time.perf_counter()
+    refs_total = 0
+    try:
+        from agent.doc_review.knowledge import find_kb_refs
+
+        for item in findings:
+            try:
+                refs = find_kb_refs(
+                    risk_type=str(item.get("risk_type", "")),
+                    title=str(item.get("title", "")),
+                    description=str(item.get("description", "") or ""),
+                    evidence_text=str(item.get("evidence_text", "") or ""),
+                )
+                item["kb_refs"] = [r.model_dump() for r in refs]
+                refs_total += len(refs)
+            except Exception as exc:
+                logger.warning("doc_review kb_refs attach failed: %s", exc)
+                item["kb_refs"] = []
+    except Exception as exc:
+        logger.warning("doc_review kb module unavailable: %s", exc)
+        for item in findings:
+            item["kb_refs"] = []
+    elapsed_ms = (time.perf_counter() - t0) * 1000
+    logger.info(
+        "doc_review kb_refs attached: findings=%d refs=%d elapsed=%.1fms",
+        len(findings),
+        refs_total,
+        elapsed_ms,
+    )
+    return findings
 
 
 class RegisterRequest(BaseModel):
@@ -75,7 +120,7 @@ async def get_document(doc_id: str) -> dict[str, Any]:
     doc["doc_category"] = latest["doc_category"] if latest else None
     doc["risk_types"] = latest["risk_types"] if latest else []
     doc["summary"] = latest["summary"] if latest else None
-    doc["findings"] = await storage.list_findings(doc_id)
+    doc["findings"] = _attach_kb_refs(await storage.list_findings(doc_id))
     return doc
 
 
@@ -100,16 +145,37 @@ async def _run_analysis(storage: DocReviewStorage, doc_id: str, run_id: str) -> 
     emit_event_sync(
         EVT_DOC_REVIEW_STARTED, {"kind": EVT_DOC_REVIEW_STARTED, "doc_id": doc_id, "run_id": run_id}
     )
+    _run_progress[run_id] = 0.02
+    t_total = time.perf_counter()
     try:
         await storage.update_run(run_id, status="classifying")
+        # 分类是单次大模型调用（可能长耗时），先把进度推到 5%，
+        # 避免前端进度条在整个分类期间停在 2% 看似卡死
+        _run_progress[run_id] = 0.05
         doc = await storage.get_document(doc_id)
         assert doc is not None
         parsed = ParsedDocument.model_validate(doc)
+        logger.info(
+            "doc_review run start doc_id=%s run_id=%s text_chars=%d pages=%d",
+            doc_id,
+            run_id,
+            len(parsed.full_text),
+            parsed.page_count,
+        )
+        t0 = time.perf_counter()
         classification = await classify_document(
             file_name=doc["file_name"],
             sample_text=parsed.full_text,
             max_chars=settings.doc_review_classify_max_chars,
         )
+        logger.info(
+            "doc_review classify done doc_id=%s elapsed=%.1fs category=%s risk_types=%s",
+            doc_id,
+            time.perf_counter() - t0,
+            classification.doc_category.value,
+            [rt.value for rt in classification.risk_types],
+        )
+        _run_progress[run_id] = 0.15
         risk_types = [rt.value for rt in classification.risk_types]
         emit_event_sync(
             EVT_DOC_REVIEW_CLASSIFIED,
@@ -135,12 +201,20 @@ async def _run_analysis(storage: DocReviewStorage, doc_id: str, run_id: str) -> 
                     doc_category=classification.doc_category.value, risk_type=risk_type
                 )
             )
+        t0 = time.perf_counter()
         findings = await analyze_document(
             parsed=parsed,
             classification=classification,
             rules=rules,
             chunk_max_chars=settings.doc_review_chunk_max_chars,
             chunk_overlap=settings.doc_review_chunk_overlap,
+            on_progress=lambda frac: _run_progress.__setitem__(run_id, 0.15 + 0.8 * frac),
+        )
+        logger.info(
+            "doc_review analyze done doc_id=%s elapsed=%.1fs findings=%d",
+            doc_id,
+            time.perf_counter() - t0,
+            len(findings),
         )
         model_name = settings.doc_review_model or settings.ollama_model
         result = build_analysis_result(
@@ -197,9 +271,18 @@ async def _run_analysis(storage: DocReviewStorage, doc_id: str, run_id: str) -> 
             )
         except Exception:
             logger.warning("doc_review audit write failed", exc_info=True)
+        _run_progress[run_id] = 1.0
+        logger.info(
+            "doc_review run done doc_id=%s run_id=%s findings=%d total_elapsed=%.1fs",
+            doc_id,
+            run_id,
+            len(findings),
+            time.perf_counter() - t_total,
+        )
     except Exception as exc:
         logger.exception("doc_review analysis failed doc_id=%s", doc_id)
         await storage.update_run(run_id, status="failed", error=str(exc))
+        _run_progress.pop(run_id, None)
         emit_event_sync(
             EVT_DOC_REVIEW_FAILED,
             {
@@ -226,7 +309,38 @@ async def list_findings(doc_id: str, run_id: str | None = None) -> dict[str, Any
         key=lambda f: {"low": 0, "medium": 1, "high": 2, "critical": 3}[f["risk_level"]],
         reverse=True,
     )
+    entries = _attach_kb_refs(entries)
     return {"doc_id": doc_id, "run_id": run_id, "count": len(entries), "findings": entries}
+
+
+@router.get("/documents/{doc_id}/export")
+async def export_word(doc_id: str, mode: str = "risks_only") -> Response:
+    """导出审核结果为 Word：mode=full（全文+批注）| risks_only（结构化风险报告）。"""
+    if mode not in ("full", "risks_only"):
+        raise HTTPException(status_code=400, detail="mode 必须为 full 或 risks_only")
+    storage = get_default_storage()
+    doc = await storage.get_document(doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"doc not found: {doc_id}")
+    latest = await storage.latest_run(doc_id)
+    if latest is None or latest["status"] != "done":
+        raise HTTPException(status_code=409, detail="分析尚未完成，无法导出")
+    findings = _attach_kb_refs(await storage.list_findings(doc_id))
+    try:
+        from agent.doc_review.exporter import build_export_docx
+
+        content = build_export_docx(mode=mode, parsed=doc, findings=findings, run=latest)
+    except Exception as exc:
+        logger.exception("doc_review export failed doc_id=%s", doc_id)
+        raise HTTPException(status_code=500, detail=f"导出失败: {exc}") from exc
+    stem = str(doc.get("file_name", "审核报告")).rsplit(".", 1)[0]
+    suffix = "全文批注" if mode == "full" else "风险报告"
+    fname = f"{stem}_审核{suffix}.docx"
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": (f"attachment; filename*=UTF-8''{quote(fname)}")},
+    )
 
 
 @router.get("/documents/{doc_id}/status")
@@ -237,11 +351,16 @@ async def get_status(doc_id: str) -> dict[str, Any]:
     latest = await storage.latest_run(doc_id)
     if latest is None:
         return {"doc_id": doc_id, "status": "none"}
+    progress = _run_progress.get(latest["run_id"])
+    # 已完成但内存无记录（Agent 重启过）→ 直接报 100%
+    if progress is None and latest["status"] == "done":
+        progress = 1.0
     return {
         "doc_id": doc_id,
         "run_id": latest["run_id"],
         "status": latest["status"],
         "error": latest["error"],
+        "progress": progress,
     }
 
 

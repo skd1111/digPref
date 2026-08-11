@@ -4,6 +4,7 @@
     - 后端预计算并缓存（collector 调用一次，storage 持久化）
     - 大文件只保留关键片段：preview 截取变更行前后各 PREVIEW_CONTEXT 行
 """
+
 from __future__ import annotations
 
 import difflib

@@ -11,12 +11,14 @@ CLAUDE.md §2 `_LOCAL_ONLY_TASKS`：
 - `log_level_classify` 加入（V1）—— 永远走 Ollama / local_small
 - `log_root_cause` **不**加入 —— 内网 LLM；但强制走 PII 脱敏 + Top-N 截断
 """
+
 from __future__ import annotations
 
 import logging
 import time
-from typing import Any
 
+from agent.llm.mock import MockLLMClient
+from agent.llm.prompts import load_prompt, render_prompt
 from agent.llm.router import LMRouter
 from agent.loganalysis.models import (
     AnalysisCacheEntry,
@@ -54,6 +56,7 @@ async def analyze_root_cause(
     if cache_lookup and not cache_lookup.is_expired():
         try:
             import json
+
             data = json.loads(cache_lookup.payload_json)
             # 缓存里是 dict（之前 .to_dict() 序列化的）→ 构造响应
             return RootCauseResponse(
@@ -71,8 +74,9 @@ async def analyze_root_cause(
 
     # 2. 按 fingerprint 排序（频次优先）
     sorted_blocks = _sort_blocks_by_freq(scrubbed_blocks)
-    selected_blocks, truncated = _truncate_by_tokens(
-        sorted_blocks, max_tokens=req.max_tokens,
+    selected_blocks, _truncated = _truncate_by_tokens(
+        sorted_blocks,
+        max_tokens=req.max_tokens,
     )
 
     # 3. 拼 prompt → 调 LLM（用传入的 llm，不重实例化 —— 测试可注入 fake）
@@ -91,19 +95,24 @@ async def analyze_root_cause(
             client = None
         if client is None:
             # 所有后端都不可用时降级 mock（不直接 import private_llm，遵守 CLAUDE.md §2）
-            from agent.llm.mock import MockLLMClient
             client = MockLLMClient()
-        # 用 _chat_completion（直接的消息 API；不需要 summarise 那个复杂签名）
+        # 用 extract_chat 原始对话透传：根因分析是自由文本，
+        # _chat_completion 会对正文 json.loads → 必然解析失败降级 mock（BUGFIX）。
         messages = [
             {"role": "system", "content": "你是日志根因分析专家。回答限制 800 字以内。"},
             {"role": "user", "content": prompt},
         ]
-        result = await client._chat_completion(messages, temperature=0.1)
-        summary = (result.get("choices") or [{}])[0].get("message", {}).get("content", "")
-        summary = str(summary or "").strip()
-        backend = "private"
-        model_used = getattr(client, "model", "") or "private"
-        tokens_used = len(prompt) // 4 + len(summary) // 4
+        if isinstance(client, MockLLMClient):
+            summary = _mock_root_cause_summary(selected_blocks)
+            backend = "mock"
+            model_used = "mock"
+            tokens_used = 0
+        else:
+            raw = await client.extract_chat(messages)
+            summary = str(raw or "").strip()
+            backend = "private"
+            model_used = getattr(client, "model", "") or "private"
+            tokens_used = len(prompt) // 4 + len(summary) // 4
     except Exception as e:
         logger.warning("private LLM failed for root_cause, fallback mock: %s", e)
         summary = _mock_root_cause_summary(selected_blocks)
@@ -148,10 +157,11 @@ async def classify_log_levels(
             lls = await llm.classify_log_levels(lines)
             results = [
                 LogLevelResult(
-                    line=l, predicted_level=lv.get("level", "INFO"),
+                    line=line,
+                    predicted_level=lv.get("level", "INFO"),
                     confidence=float(lv.get("confidence", 0.0)),
                 )
-                for l, lv in zip(lines, lls)
+                for line, lv in zip(lines, lls)
             ]
             backend = "llm"
     except Exception as e:
@@ -165,10 +175,11 @@ async def classify_log_levels(
                 lls = await local_small.classify_log_levels(lines)
                 results = [
                     LogLevelResult(
-                        line=l, predicted_level=lv.get("level", "INFO"),
+                        line=line,
+                        predicted_level=lv.get("level", "INFO"),
                         confidence=float(lv.get("confidence", 0.0)),
                     )
-                    for l, lv in zip(lines, lls)
+                    for line, lv in zip(lines, lls)
                 ]
                 backend = "local_small"
         except Exception as e:
@@ -177,15 +188,18 @@ async def classify_log_levels(
     # 3. 全失败 → 正则 detect_level 兜底
     if not results:
         from agent.loganalysis.extractor import detect_level
+
         results = [
-            LogLevelResult(line=l, predicted_level=detect_level(l), confidence=0.5)
-            for l in lines
+            LogLevelResult(line=line, predicted_level=detect_level(line), confidence=0.5)
+            for line in lines
         ]
         backend = "mock"
 
     elapsed_ms = int((time.monotonic() - started) * 1000)
     return LogLevelClassifyResponse(
-        results=results, elapsed_ms=elapsed_ms, backend=backend,
+        results=results,
+        elapsed_ms=elapsed_ms,
+        backend=backend,
     )
 
 
@@ -218,7 +232,7 @@ def _truncate_by_tokens(
 
 
 def _build_root_cause_prompt(blocks: list[ErrorBlock], req: RootCauseRequest) -> str:
-    """拼 LLM prompt（架构师约束：800 字以内回答）。"""
+    """拼 LLM prompt（架构师约束：800 字以内回答），模板见 loganalysis/root_cause.md。"""
     block_lines: list[str] = []
     for i, b in enumerate(blocks, 1):
         block_lines.append(f"### 错误块 {i}（行 {b.start_line}-{b.end_line}）")
@@ -232,18 +246,12 @@ def _build_root_cause_prompt(blocks: list[ErrorBlock], req: RootCauseRequest) ->
             + "\n".join(req.context_window_lines[-req.context_window :])
         )
 
-    return (
-        "你是日志根因分析专家。请基于以下已去重 + 按频次排序的 ERROR 块，"
-        "分析主要错误模式、根因、影响范围、建议处置。\n\n"
-        f"文件：{req.file_path}\n"
-        f"ERROR 块数量：{len(blocks)}\n"
-        f"{context_section}\n\n"
-        f"ERROR 块详情：\n{chr(10).join(block_lines)}\n\n"
-        "请回答（限制 800 字以内）：\n"
-        "1. 主要错误模式是什么？\n"
-        "2. 根因是什么？\n"
-        "3. 影响范围？\n"
-        "4. 建议处置？"
+    return render_prompt(
+        load_prompt("loganalysis/root_cause"),
+        FILE_PATH=req.file_path,
+        BLOCK_COUNT=str(len(blocks)),
+        CONTEXT=context_section,
+        BLOCKS="\n".join(block_lines),
     )
 
 
@@ -260,6 +268,5 @@ def _mock_root_cause_summary(blocks: list[ErrorBlock]) -> str:
     parts = [f"  - {p} ×{c}" for p, c in top]
     return (
         "[Mock 摘要 —— 无可用 LLM]\n"
-        f"检测到 {len(blocks)} 个 ERROR 块（去重后）；主要模式：\n"
-        + "\n".join(parts)
+        f"检测到 {len(blocks)} 个 ERROR 块（去重后）；主要模式：\n" + "\n".join(parts)
     )

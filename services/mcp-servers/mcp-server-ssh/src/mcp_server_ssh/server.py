@@ -1,4 +1,5 @@
 """MCP stdio entry — SSH command execution with safety guards."""
+
 from __future__ import annotations
 
 import asyncio
@@ -9,7 +10,6 @@ from mcp.types import Tool
 
 from mcp_server_ssh.safety import cmd_blacklist, host_whitelist
 from mcp_server_ssh.tools import exec, upload
-
 
 server = Server("mcp-server-ssh")
 

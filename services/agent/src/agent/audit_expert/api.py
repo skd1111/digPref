@@ -15,6 +15,7 @@
   - GET  /audit/public-key                —— 获取 RSA 公钥 PEM
   - GET  /audit/stats                     —— 统计
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -53,15 +54,14 @@ from agent.audit_expert.rsa_sign import (
 )
 from agent.audit_expert.store import (
     get_default_storage,
-    reset_default_storage,
 )
-
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/audit", tags=["audit-expert"])
 
 
 # ---- Pydantic schemas -----------------------------------------------------
+
 
 class CreateTaskRequest(BaseModel):
     run_id: str
@@ -82,6 +82,7 @@ class AddEvidenceRequest(BaseModel):
 
 class DecideRequest(BaseModel):
     """V1 决策请求：包含 TOTP + RSA 签名字段。"""
+
     action_type: ActionType = ActionType.APPROVE
     actor: str = Field(min_length=1, max_length=128)
     reason: str = Field(default="", max_length=2048)
@@ -92,6 +93,7 @@ class DecideRequest(BaseModel):
 
 class DualApproveRequest(BaseModel):
     """V1 双人复核：仅 approve + reason + mfa + totp。"""
+
     actor: str = Field(min_length=1, max_length=128)
     reason: str = Field(default="", max_length=2048)
     mfa_verified: bool = False
@@ -125,6 +127,7 @@ class TaskResponse(BaseModel):
 
 # ---- 辅助函数 ------------------------------------------------------------
 
+
 def _should_dual_required(risk_level: RiskLevel) -> bool:
     """判断是否需要双人复核（V1 策略）。"""
     return risk_level in (RiskLevel.HIGH, RiskLevel.CRITICAL)
@@ -152,6 +155,7 @@ def _enforce_mfa_and_signature(
 
     if totp_code:
         from agent.audit_expert.mfa import get_or_create_user_secret
+
         secret = get_or_create_user_secret(actor)
         if not verify_totp(secret, totp_code):
             return False, None, None, "TOTP code invalid or expired"
@@ -160,6 +164,7 @@ def _enforce_mfa_and_signature(
     if use_rsa:
         # 签名 payload = "actor|risk|totp_hash|timestamp"
         import time as _t
+
         payload = f"{actor}|{risk_level.value}|{totp_code_hash or ''}|{int(_t.time())}"
         try:
             rsa_signature = sign_payload(payload)
@@ -170,6 +175,7 @@ def _enforce_mfa_and_signature(
 
 
 # ---- 端点 ---------------------------------------------------------------
+
 
 @router.post("/tasks", response_model=TaskResponse)
 async def create_task(req: CreateTaskRequest) -> TaskResponse:
@@ -208,19 +214,25 @@ async def create_task(req: CreateTaskRequest) -> TaskResponse:
         )
 
     compliance_issues = sum(1 for c in checks if not c.passed)
-    emit_event_sync(EVT_AUDIT_TASK_PENDING, {
-        "kind": EVT_AUDIT_TASK_PENDING,
-        "task_id": task_id,
-        "risk_level": req.risk_level.value,
-        "compliance_issues": compliance_issues,
-        "dual_required": dual,
-    })
-    emit_event_sync(EVT_AUDIT_COMPLIANCE_DONE, {
-        "kind": EVT_AUDIT_COMPLIANCE_DONE,
-        "task_id": task_id,
-        "total_checks": len(checks),
-        "issues": compliance_issues,
-    })
+    emit_event_sync(
+        EVT_AUDIT_TASK_PENDING,
+        {
+            "kind": EVT_AUDIT_TASK_PENDING,
+            "task_id": task_id,
+            "risk_level": req.risk_level.value,
+            "compliance_issues": compliance_issues,
+            "dual_required": dual,
+        },
+    )
+    emit_event_sync(
+        EVT_AUDIT_COMPLIANCE_DONE,
+        {
+            "kind": EVT_AUDIT_COMPLIANCE_DONE,
+            "task_id": task_id,
+            "total_checks": len(checks),
+            "issues": compliance_issues,
+        },
+    )
 
     return TaskResponse(
         task_id=task_id,
@@ -255,36 +267,40 @@ async def list_tasks(
 ) -> list[TaskResponse]:
     storage = get_default_storage()
     tasks = await storage.list_tasks(
-        status=status, risk_level=risk_level, limit=min(limit, 500),
+        status=status,
+        risk_level=risk_level,
+        limit=min(limit, 500),
     )
     result: list[TaskResponse] = []
     for t in tasks:
         evidence_list = await storage.list_evidence(t["task_id"])
         compliance_list = await storage.list_compliance(t["task_id"])
         issues = sum(1 for c in compliance_list if not c["passed"])
-        result.append(TaskResponse(
-            task_id=t["task_id"],
-            run_id=t["run_id"],
-            title=t["title"],
-            description=t["description"],
-            risk_level=t["risk_level"],
-            status=t["status"],
-            pending_tool_call=t.get("pending_tool_call", {}),
-            requested_by=t["requested_by"],
-            requested_at=t["requested_at"],
-            decided_by=t.get("decided_by") or None,
-            decided_at=t.get("decided_at") or None,
-            decision_reason=t.get("decision_reason") or None,
-            mfa_verified=t.get("mfa_verified", False),
-            evidence_count=len(evidence_list),
-            compliance_issues=issues,
-            dual_required=t.get("dual_required", False),
-            first_approver=t.get("first_approver") or None,
-            second_approver=t.get("second_approver") or None,
-            first_approver_signed_at=t.get("first_approver_signed_at") or None,
-            second_approver_signed_at=t.get("second_approver_signed_at") or None,
-            meta=t.get("meta", {}),
-        ))
+        result.append(
+            TaskResponse(
+                task_id=t["task_id"],
+                run_id=t["run_id"],
+                title=t["title"],
+                description=t["description"],
+                risk_level=t["risk_level"],
+                status=t["status"],
+                pending_tool_call=t.get("pending_tool_call", {}),
+                requested_by=t["requested_by"],
+                requested_at=t["requested_at"],
+                decided_by=t.get("decided_by") or None,
+                decided_at=t.get("decided_at") or None,
+                decision_reason=t.get("decision_reason") or None,
+                mfa_verified=t.get("mfa_verified", False),
+                evidence_count=len(evidence_list),
+                compliance_issues=issues,
+                dual_required=t.get("dual_required", False),
+                first_approver=t.get("first_approver") or None,
+                second_approver=t.get("second_approver") or None,
+                first_approver_signed_at=t.get("first_approver_signed_at") or None,
+                second_approver_signed_at=t.get("second_approver_signed_at") or None,
+                meta=t.get("meta", {}),
+            )
+        )
     return result
 
 
@@ -337,12 +353,15 @@ async def add_evidence(task_id: str, req: AddEvidenceRequest) -> dict:
         content=req.content,
         source=req.source,
     )
-    emit_event_sync(EVT_AUDIT_EVIDENCE_ADDED, {
-        "kind": EVT_AUDIT_EVIDENCE_ADDED,
-        "task_id": task_id,
-        "evidence_id": evidence_id,
-        "evidence_type": req.evidence_type.value,
-    })
+    emit_event_sync(
+        EVT_AUDIT_EVIDENCE_ADDED,
+        {
+            "kind": EVT_AUDIT_EVIDENCE_ADDED,
+            "task_id": task_id,
+            "evidence_id": evidence_id,
+            "evidence_type": req.evidence_type.value,
+        },
+    )
     return {"evidence_id": evidence_id, "task_id": task_id}
 
 
@@ -453,14 +472,17 @@ async def _do_decide(
         mfa_verified=mfa_ok,
     )
 
-    emit_event_sync(EVT_AUDIT_TASK_DECIDED, {
-        "kind": EVT_AUDIT_TASK_DECIDED,
-        "task_id": task_id,
-        "action_type": action_type.value,
-        "actor": actor,
-        "new_status": new_status.value,
-        "rsa_used": bool(rsa_sig),
-    })
+    emit_event_sync(
+        EVT_AUDIT_TASK_DECIDED,
+        {
+            "kind": EVT_AUDIT_TASK_DECIDED,
+            "task_id": task_id,
+            "action_type": action_type.value,
+            "actor": actor,
+            "new_status": new_status.value,
+            "rsa_used": bool(rsa_sig),
+        },
+    )
     return {
         "task_id": task_id,
         "action_id": action.action_id,
@@ -475,9 +497,13 @@ async def _do_decide(
 async def decide(task_id: str, req: DecideRequest) -> dict[str, Any]:
     """V1 单人决策（含 TOTP + RSA）。"""
     return await _do_decide(
-        task_id=task_id, actor=req.actor, reason=req.reason,
-        mfa_verified=req.mfa_verified, totp_code=req.totp_code,
-        use_rsa=req.use_rsa, action_type=req.action_type,
+        task_id=task_id,
+        actor=req.actor,
+        reason=req.reason,
+        mfa_verified=req.mfa_verified,
+        totp_code=req.totp_code,
+        use_rsa=req.use_rsa,
+        action_type=req.action_type,
     )
 
 
@@ -534,13 +560,16 @@ async def dual_first_approve(task_id: str, req: DualApproveRequest) -> dict[str,
     )
     await storage.record_first_approver(task_id, req.actor, req.reason)
 
-    emit_event_sync(EVT_AUDIT_TASK_DECIDED, {
-        "kind": EVT_AUDIT_TASK_DECIDED,
-        "task_id": task_id,
-        "phase": "dual_first",
-        "actor": req.actor,
-        "new_status": "pending",  # 仍 pending 等第二审批
-    })
+    emit_event_sync(
+        EVT_AUDIT_TASK_DECIDED,
+        {
+            "kind": EVT_AUDIT_TASK_DECIDED,
+            "task_id": task_id,
+            "phase": "dual_first",
+            "actor": req.actor,
+            "new_status": "pending",  # 仍 pending 等第二审批
+        },
+    )
     return {
         "task_id": task_id,
         "phase": "dual_first",
@@ -606,13 +635,16 @@ async def dual_second_approve(task_id: str, req: DualApproveRequest) -> dict[str
     )
     await storage.record_second_approver(task_id, req.actor, req.reason)
 
-    emit_event_sync(EVT_AUDIT_TASK_DECIDED, {
-        "kind": EVT_AUDIT_TASK_DECIDED,
-        "task_id": task_id,
-        "phase": "dual_second",
-        "actor": req.actor,
-        "new_status": "approved",
-    })
+    emit_event_sync(
+        EVT_AUDIT_TASK_DECIDED,
+        {
+            "kind": EVT_AUDIT_TASK_DECIDED,
+            "task_id": task_id,
+            "phase": "dual_second",
+            "actor": req.actor,
+            "new_status": "approved",
+        },
+    )
     return {
         "task_id": task_id,
         "phase": "dual_second",
@@ -660,7 +692,6 @@ async def verify_chain(task_id: str) -> dict[str, Any]:
 @router.get("/mfa/{username}")
 async def get_mfa_code(username: str) -> dict:
     """V1 demo 端点：返回当前用户的 TOTP（生产 V1.5 删除或鉴权）。"""
-    from agent.audit_expert.mfa import get_current_totp_for_user
     code = get_current_totp_for_user(username)
     return {"username": username, "totp_code": code, "note": "demo only; remove in V1.5"}
 

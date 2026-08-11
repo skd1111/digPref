@@ -4,13 +4,11 @@
   - data_expert.db 物理隔离（与 audit/router/knowledge 独立）
   - 结果集大对象走 Parquet 文件（不塞进 SQLite）
 """
-import asyncio
-import tempfile
+
 import time
 from pathlib import Path
 
 import pytest
-
 from agent.dataexpert.storage import DataExpertStorage
 
 
@@ -22,6 +20,7 @@ def storage(tmp_path):
 
 
 # ---- data_sources CRUD ---------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_upsert_and_get_source(storage):
@@ -69,6 +68,7 @@ async def test_get_source_not_found(storage):
 
 
 # ---- analysis_tasks CRUD -------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_insert_and_get_task(storage):
@@ -120,6 +120,7 @@ async def test_get_task_not_found(storage):
 
 # ---- report_templates CRUD -----------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_upsert_and_list_template(storage):
     """upsert + list 报表模板。"""
@@ -150,11 +151,13 @@ async def test_upsert_template_conflict(storage):
 
 # ---- Parquet 落盘 / 读回 --------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_parquet_save_and_load(tmp_path, monkeypatch):
     """Parquet 落盘后能正确读回。"""
     pytest.importorskip("pandas")
     import importlib.util
+
     # pandas 可能来自 config/driver/_site（driver_bootstrap 注入），但未必带
     # parquet 引擎 —— pyarrow / fastparquet 都没有时跳过（BUGFIX #706 建议修法）
     if (
@@ -163,8 +166,7 @@ async def test_parquet_save_and_load(tmp_path, monkeypatch):
     ):
         pytest.skip("parquet engine not installed (need pyarrow or fastparquet)")
     import pandas as pd
-
-    from agent.dataexpert.storage import save_result_parquet, load_result_parquet
+    from agent.dataexpert.storage import load_result_parquet, save_result_parquet
 
     # 临时修改 settings.data_result_dir
     monkeypatch.setattr("agent.dataexpert.storage.settings.data_result_dir", str(tmp_path))
@@ -182,6 +184,7 @@ async def test_parquet_save_and_load(tmp_path, monkeypatch):
 
 
 # ---- 物理隔离验证 ----------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_db_physical_isolation(tmp_path):

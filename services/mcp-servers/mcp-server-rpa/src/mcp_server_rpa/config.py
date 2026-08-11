@@ -1,4 +1,5 @@
 """RPA MCP server config."""
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 

@@ -1,20 +1,18 @@
 """Phase 18 工具链配置端点：GET/POST /toolchain 往返 + 键白名单过滤。"""
+
 from __future__ import annotations
 
 import pytest
+from agent.api.toolchain import router as toolchain_router
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
-from agent.api.toolchain import router as toolchain_router
 
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     from agent.config import settings
 
-    monkeypatch.setattr(
-        settings, "toolchain_config_path", str(tmp_path / "toolchain.json")
-    )
+    monkeypatch.setattr(settings, "toolchain_config_path", str(tmp_path / "toolchain.json"))
     app = FastAPI()
     app.include_router(toolchain_router)
     return TestClient(app)

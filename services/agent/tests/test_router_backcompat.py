@@ -7,12 +7,12 @@
 这个测试是「红线锁」：任何破坏公开契约的重构都会让它先红。
 测试全程走 mock 后端（EAIDE_LLM_BACKEND=mock），不依赖 Ollama / 内网 LLM。
 """
+
 from __future__ import annotations
 
 import inspect
 
 import pytest
-
 from agent.llm.router import LMRouter
 
 

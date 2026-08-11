@@ -2,6 +2,7 @@
 
 Phase 4 V0：截图理解能力，端侧独有（不降级到云端）。
 """
+
 from __future__ import annotations
 
 import base64
@@ -59,9 +60,7 @@ class LocalVisionClient:
             ) from exc
         except httpx.TimeoutException as exc:
             logger.debug("local_vision: request timed out")
-            raise LocalVisionUnavailableError(
-                "Local vision model request timed out"
-            ) from exc
+            raise LocalVisionUnavailableError("Local vision model request timed out") from exc
         except (KeyError, IndexError) as exc:
             logger.debug("local_vision: unexpected response shape: %s", exc)
             raise LocalVisionUnavailableError(
@@ -119,7 +118,10 @@ class LocalVisionClient:
                         "role": "user",
                         "content": [
                             {"type": "image_url", "image_url": {"url": data_url}},
-                            {"type": "text", "text": "请提取这张图片中的所有文字。只输出文字，不要添加任何解释。"},
+                            {
+                                "type": "text",
+                                "text": "请提取这张图片中的所有文字。只输出文字，不要添加任何解释。",
+                            },
                         ],
                     }
                 ],

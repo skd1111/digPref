@@ -154,7 +154,7 @@ pub async fn audit_decide(args: Value) -> AppResult<Value> {
         .build()
         .map_err(|e| AppError::Config(format!("reqwest client: {}", e)))?;
 
-    let mut req = match method {
+    let req = match method {
         "GET" => client.get(&url),
         "POST" => client.post(&url).json(&body.unwrap_or(json!({}))),
         _ => return Err(AppError::Config(format!("unsupported method: {}", method))),

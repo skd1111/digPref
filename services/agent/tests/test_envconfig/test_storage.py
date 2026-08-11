@@ -8,17 +8,14 @@
     - delete_env：从 environments.json 移除条目
     - 一次性从老 layout（envs/*.json + index.json）迁移
 """
+
 from __future__ import annotations
 
-import os
 import pytest
-from pydantic import SecretStr
-
 from agent.envconfig import (
     ApiGateway,
     DatabaseConnection,
     EnvConfig,
-    EnvIndexEntry,
     Environment,
     config_dir,
     delete_env,
@@ -31,6 +28,7 @@ from agent.envconfig import (
     save_env,
     set_active_env,
 )
+from pydantic import SecretStr
 
 
 @pytest.fixture(autouse=True)
@@ -115,7 +113,6 @@ class TestSaveLoad:
         assert cfg.databases == []
         assert cfg.target_servers == []
 
-
     def test_load_real_missing_env_raises(self, _isolate_config_dir):
         # 把所有 seed 删光后再 load，应该抛 FileNotFoundError
         for e in (
@@ -156,9 +153,7 @@ class TestActive:
         assert active is not None
         assert active.environment == Environment.PROD
         # 切到 test，prod 不再 active
-        save_env(
-            EnvConfig(environment=Environment.TEST, label="测试")
-        )
+        save_env(EnvConfig(environment=Environment.TEST, label="测试"))
         set_active_env(Environment.TEST)
         active = get_active_env()
         assert active is not None
@@ -183,9 +178,7 @@ class TestDelete:
         assert any(e.environment == Environment.PROD for e in list_envs())
         removed = delete_env(Environment.PROD)
         assert removed is True
-        assert not any(
-            e.environment == Environment.PROD for e in list_envs()
-        )
+        assert not any(e.environment == Environment.PROD for e in list_envs())
 
     def test_delete_absent_returns_false(self, _isolate_config_dir):
         # 先把 seed 全删光
@@ -226,6 +219,7 @@ class TestMigration:
 
         # _read_environments 的入口才触发迁移 —— 这里手动调一次
         from agent.envconfig.storage import _read_environments
+
         _read_environments()
 
         envs = list_envs()
@@ -284,13 +278,9 @@ class TestExportImportRoundtrip:
         # 3. 用对 passphrase 能读回，且密钥仍是占位符
         imp = import_configs(out, passphrase="s3cret-pass")
         assert imp.env_count == 2
-        assert imp.configs[0].databases[0].password.get_secret_value().startswith(
-            "__KEYRING_REF:"
-        )
+        assert imp.configs[0].databases[0].password.get_secret_value().startswith("__KEYRING_REF:")
         # 占位符账户列表完整
-        assert any(
-            "databases.orders.pg.password" in p for p in imp.placeholders
-        )
+        assert any("databases.orders.pg.password" in p for p in imp.placeholders)
 
     def test_export_blocks_plaintext_secret(self, _isolate_config_dir, monkeypatch):
         # 模拟有 bug 的 EnvConfig（密码字段存了明文，且我们绕过 scrub 的二次校验）

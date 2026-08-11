@@ -5,6 +5,7 @@ POST /toolchain → 保存配置（写入单文件 JSON，探测缓存失效）
 
 路径仅存可执行文件位置（非凭证），不涉及敏感信息。
 """
+
 from __future__ import annotations
 
 import logging

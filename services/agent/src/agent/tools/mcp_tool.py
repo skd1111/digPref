@@ -1,4 +1,5 @@
 """Wrapper that turns an MCP tool into a LangChain BaseTool."""
+
 from __future__ import annotations
 
 from langchain_core.tools import BaseTool

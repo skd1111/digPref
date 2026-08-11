@@ -2,6 +2,7 @@
 
 仅保留最小接口定义以满足其他模块 import 依赖。
 """
+
 from __future__ import annotations
 
 import logging
@@ -23,8 +24,15 @@ def build_default_embedding_client():
 class RAGRetriever:
     """RAG 检索器（占位实现）。"""
 
-    def __init__(self, storage, embedding=None, *, top_k: int = 3,
-                 similarity_threshold: float = 0.0, max_prompt_chars: int = 2000):
+    def __init__(
+        self,
+        storage,
+        embedding=None,
+        *,
+        top_k: int = 3,
+        similarity_threshold: float = 0.0,
+        max_prompt_chars: int = 2000,
+    ):
         self.storage = storage
         self.embedding = embedding
         self.top_k = top_k
@@ -33,6 +41,7 @@ class RAGRetriever:
 
     async def retrieve(self, query: str, **kwargs) -> Any:
         from agent.knowledge.models import RAGContext
+
         return RAGContext(query=query, backend="stub")
 
     def format_for_llm(self, results) -> str:
@@ -46,6 +55,7 @@ def get_default_retriever() -> RAGRetriever:
     global _default_retriever
     if _default_retriever is None:
         from agent.knowledge.storage import get_default_storage
+
         _default_retriever = RAGRetriever(get_default_storage(), None)
     return _default_retriever
 

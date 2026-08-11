@@ -10,12 +10,12 @@
 - judge 输出格式异常 → 兜底选第一个
 - _build_judge_prompt 安全替换（不误吞 user_prompt 里的 {xxx}）
 """
+
 from __future__ import annotations
 
 import asyncio
 
 import pytest
-
 from agent.llm.dual_judge import (
     DualJudgeResult,
     _build_judge_prompt,
@@ -25,31 +25,39 @@ from agent.llm.dual_judge import (
 from agent.llm.router import _LOCAL_ONLY_TASKS
 
 
+def test_judge_default_prompt_from_template():
+    """裁判默认提示词已外置为 .md 资产（spec §4.4）。"""
+    from agent.llm.prompts import load_prompt
+
+    assert "WINNER" in load_prompt("judge")
+
+
 # ---- helpers --------------------------------------------------------------
+
 
 async def _ok(text: str, latency: float = 0.0):
     async def _caller(kind: str, prompt: str) -> str:
         if latency:
             await asyncio.sleep(latency)
         return text
+
     return _caller
 
 
 async def _err(msg: str):
     async def _caller(kind: str, prompt: str):
         raise RuntimeError(msg)
+
     return _caller
 
 
 # ---- 基础路径 --------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_two_candidates_with_judge_picks_winner():
     a = await _ok("A 答案")
     b = await _ok("B 答案")
-
-    async def judge(kind, prompt):
-        return "WINNER: 1\nB 更准确"
 
     async def judge(kind, prompt):
         return "WINNER: 1\nB 更准确"
@@ -91,12 +99,13 @@ async def test_single_candidate_returns_directly_no_judge():
 
 # ---- 失败路径 --------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_all_candidates_fail_raises():
     """所有 candidate 都失败 → RuntimeError。"""
     a = await _err("a-fail")
     b = await _err("b-fail")
-    with pytest.raises(RuntimeError, match="all.*candidates failed"):
+    with pytest.raises(RuntimeError, match=r"all.*candidates failed"):
         await run_dual_with_judge(
             user_prompt="x",
             backend_callers={"ollama": a, "private": b},
@@ -122,6 +131,7 @@ async def test_partial_failure_only_successful_compete():
 
 
 # ---- 红线 -----------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_local_only_task_forbidden():
@@ -165,6 +175,7 @@ async def test_empty_candidate_list_raises():
 
 
 # ---- judge 兜底路径 -------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_judge_caller_none_falls_back_to_local_rule():
@@ -224,6 +235,7 @@ async def test_judge_returns_garbage_falls_back_to_first():
 
 # ---- _parse_judge_output ---------------------------------------------------
 
+
 def test_parse_judge_output_winner_format():
     assert _parse_judge_output("WINNER: 1", 3) == (1, "")
     assert _parse_judge_output("winner = 2", 3) == (2, "")
@@ -246,6 +258,7 @@ def test_parse_judge_output_no_winner_returns_default():
 
 
 # ---- _build_judge_prompt ---------------------------------------------------
+
 
 def test_build_judge_prompt_does_not_swallow_user_braces():
     """用户 prompt 含 {xxx} 不应被 .format 误吞。"""
@@ -275,6 +288,7 @@ def test_build_judge_prompt_partial_replacement():
 
 # ---- latency 计时 ---------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_latency_recorded_per_candidate():
     async def slow(kind, prompt):
@@ -297,6 +311,7 @@ async def test_latency_recorded_per_candidate():
 
 
 # ---- judge 失败兜底 -------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_judge_caller_raises_falls_back_to_first():

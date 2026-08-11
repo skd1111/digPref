@@ -1,31 +1,45 @@
 """5 维评分测试。"""
-import pytest
 
-from agent.llm.models import LLMBackend, RESIDENCY_LOCAL, RESIDENCY_PRIVATE, TaskCategory
+from agent.llm.models import RESIDENCY_LOCAL, RESIDENCY_PRIVATE, LLMBackend, TaskCategory
 from agent.llm.scoring import score_backend
 
 
 def _local() -> LLMBackend:
     return LLMBackend(
-        name="ollama", type="local", base_url="http://127.0.0.1:11434",
-        model_name="qwen2.5:0.5b", cost_per_1k_tokens=0.0, timeout_seconds=5,
-        data_residency=RESIDENCY_LOCAL, capabilities=["text"],
+        name="ollama",
+        type="local",
+        base_url="http://127.0.0.1:11434",
+        model_name="qwen2.5:0.5b",
+        cost_per_1k_tokens=0.0,
+        timeout_seconds=5,
+        data_residency=RESIDENCY_LOCAL,
+        capabilities=["text"],
     )
 
 
 def _private() -> LLMBackend:
     return LLMBackend(
-        name="deepseek-private", type="private", base_url="http://internal/api",
-        model_name="deepseek-v2", cost_per_1k_tokens=0.001, timeout_seconds=20,
-        data_residency=RESIDENCY_PRIVATE, capabilities=["text", "code"],
+        name="deepseek-private",
+        type="private",
+        base_url="http://internal/api",
+        model_name="deepseek-v2",
+        cost_per_1k_tokens=0.001,
+        timeout_seconds=20,
+        data_residency=RESIDENCY_PRIVATE,
+        capabilities=["text", "code"],
     )
 
 
 def _cloud() -> LLMBackend:
     return LLMBackend(
-        name="gpt4", type="cloud", base_url="https://api.openai.com",
-        model_name="gpt-4", cost_per_1k_tokens=0.03, timeout_seconds=60,
-        data_residency="cloud", capabilities=["text", "code", "vision"],
+        name="gpt4",
+        type="cloud",
+        base_url="https://api.openai.com",
+        model_name="gpt-4",
+        cost_per_1k_tokens=0.03,
+        timeout_seconds=60,
+        data_residency="cloud",
+        capabilities=["text", "code", "vision"],
     )
 
 
@@ -58,8 +72,13 @@ def test_cost_score_cloud_expensive():
 def test_cost_score_above_threshold_is_zero():
     """cost_per_1k_tokens >= 0.1 → 0 分。"""
     expensive = LLMBackend(
-        name="ultra", type="cloud", base_url="x", model_name="m",
-        cost_per_1k_tokens=0.5, timeout_seconds=10, data_residency="cloud",
+        name="ultra",
+        type="cloud",
+        base_url="x",
+        model_name="m",
+        cost_per_1k_tokens=0.5,
+        timeout_seconds=10,
+        data_residency="cloud",
     )
     s = score_backend(expensive, TaskCategory.COMPLEX)
     assert s.cost == 0.0

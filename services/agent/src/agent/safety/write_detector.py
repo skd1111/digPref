@@ -4,21 +4,33 @@ This is the Agent-side first filter. The MCP server (`mcp-server-database`,
 `mcp-server-ssh`, etc.) re-runs its own safety pipeline (sqlglot AST,
 dangerous_ops, etc.) as belt-and-braces.
 """
+
 from __future__ import annotations
 
 import re
 
-
 _NAME_WRITE_TOKENS = (
-    "write", "mutate", "update", "delete", "post", "put", "patch",
-    "execute", ".exec",    # "ssh.exec" / "shell.exec" — dot-prefixed to avoid false positives
-    "drop", "truncate", "alter", "create", "insert",
-    "upload",               # SFTP upload
-    "rename",               # file / table rename
-    "merge",                # SQL MERGE / UPSERT
-    "replace",              # REPLACE INTO / regex replace
-    "grant", "revoke",      # DCL — privilege changes
-    "call",                 # CALL stored_procedure
+    "write",
+    "mutate",
+    "update",
+    "delete",
+    "post",
+    "put",
+    "patch",
+    "execute",
+    ".exec",  # "ssh.exec" / "shell.exec" — dot-prefixed to avoid false positives
+    "drop",
+    "truncate",
+    "alter",
+    "create",
+    "insert",
+    "upload",  # SFTP upload
+    "rename",  # file / table rename
+    "merge",  # SQL MERGE / UPSERT
+    "replace",  # REPLACE INTO / regex replace
+    "grant",
+    "revoke",  # DCL — privilege changes
+    "call",  # CALL stored_procedure
 )
 
 

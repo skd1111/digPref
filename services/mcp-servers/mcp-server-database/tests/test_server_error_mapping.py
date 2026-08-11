@@ -1,22 +1,16 @@
 """End-to-end smoke test of the server dispatcher."""
+
 from __future__ import annotations
 
-import asyncio
-import json
-import sqlite3
-from pathlib import Path
-
 import pytest
-
+from mcp_server_database.safety.dangerous_ops import DestructiveOpError
+from mcp_server_database.safety.sqlglot_validator import UnsafeSqlError
 from mcp_server_database.server import (
-    _Handled,
     _attach_meta,
     _error_response,
     _map_exception,
     _prevalidate_sql,
 )
-from mcp_server_database.safety.dangerous_ops import DestructiveOpError
-from mcp_server_database.safety.sqlglot_validator import UnsafeSqlError
 
 
 class TestPrevalidateSql:
@@ -35,11 +29,13 @@ class TestPrevalidateSql:
         # SELECT 1 passes the sqlglot validator; dangerous_ops only triggers on
         # the write path. Use an UPDATE without WHERE — caught by both checks.
         with pytest.raises(DestructiveOpError, match="UPDATE without WHERE"):
-            _prevalidate_sql({
-                "sql": "UPDATE users SET name = 'x'",
-                "connection": "x_pg",
-                "approval_id": "abc",
-            })
+            _prevalidate_sql(
+                {
+                    "sql": "UPDATE users SET name = 'x'",
+                    "connection": "x_pg",
+                    "approval_id": "abc",
+                }
+            )
 
 
 class TestErrorMapping:

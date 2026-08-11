@@ -19,7 +19,7 @@ export function QueryEditor(): JSX.Element {
   const setMode = useDataStore((s) => s.setEditorMode);
 
   return (
-    <div className="flex h-full flex-col overflow-hidden" style={{ backgroundColor: '#ffffff' }}>
+    <div className="relative flex h-full flex-col overflow-hidden" style={{ backgroundColor: '#ffffff' }}>
       {/* 模式切换 tab */}
       <div className="flex flex-shrink-0 items-center gap-1 border-b px-2 py-1.5" style={{ borderColor: '#d0d0d0' }}>
         {MODES.map((m) => {
@@ -48,6 +48,71 @@ export function QueryEditor(): JSX.Element {
         {mode === 'python' && <PythonPane />}
         {mode === 'chat' && <ChatPane />}
       </div>
+
+      {/* HITL 重查询确认（缺口 3） */}
+      <HeavyQueryConfirmDialog />
+    </div>
+  );
+}
+
+// ---- HITL 重查询确认对话框（后端 needs_confirm 触发） -------------------
+
+function HeavyQueryConfirmDialog(): JSX.Element | null {
+  const pending = useDataStore((s) => s.pendingConfirm);
+  const confirmRun = useDataStore((s) => s.confirmRun);
+  const cancelConfirm = useDataStore((s) => s.cancelConfirm);
+
+  if (!pending) return null;
+  return (
+    <div
+      className="absolute inset-0 z-50 flex items-center justify-center"
+      style={{ backgroundColor: 'rgba(0, 40, 80, 0.35)' }}
+      role="dialog"
+      aria-label="重查询确认"
+    >
+      <div
+        className="w-[520px] max-w-[90%] rounded-lg border shadow-xl"
+        style={{ backgroundColor: '#ffffff', borderColor: '#0e639c' }}
+      >
+        <div
+          className="flex items-center gap-2 rounded-t-lg px-4 py-2.5 text-ui font-semibold"
+          style={{ backgroundColor: '#e8f1fa', color: '#0e639c' }}
+        >
+          🔒 重查询确认（只读）
+        </div>
+        <div className="space-y-3 px-4 py-3">
+          <p className="text-ui" style={{ color: '#a11d1d' }}>
+            ⚠ {pending.message}
+          </p>
+          <p className="text-2xs" style={{ color: '#616161' }}>
+            该查询可能耗时较长。数据专家模式为只读（SELECT 白名单），并已强制注入 LIMIT 上限。
+          </p>
+          <pre
+            className="max-h-[160px] overflow-auto rounded p-2 font-mono text-2xs"
+            style={{ backgroundColor: '#f3f3f3', color: '#1f1f1f' }}
+          >
+            {pending.sql}
+          </pre>
+        </div>
+        <div className="flex justify-end gap-2 border-t px-4 py-2.5" style={{ borderColor: '#e0e0e0' }}>
+          <button
+            type="button"
+            onClick={cancelConfirm}
+            className="rounded px-4 py-1.5 text-ui"
+            style={{ backgroundColor: '#ececec', color: '#333333' }}
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={() => void confirmRun()}
+            className="rounded px-4 py-1.5 text-ui font-semibold"
+            style={{ backgroundColor: '#0e639c', color: '#ffffff' }}
+          >
+            确认执行
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -68,7 +133,11 @@ function SqlPane(): JSX.Element {
 
   const handleMount = useCallback((editor: unknown, monaco: unknown) => {
     // 注册 SQL 自动补全（表名/关键字）
-    const m = monaco as { languages: { registerCompletionItemProvider: Function } };
+    const m = monaco as {
+      languages: {
+        registerCompletionItemProvider: (lang: string, provider: unknown) => unknown;
+      };
+    };
     m.languages.registerCompletionItemProvider('sql', {
       provideCompletionItems: () => {
         const keywords = [
@@ -87,7 +156,10 @@ function SqlPane(): JSX.Element {
       },
     });
     // Ctrl+Enter 执行
-    const ed = editor as { addCommand: Function; getModifiedEditor?: Function };
+    const ed = editor as {
+      addCommand: (keybinding: number, handler: () => void) => unknown;
+      getModifiedEditor?: () => unknown;
+    };
     ed.addCommand(2048 | 3, () => { // KeyMod.CtrlCmd | KeyCode.Enter
       if (readOnly) runQuery();
     });

@@ -23,7 +23,6 @@ from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from typing import Any
 
-
 # ---- 通道映射 ---------------------------------------------------------------
 
 _CHANNEL_BY_KIND = {
@@ -37,6 +36,8 @@ _CHANNEL_BY_KIND = {
     "llm_route_decided": "agent://llm_route_decided",
     "llm_degraded": "agent://llm_degraded",
     "llm_budget_alert": "agent://llm_budget_alert",
+    # Phase 17：缓存命中统计 SSE 三处同步（CLAUDE.md §4）
+    "llm_cache_stats": "agent://llm_cache_stats",
     # Phase 2G V1.3：业务功能点 SSE 三处同步（CLAUDE.md §4）
     "biznav_yaml_reloaded": "agent://biznav_yaml_reloaded",
     "biznav_feature_affected": "agent://biznav_feature_affected",
@@ -149,6 +150,11 @@ async def stream_graph_events(
     initial_state["run_id"] = run_id
     # Phase 18：chat 请求透传的会话级字段（work_mode / autonomy 等）
     if extra_state:
+        # 会话上下文（2026-08-06）：history 不是 state 字段，单独取出，
+        # 拼在当前用户消息之前，让 intent/编排/工具循环都能看到历史对话
+        history = extra_state.pop("history", None) or []
+        if history:
+            initial_state["messages"] = list(history) + initial_state["messages"]
         initial_state.update(extra_state)
     # 补充初始 trace 条目
     initial_state["trace"] = [
@@ -196,7 +202,7 @@ async def stream_graph_events(
             # Phase 15 V0：消费 preview HMR / 编译错误事件并推到 SSE 流
             for evt in await _drain_preview_events():
                 yield evt
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         yield _sse_event(
             "error",
             {
@@ -519,7 +525,7 @@ def _convert_chunk(mode: str, payload: Any, run_id: str, emitted_approvals: set[
         for node_name, delta in payload.items():
             if not isinstance(delta, dict):
                 continue
-            if "pending_tool_call" in delta and delta["pending_tool_call"]:
+            if delta.get("pending_tool_call"):
                 events.append(
                     {
                         "event": "tool_call",
@@ -552,7 +558,7 @@ def _convert_chunk(mode: str, payload: Any, run_id: str, emitted_approvals: set[
                     }
                 )
             # Phase 2D V0：检测 intent_node 路由出的 skill（C2 fix）
-            if "active_skill_id" in delta and delta["active_skill_id"]:
+            if delta.get("active_skill_id"):
                 routing = delta.get("skill_routing")
                 events.append(
                     {

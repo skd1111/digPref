@@ -18,6 +18,7 @@
     - 文件以 magic prefix `EAIDE-ENC-V1:` 开头 + base64 密文
     - 未加密：明文 YAML 文本（不推荐，但保留以方便开发者查看）
 """
+
 from __future__ import annotations
 
 import base64
@@ -31,8 +32,7 @@ import yaml
 from cryptography.fernet import Fernet, InvalidToken
 
 from .models import EnvConfig
-from .scrub import PlaceholderMissing, is_placeholder, scrub
-
+from .scrub import is_placeholder, scrub
 
 MAGIC_PREFIX = "EAIDE-ENC-V1:"
 
@@ -42,9 +42,7 @@ MAGIC_PREFIX = "EAIDE-ENC-V1:"
 
 def _derive_key(passphrase: str, salt: bytes) -> bytes:
     """从 passphrase 派生 Fernet key（32 字节 base64）。"""
-    hkdf = hashlib.pbkdf2_hmac(
-        "sha256", passphrase.encode("utf-8"), salt, 200_000
-    )
+    hkdf = hashlib.pbkdf2_hmac("sha256", passphrase.encode("utf-8"), salt, 200_000)
     return base64.urlsafe_b64encode(hkdf[:32])
 
 
@@ -90,9 +88,7 @@ def _config_to_yaml(configs: list[EnvConfig]) -> tuple[str, int, int]:
     # 二次校验：YAML 文本里不能出现任何占位符之外的明文 secret 形态
     placeholder_count = sum(yaml_text.count(p) for p in _iter_placeholder_strings())
     if _looks_like_plaintext_secret(yaml_text):
-        raise ValueError(
-            "检测到 YAML 文本中可能包含明文密钥（违反安全红线）。已阻止导出。"
-        )
+        raise ValueError("检测到 YAML 文本中可能包含明文密钥（违反安全红线）。已阻止导出。")
     return yaml_text, placeholder_count, len(configs)
 
 
@@ -110,7 +106,7 @@ def _looks_like_plaintext_secret(text: str) -> bool:
             continue
         for n in needles:
             if stripped.lower().startswith(n):
-                value = stripped[len(n):].strip()
+                value = stripped[len(n) :].strip()
                 # 占位符或空值不算泄漏
                 if not value or is_placeholder(value) or value in ('""', "''", "null", "~"):
                     continue
@@ -223,9 +219,7 @@ def import_configs(
         try:
             cfg = EnvConfig.model_validate(entry["config"])
         except Exception as e:
-            raise ValueError(
-                f"环境 {entry.get('environment', '?')} 配置解析失败: {e}"
-            ) from e
+            raise ValueError(f"环境 {entry.get('environment', '?')} 配置解析失败: {e}") from e
         configs.append(cfg)
 
     return ImportResult(

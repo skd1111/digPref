@@ -222,6 +222,20 @@ pub async fn router_list_backends(state: State<'_, AppState>) -> CmdResult<serde
     json_or_err(resp).await
 }
 
+/// 模型管理保存后热重载 LMRouter（端侧 base_url/model/max_context 无需重启生效）
+#[tauri::command]
+pub async fn router_reload_context(state: State<'_, AppState>) -> CmdResult<serde_json::Value> {
+    let url = agent_url(&state, "/router/reload-context");
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&url)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(err)?;
+    json_or_err(resp).await
+}
+
 #[tauri::command]
 pub async fn router_upsert_backend(
     backend: serde_json::Value,

@@ -7,6 +7,7 @@
                     →  把占位符按 account 还原成 SecretStr；
                        找不到对应 keyring 记录 → 抛 PlaceholderMissing。
 """
+
 from __future__ import annotations
 
 import re
@@ -16,7 +17,6 @@ from pydantic import SecretStr
 
 from .models import EnvConfig
 
-
 # ---- 占位符格式 -----------------------------------------------------------
 
 PLACEHOLDER_PREFIX = "__KEYRING_REF:"
@@ -24,7 +24,11 @@ PLACEHOLDER_SUFFIX = "__"
 
 # `__KEYRING_REF:db.orders_pg.password__` —— 内部不允许含 : / 空格
 _PLACEHOLDER_RE = re.compile(
-    r"^" + re.escape(PLACEHOLDER_PREFIX) + r"([A-Za-z0-9._\-]+)" + re.escape(PLACEHOLDER_SUFFIX) + r"$"
+    r"^"
+    + re.escape(PLACEHOLDER_PREFIX)
+    + r"([A-Za-z0-9._\-]+)"
+    + re.escape(PLACEHOLDER_SUFFIX)
+    + r"$"
 )
 
 
@@ -49,9 +53,7 @@ def parse_placeholder(value: str) -> str:
 def make_placeholder(account: str) -> str:
     """生成占位符。account 必须符合 `[A-Za-z0-9._-]+`。"""
     if not re.fullmatch(r"[A-Za-z0-9._\-]+", account):
-        raise ValueError(
-            f"account 非法（只允许字母数字 . _ -）：{account!r}"
-        )
+        raise ValueError(f"account 非法（只允许字母数字 . _ -）：{account!r}")
     return f"{PLACEHOLDER_PREFIX}{account}{PLACEHOLDER_SUFFIX}"
 
 
@@ -74,14 +76,16 @@ class PlaceholderMissing(KeyError):
         )
 
 
-def _walk_secret_paths(obj: Any, parents: tuple[str, ...]) -> list[tuple[tuple[str, ...], Any, str]]:
+def _walk_secret_paths(
+    obj: Any, parents: tuple[str, ...]
+) -> list[tuple[tuple[str, ...], Any, str]]:
     """遍历 `EnvConfig` 对象，返回所有 SecretStr 字段的位置和值。
 
     返回 [(path_tuple, parent_obj, attr_name), ...]
     其中 `path_tuple` 是从 root 到 parent 的字段名序列。
     """
     out: list[tuple[tuple[str, ...], Any, str]] = []
-    for parent_name, attr in parents:
+    for parent_name, _attr in parents:
         items = getattr(obj, parent_name, None)
         if items is None:
             continue
@@ -93,9 +97,7 @@ def _walk_secret_paths(obj: Any, parents: tuple[str, ...]) -> list[tuple[tuple[s
                     if sec_parent == parent_name:
                         sec_value = getattr(item, sec_attr, None)
                         if isinstance(sec_value, SecretStr):
-                            out.append(
-                                (parents + (parent_name, str(i)), item, sec_attr)
-                            )
+                            out.append(((*parents, parent_name, str(i)), item, sec_attr))
     return out
 
 

@@ -6,13 +6,13 @@
 - SkillLoader 多项目隔离（load_one_for_project + list(project_name)）
 - SkillWatchdog project_name 路由（'default' 走根目录 / 其他走子目录）
 """
+
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
 
 import pytest
-
 from agent.skills.events import (
     EVT_SKILL_MATCHED,
     consume_skill_events,
@@ -27,8 +27,8 @@ from agent.skills.watchdog import (
     mark_yaml_written,
 )
 
-
 # ---- events 机制 ---------------------------------------------------------
+
 
 @pytest.fixture(autouse=True)
 def _clean_skill_events():
@@ -68,6 +68,7 @@ def test_flush_clears_queue():
 
 # ---- watchdog 防自激 -----------------------------------------------------
 
+
 def test_mark_yaml_written_and_is_self_written(tmp_path):
     p = tmp_path / "demo.yaml"
     p.write_text("# empty\n", encoding="utf-8")
@@ -80,9 +81,14 @@ def test_is_self_written_false_for_other_pid(tmp_path, monkeypatch):
     p.write_text("# empty\n", encoding="utf-8")
     # 注入错误的 pid 让 is_self_written 走 False 分支
     import agent.skills.watchdog as wd
-    monkeypatch.setattr(wd, "_written_by_pid", {
-        str(p.resolve()): (99999, p.stat().st_mtime)  # 不是当前 pid
-    })
+
+    monkeypatch.setattr(
+        wd,
+        "_written_by_pid",
+        {
+            str(p.resolve()): (99999, p.stat().st_mtime)  # 不是当前 pid
+        },
+    )
     assert _is_self_written(p) is False
 
 
@@ -116,7 +122,9 @@ project_name: {project_name}
 def _write_skill_yaml(path: Path, skill_id: str, project_name: str = "default") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        _VALID_SKILL_YAML.format(skill_id=skill_id, name=f"Skill {skill_id}", project_name=project_name),
+        _VALID_SKILL_YAML.format(
+            skill_id=skill_id, name=f"Skill {skill_id}", project_name=project_name
+        ),
         encoding="utf-8",
     )
 
@@ -143,7 +151,8 @@ def test_load_all_only_loads_shared_root(tmp_path):
     _write_skill_yaml(skills_dir / "shared_skill.yaml", "shared_skill", "default")
     _write_skill_yaml(
         skills_dir / "order_service" / "project_skill.yaml",
-        "project_skill", "order_service",
+        "project_skill",
+        "order_service",
     )
     loader = SkillLoader(skills_dir=skills_dir)
     loader.load_all()
@@ -194,6 +203,7 @@ def test_remove_clears_shared_and_project_buckets(tmp_path):
 
 # ---- SkillWatchdog 路径路由 -----------------------------------------------
 
+
 def test_watchdog_default_routes_to_root_dir(tmp_path):
     """project_name='default' 时 watch_dir 是 skills 根目录。"""
     skills_dir = tmp_path / "skills"
@@ -206,9 +216,7 @@ def test_watchdog_named_project_routes_to_subdir(tmp_path):
     """project_name='order_service' 时 watch_dir 是 `<root>/order_service/`。"""
     skills_dir = tmp_path / "skills"
     loader = SkillLoader(skills_dir=skills_dir)
-    wd = SkillWatchdog(
-        skills_dir=skills_dir, loader=loader, project_name="order_service"
-    )
+    wd = SkillWatchdog(skills_dir=skills_dir, loader=loader, project_name="order_service")
     assert wd._watch_dir == skills_dir / "order_service"
 
 
@@ -232,9 +240,7 @@ def test_watchdog_reload_named_project_uses_load_one_for_project(tmp_path):
     yaml_path = skills_dir / "order_service" / "my_skill.yaml"
     _write_skill_yaml(yaml_path, "myskill", "order_service")
     loader = SkillLoader(skills_dir=skills_dir)
-    wd = SkillWatchdog(
-        skills_dir=skills_dir, loader=loader, project_name="order_service"
-    )
+    wd = SkillWatchdog(skills_dir=skills_dir, loader=loader, project_name="order_service")
     sid = wd._reload(yaml_path)
     assert sid == "myskill"
     # 项目 bucket 有

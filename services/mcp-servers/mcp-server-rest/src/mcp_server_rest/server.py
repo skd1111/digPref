@@ -1,4 +1,5 @@
 """MCP stdio entry — registers tools and starts the server."""
+
 from __future__ import annotations
 
 import asyncio
@@ -9,7 +10,6 @@ from mcp.types import Tool
 
 from mcp_server_rest.safety import method_policy, whitelist
 from mcp_server_rest.tools import request, spec
-
 
 server = Server("mcp-server-rest")
 

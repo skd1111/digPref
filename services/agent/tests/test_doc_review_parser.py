@@ -79,3 +79,56 @@ def test_empty_pdf_raises(tmp_path):
     c.save()
     with pytest.raises(DocParseError, match="未提取到文本"):
         parse_document(p)
+
+
+def test_parse_html_strips_tags(tmp_path):
+    p = tmp_path / "page.html"
+    p.write_text(
+        "<html><head><style>x{}</style></head><body>"
+        "<h1>招标公告</h1><script>bad()</script>"
+        "<p>投标截止时间：2026年9月1日</p></body></html>",
+        encoding="utf-8",
+    )
+    doc = parse_document(p)
+    assert doc.format.value == "html"
+    assert "招标公告" in doc.full_text
+    assert "投标截止时间" in doc.full_text
+    assert "bad()" not in doc.full_text
+    assert "x{}" not in doc.full_text
+
+
+def test_parse_csv_as_text(tmp_path):
+    p = tmp_path / "data.csv"
+    p.write_text("名称,金额\n合同A,100万", encoding="utf-8")
+    doc = parse_document(p)
+    assert doc.format.value == "txt"
+    assert "合同A" in doc.full_text
+
+
+def test_doc_renamed_docx_sniffed(tmp_path):
+    import docx
+
+    src = tmp_path / "real.docx"
+    d = docx.Document()
+    d.add_paragraph("实质是 docx 的合同")
+    d.save(str(src))
+    renamed = tmp_path / "fake.doc"
+    renamed.write_bytes(src.read_bytes())
+    doc = parse_document(renamed)
+    # PK 魔数嗅探 → 按 docx 解析，format 如实报 docx
+    assert doc.format.value == "docx"
+    assert "实质是 docx 的合同" in doc.full_text
+
+
+def test_doc_corrupt_header_raises(tmp_path):
+    p = tmp_path / "broken.doc"
+    p.write_bytes(b"not-ole-not-zip-content")
+    with pytest.raises(DocParseError, match="文件头无法识别"):
+        parse_document(p)
+
+
+def test_xls_rejected_with_guidance(tmp_path):
+    p = tmp_path / "old.xls"
+    p.write_bytes(b"\xd0\xcf\x11\xe0fake")
+    with pytest.raises(DocParseError, match=r"另存为 \.xlsx"):
+        parse_document(p)

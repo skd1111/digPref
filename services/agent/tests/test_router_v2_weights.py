@@ -6,15 +6,14 @@
   - Engine.weights 内存同步更新
   - 启动期从 router.db 读权重（覆盖默认）
 """
-import json
+
 import sqlite3
 from pathlib import Path
 
 import pytest
+from agent.llm import engine_api
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
-from agent.llm import engine_api
 
 
 @pytest.fixture
@@ -41,16 +40,22 @@ def _get_persisted_weights(db_path: Path) -> dict | None:
     if not row:
         return None
     return {
-        "capability": row[0], "cost": row[1], "latency": row[2],
-        "compliance": row[3], "availability": row[4],
+        "capability": row[0],
+        "cost": row[1],
+        "latency": row[2],
+        "compliance": row[3],
+        "availability": row[4],
     }
 
 
 def test_put_weights_persists_and_heats_engine(client, tmp_path):
     """PUT 权重 → router.db.router_weights 落 1 行 + Engine 内存更新。"""
     new_weights = {
-        "capability": 0.50, "cost": 0.20, "latency": 0.10,
-        "compliance": 0.10, "availability": 0.10,  # Σ = 1.0
+        "capability": 0.50,
+        "cost": 0.20,
+        "latency": 0.10,
+        "compliance": 0.10,
+        "availability": 0.10,  # Σ = 1.0
     }
     resp = client.put("/router/weights", json=new_weights)
     assert resp.status_code == 200, resp.text
@@ -71,8 +76,11 @@ def test_put_weights_persists_and_heats_engine(client, tmp_path):
 def test_put_weights_rejects_sum_not_one(client):
     """5 维和不=1 → 400 + 不落库 + Engine 内存不变。"""
     bad_weights = {
-        "capability": 0.50, "cost": 0.30, "latency": 0.10,
-        "compliance": 0.10, "availability": 0.10,  # Σ = 1.10
+        "capability": 0.50,
+        "cost": 0.30,
+        "latency": 0.10,
+        "compliance": 0.10,
+        "availability": 0.10,  # Σ = 1.10
     }
     resp = client.put("/router/weights", json=bad_weights)
     assert resp.status_code == 400
@@ -82,8 +90,11 @@ def test_put_weights_rejects_sum_not_one(client):
 def test_put_weights_rejects_out_of_range(client):
     """单值 > 1 → 422（Pydantic Field ge/le 校验）。"""
     bad_weights = {
-        "capability": 1.5, "cost": -0.5,  # 两个都越界
-        "latency": 0.0, "compliance": 0.0, "availability": 0.0,
+        "capability": 1.5,
+        "cost": -0.5,  # 两个都越界
+        "latency": 0.0,
+        "compliance": 0.0,
+        "availability": 0.0,
     }
     resp = client.put("/router/weights", json=bad_weights)
     assert resp.status_code == 422  # Pydantic 校验失败
@@ -92,8 +103,11 @@ def test_put_weights_rejects_out_of_range(client):
 def test_get_weights_returns_persisted(client, tmp_path):
     """先 PUT → 再 GET 应返回真值（不硬编码默认）。"""
     new_weights = {
-        "capability": 0.40, "cost": 0.30, "latency": 0.10,
-        "compliance": 0.15, "availability": 0.05,
+        "capability": 0.40,
+        "cost": 0.30,
+        "latency": 0.10,
+        "compliance": 0.15,
+        "availability": 0.05,
     }
     client.put("/router/weights", json=new_weights)
     resp = client.get("/router/weights")
@@ -114,12 +128,19 @@ def test_engine_init_loads_persisted_weights(tmp_path, monkeypatch):
     c = TestClient(app)
 
     # 第一次 PUT
-    c.put("/router/weights", json={
-        "capability": 0.60, "cost": 0.15, "latency": 0.10,
-        "compliance": 0.10, "availability": 0.05,
-    })
+    c.put(
+        "/router/weights",
+        json={
+            "capability": 0.60,
+            "cost": 0.15,
+            "latency": 0.10,
+            "compliance": 0.10,
+            "availability": 0.05,
+        },
+    )
     # 重置单例 + 重启 app
     engine_api._ENGINE = None
     eng2 = engine_api._get_engine()
-    assert eng2.weights["capability"] == pytest.approx(0.60), \
+    assert eng2.weights["capability"] == pytest.approx(0.60), (
         "Engine should load persisted weights on init"
+    )

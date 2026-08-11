@@ -9,15 +9,17 @@
 
 level 语义：本次验证的能力上限 —— "full"（L2 可用）/ "syntax_only"（仅 L1）。
 """
+
 from __future__ import annotations
 
 import ast
 import json
 import logging
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Literal
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +61,7 @@ class CodingValidator:
         # L2：项目验证命令
         cmd = self._validate_command()
         if cmd:
-            cmd = cmd.replace(
-                "{changed_files}", " ".join(str(f.name) for f in files)
-            )
+            cmd = cmd.replace("{changed_files}", " ".join(str(f.name) for f in files))
             try:
                 proc = subprocess.run(
                     cmd,
@@ -78,7 +78,8 @@ class CodingValidator:
             if proc.returncode != 0:
                 detail = (proc.stdout or "") + "\n" + (proc.stderr or "")
                 return ValidationResult(
-                    ok=False, level=level,
+                    ok=False,
+                    level=level,
                     error=f"validate_command 失败(exit={proc.returncode}):\n{detail.strip()[:_MAX_OUTPUT]}",
                 )
         return ValidationResult(ok=True, level=level)
@@ -105,12 +106,12 @@ class CodingValidator:
                 return f"JSON 解析失败: {exc.msg} (pos {exc.pos})"
         elif suffix in (".yaml", ".yml"):
             try:
-                import yaml  # noqa: PLC0415
+                import yaml
 
                 yaml.safe_load(source)
             except ImportError:
                 return None
-            except Exception as exc:  # noqa: BLE001  yaml.YAMLError 家族
+            except Exception as exc:
                 return f"YAML 解析失败: {exc}"
         elif suffix in (".ts", ".tsx"):
             return self._tsc_check(f)
@@ -125,7 +126,9 @@ class CodingValidator:
         try:
             proc = subprocess.run(
                 [tsc.path, "--noEmit", str(f)],
-                capture_output=True, text=True, timeout=self._timeout,
+                capture_output=True,
+                text=True,
+                timeout=self._timeout,
             )
         except (subprocess.TimeoutExpired, OSError) as exc:
             logger.warning("tsc check failed to run: %s", exc)
@@ -140,10 +143,10 @@ class CodingValidator:
         if not cfg.is_file():
             return None
         try:
-            import yaml  # noqa: PLC0415
+            import yaml
 
             data = yaml.safe_load(cfg.read_text(encoding="utf-8")) or {}
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
         cmd = data.get("validate_command")
         return str(cmd).strip() if cmd else None

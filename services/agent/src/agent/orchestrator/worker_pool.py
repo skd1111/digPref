@@ -10,14 +10,16 @@ CLAUDE.md §6 红线：
 - 队列/DLQ 状态落 audit.sqlite（V1 占位：进程内 list；V1.5 持久化）
 - idempotency_token 去重（同一任务不重复派发）
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -25,19 +27,21 @@ logger = logging.getLogger(__name__)
 @dataclass
 class WorkerTask:
     """Worker Pool 中的一个任务。"""
+
     task_id: str
     idempotency_token: str
     payload: Any
     attempts: int = 0
     max_attempts: int = 3
-    next_run_at: float = 0.0          # 退避时间戳（time.monotonic）
+    next_run_at: float = 0.0  # 退避时间戳（time.monotonic）
     last_error: str = ""
-    status: str = "pending"          # pending / running / done / failed / dlq / cancelled
+    status: str = "pending"  # pending / running / done / failed / dlq / cancelled
 
 
 @dataclass
 class WorkerResult:
     """Worker 执行结果。"""
+
     task_id: str
     success: bool
     result: Any = None
@@ -48,9 +52,11 @@ class WorkerResult:
 
 # ---- DLQ -------------------------------------------------------------------
 
+
 @dataclass
 class DLQEntry:
     """死信队列条目。"""
+
     task_id: str
     idempotency_token: str
     payload: Any
@@ -128,7 +134,8 @@ class WorkerPool:
             existing = self._tasks[existing_id]
             logger.debug("[worker_pool] dedup hit task=%s", existing_id)
             return WorkerResult(
-                task_id=existing_id, success=existing.status == "done",
+                task_id=existing_id,
+                success=existing.status == "done",
                 result=existing.payload if existing.status == "done" else None,
                 error=existing.last_error,
                 attempts=existing.attempts,
@@ -159,8 +166,10 @@ class WorkerPool:
             if self._cancelled.is_set():
                 task.status = "cancelled"
                 return WorkerResult(
-                    task_id=task.task_id, success=False,
-                    error="cancelled", attempts=task.attempts,
+                    task_id=task.task_id,
+                    success=False,
+                    error="cancelled",
+                    attempts=task.attempts,
                 )
 
             async with self._sem:
@@ -171,8 +180,10 @@ class WorkerPool:
                     result = await handler(task.payload)
                     task.status = "done"
                     return WorkerResult(
-                        task_id=task.task_id, success=True,
-                        result=result, attempts=task.attempts,
+                        task_id=task.task_id,
+                        success=True,
+                        result=result,
+                        attempts=task.attempts,
                         latency_ms=int((time.monotonic() - t0) * 1000),
                     )
                 except asyncio.CancelledError:
@@ -183,7 +194,10 @@ class WorkerPool:
                     task.last_error = last_error
                     logger.warning(
                         "[worker_pool] task=%s attempt %d/%d failed: %s",
-                        task.task_id, task.attempts, task.max_attempts, last_error,
+                        task.task_id,
+                        task.attempts,
+                        task.max_attempts,
+                        last_error,
                     )
                     if task.attempts >= task.max_attempts:
                         break
@@ -201,6 +215,8 @@ class WorkerPool:
             attempts=task.attempts,
         )
         return WorkerResult(
-            task_id=task.task_id, success=False,
-            error=last_error, attempts=task.attempts,
+            task_id=task.task_id,
+            success=False,
+            error=last_error,
+            attempts=task.attempts,
         )

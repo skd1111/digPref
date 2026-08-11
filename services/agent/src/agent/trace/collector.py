@@ -11,6 +11,7 @@
     - 后端不区分工作模式一律记录（金融合规审计；前端负责模式隔离）
     - 中文思维链格式：【思考】/【行动】/【观察】/【决策】四段式
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -81,6 +82,7 @@ def node_label(node_name: str) -> str:
 
 
 # ---- 中文思维链文本构建（【思考】/【行动】/【观察】/【决策】）-----------------
+
 
 def build_thinking(node_name: str, delta: dict[str, Any]) -> tuple[str | None, str | None]:
     """从节点输出增量构建 (thinking, decision) 中文文本。"""
@@ -183,6 +185,7 @@ def extract_tool_calls(delta: dict[str, Any]) -> list[dict[str, Any]]:
 
 # ---- 文件操作提取 ------------------------------------------------------------
 
+
 def read_text_best_effort(path: str, max_bytes: int = 2 * 1024 * 1024) -> str | None:
     """安全读取文件文本（失败 / 超限返 None，绝不抛异常）。"""
     try:
@@ -250,6 +253,7 @@ def extract_file_operation(
 
 # ---- TraceCollector ----------------------------------------------------------
 
+
 class TraceCollector:
     """思维链收集器单例。所有方法 best-effort，绝不向调用方抛异常。"""
 
@@ -305,7 +309,7 @@ class TraceCollector:
             )
             await storage.insert_step(step, db_path=self._db_path)
             return step
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("trace.record_node_step 失败（忽略）: %s", exc)
             return None
 
@@ -333,7 +337,7 @@ class TraceCollector:
             )
             await storage.insert_step(step, db_path=self._db_path)
             return True
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("trace.attach_file_operation 失败（忽略）: %s", exc)
             return False
 

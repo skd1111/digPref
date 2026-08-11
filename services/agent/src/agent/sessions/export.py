@@ -15,6 +15,7 @@ CLAUDE.md §6 物理隔离：导出文件本身不入 sessions.db，独立 .eas 
 CLAUDE.md §2 敏感任务：导出前 PII 脱敏（手机/身份证/银行卡/AWS Key/JWT/IPv4/邮箱/高熵 token），
                    原文永不进 .eas。
 """
+
 from __future__ import annotations
 
 import base64
@@ -23,13 +24,14 @@ import json
 import os
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 # Fernet 优先；cryptography 不存在 → 降级到 stdlib hashlib + secrets
 try:
     from cryptography.fernet import Fernet, InvalidToken
+
     _HAS_FERNET = True
 except Exception:  # pragma: no cover
     _HAS_FERNET = False
@@ -104,13 +106,16 @@ def _get_or_create_key() -> bytes:
     # 1. Keyring
     try:
         import keyring  # type: ignore[import-not-found]
+
         existing = keyring.get_password(KEYRING_SERVICE, KEYRING_NAME)
         if existing:
             return base64.urlsafe_b64decode(existing)
         # 生成新密钥
         if _HAS_FERNET:
             new_key = Fernet.generate_key()
-            keyring.set_password(KEYRING_SERVICE, KEYRING_NAME, base64.urlsafe_b64encode(new_key).decode())
+            keyring.set_password(
+                KEYRING_SERVICE, KEYRING_NAME, base64.urlsafe_b64encode(new_key).decode()
+            )
             return new_key
     except Exception:
         pass
@@ -165,7 +170,7 @@ class SessionExporter:
         exporter.export_to_file(session_id, Path("backup.eas"), actor="alice")
     """
 
-    storage: "SessionStorage"
+    storage: SessionStorage
 
     def export_to_file(
         self,
@@ -203,7 +208,9 @@ class SessionExporter:
         # 收集数据
         messages = self.storage.list_messages(session_id, limit=100_000) if include_messages else []
         checkpoints = self.storage.list_checkpoints(session_id)
-        event_chain = self.storage.list_event_chain(session_id, limit=10_000) if include_event_chain else []
+        event_chain = (
+            self.storage.list_event_chain(session_id, limit=10_000) if include_event_chain else []
+        )
 
         # PII 脱敏
         def _scrub_session(s: dict) -> dict:
@@ -214,30 +221,40 @@ class SessionExporter:
             "version": EAS_VERSION,
             "exported_at": int(time.time() * 1000),
             "exported_by": actor,
-            "session": _scrub_session({
-                **sess.__dict__,
-                # messages + checkpoints 单独提取（嵌套结构）
-            }),
+            "session": _scrub_session(
+                {
+                    **sess.__dict__,
+                    # messages + checkpoints 单独提取（嵌套结构）
+                }
+            ),
             "messages": [
-                _scrub_session({
-                    **m.__dict__,
-                }) for m in messages
-            ] if scrub_pii else [m.__dict__ for m in messages],
-            "checkpoints": [
-                _scrub_session(cp.__dict__) for cp in checkpoints
-            ] if scrub_pii else [cp.__dict__ for cp in checkpoints],
+                _scrub_session(
+                    {
+                        **m.__dict__,
+                    }
+                )
+                for m in messages
+            ]
+            if scrub_pii
+            else [m.__dict__ for m in messages],
+            "checkpoints": [_scrub_session(cp.__dict__) for cp in checkpoints]
+            if scrub_pii
+            else [cp.__dict__ for cp in checkpoints],
             "event_chain": [
-                _scrub_session({
-                    **ev.__dict__,
-                }) for ev in event_chain
-            ] if scrub_pii else [ev.__dict__ for ev in event_chain],
+                _scrub_session(
+                    {
+                        **ev.__dict__,
+                    }
+                )
+                for ev in event_chain
+            ]
+            if scrub_pii
+            else [ev.__dict__ for ev in event_chain],
         }
 
         plaintext = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
         if len(plaintext) > MAX_EXPORT_BYTES:
-            raise ValueError(
-                f"export size {len(plaintext)} exceeds {MAX_EXPORT_BYTES} limit"
-            )
+            raise ValueError(f"export size {len(plaintext)} exceeds {MAX_EXPORT_BYTES} limit")
         checksum = hashlib.sha256(plaintext).hexdigest()
         key = _get_or_create_key()
         ciphertext = _encrypt(plaintext, key)
@@ -249,7 +266,8 @@ class SessionExporter:
         # 写 SessionEvent 哈希链
         try:
             self.storage.append_event(
-                session_id, "exported",
+                session_id,
+                "exported",
                 {
                     "path": str(out.resolve()),
                     "bytes": len(ciphertext),
@@ -278,7 +296,7 @@ class SessionImporter:
         result = importer.import_from_file(Path("backup.eas"), actor="alice")
     """
 
-    storage: "SessionStorage"
+    storage: SessionStorage
     """导入行为：
         - 默认新建会话（不复用 session_id，避免 ID 冲突）
         - 可选 import_as_branch=True → 写入 parent_session_id 与原会话关联
@@ -388,12 +406,14 @@ class SessionImporter:
 
         # 如果是分支导入，更新 parent_session_id
         if import_as_branch and parent_session_id:
-            with self.storage._connect() as conn:  # noqa: SLF001
+            with self.storage._connect() as conn:
                 conn.execute(
-                    "UPDATE sessions SET parent_session_id = ?, branch_label = ? "
-                    "WHERE id = ?",
-                    (parent_session_id, f"imported-from-{old_sess.get('id', 'unknown')[:8]}",
-                     new_sess.id),
+                    "UPDATE sessions SET parent_session_id = ?, branch_label = ? WHERE id = ?",
+                    (
+                        parent_session_id,
+                        f"imported-from-{old_sess.get('id', 'unknown')[:8]}",
+                        new_sess.id,
+                    ),
                 )
 
         return {
@@ -408,8 +428,9 @@ class SessionImporter:
 
 # ---- 便捷函数 ---------------------------------------------------------------
 
+
 def export_session_to_eas(
-    storage: "SessionStorage",
+    storage: SessionStorage,
     session_id: str,
     output_path: str | Path,
     actor: str = "system",
@@ -420,7 +441,9 @@ def export_session_to_eas(
 ) -> dict:
     """便捷函数：导出会话到 .eas。"""
     return SessionExporter(storage).export_to_file(
-        session_id, output_path, actor=actor,
+        session_id,
+        output_path,
+        actor=actor,
         include_messages=include_messages,
         include_event_chain=include_event_chain,
         scrub_pii=scrub_pii,
@@ -428,7 +451,7 @@ def export_session_to_eas(
 
 
 def import_session_from_eas(
-    storage: "SessionStorage",
+    storage: SessionStorage,
     eas_path: str | Path,
     actor: str = "system",
 ) -> dict:
@@ -437,12 +460,12 @@ def import_session_from_eas(
 
 
 __all__ = [
+    "EAS_MAGIC",
+    "EAS_VERSION",
+    "KEYRING_NAME",
+    "KEYRING_SERVICE",
     "SessionExporter",
     "SessionImporter",
     "export_session_to_eas",
     "import_session_from_eas",
-    "KEYRING_SERVICE",
-    "KEYRING_NAME",
-    "EAS_MAGIC",
-    "EAS_VERSION",
 ]

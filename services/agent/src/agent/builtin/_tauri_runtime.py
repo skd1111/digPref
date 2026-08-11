@@ -17,6 +17,7 @@
 
 线程安全：模块级单例 + threading.Lock（FastAPI lifespan 与 dispatcher 并发访问）。
 """
+
 from __future__ import annotations
 
 import threading

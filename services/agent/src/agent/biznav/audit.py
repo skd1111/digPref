@@ -14,6 +14,7 @@ Phase 2G V1.1 (2026-07-28): 集中定义 5 个 audit action 字符串常量，�
 
 后续 V1.3 hot_reload.py emit 使用 YAML_RELOAD；V1.1 / V1.2 不 emit。
 """
+
 from __future__ import annotations
 
 # 5 个 audit action 字符串常量
@@ -24,9 +25,9 @@ EVT_FEATURE_IMPORT = "FEATURE_IMPORT"
 EVT_YAML_RELOAD = "YAML_RELOAD"
 
 __all__ = [
-    "EVT_FEATURE_EXTRACT",
-    "EVT_FEATURE_UPDATE",
     "EVT_FEATURE_DELETE",
+    "EVT_FEATURE_EXTRACT",
     "EVT_FEATURE_IMPORT",
+    "EVT_FEATURE_UPDATE",
     "EVT_YAML_RELOAD",
 ]

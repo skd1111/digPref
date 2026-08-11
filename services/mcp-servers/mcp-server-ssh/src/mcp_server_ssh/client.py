@@ -6,6 +6,7 @@
 Host key verification: 默认启用 known_hosts 校验。
 设置环境变量 EAIDE_SSH_VERIFY_HOST_KEY=0 可绕过（仅限测试环境）。
 """
+
 from __future__ import annotations
 
 import os

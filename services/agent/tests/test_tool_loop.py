@@ -7,14 +7,13 @@
     - 新增常用工具（datetime / uuid / http / csv / text_split）与 Rust 工具 Python 兜底
     - 图级 e2e：decompose(TOOL_ONLY) → 循环 → responder
 """
+
 from __future__ import annotations
 
 import json
-import os
 from typing import Any
 
 import pytest
-
 from agent.builtin.extra import (
     builtin_csv_parse,
     builtin_datetime_now,
@@ -37,8 +36,8 @@ from agent.llm.router import LMRouter, _parse_orchestration_action
 from agent.tools.catalog import ToolCatalog
 from agent.tools.loop import DynamicToolLoop
 
-
 # ---- 伪对象 ----------------------------------------------------------------
+
 
 class _ScriptedLoopLLM:
     """orchestrate_tools 按剧本返回动作；支持抛异常模拟 LLM 故障。"""
@@ -127,6 +126,7 @@ def _loop_state(**patch: Any) -> dict:
 
 # ---- ToolCatalog -----------------------------------------------------------
 
+
 class TestToolCatalog:
     async def test_summaries_include_builtin_and_mcp(self):
         class _MCP:
@@ -138,8 +138,8 @@ class TestToolCatalog:
         catalog = ToolCatalog(mcp=_MCP())
         summaries = await catalog.summaries()
         names = {s["name"] for s in summaries}
-        assert "read_file" in names          # builtin
-        assert "db.db.query" in names        # mcp（server.name 全名）
+        assert "read_file" in names  # builtin
+        assert "db.db.query" in names  # mcp（server.name 全名）
         assert all("name" in s and "description" in s for s in summaries)
 
     async def test_definitions_filter_and_full(self):
@@ -165,22 +165,27 @@ class TestToolCatalog:
 
 # ---- DynamicToolLoop -------------------------------------------------------
 
+
 class TestDynamicToolLoop:
     async def test_select_then_call_then_final(self):
         catalog = _FakeCatalog()
-        llm = _ScriptedLoopLLM([
-            _action("SELECT_TOOLS", selected_tool_names=["get_weather"]),
-            _action(
-                "TOOL_CALLS",
-                tool_calls=[{
-                    "id": "call_1",
-                    "name": "get_weather",
-                    "arguments": {"city": "北京"},
-                    "purpose": "查天气",
-                }],
-            ),
-            _action("FINAL_ANSWER", final_answer="北京今天晴。"),
-        ])
+        llm = _ScriptedLoopLLM(
+            [
+                _action("SELECT_TOOLS", selected_tool_names=["get_weather"]),
+                _action(
+                    "TOOL_CALLS",
+                    tool_calls=[
+                        {
+                            "id": "call_1",
+                            "name": "get_weather",
+                            "arguments": {"city": "北京"},
+                            "purpose": "查天气",
+                        }
+                    ],
+                ),
+                _action("FINAL_ANSWER", final_answer="北京今天晴。"),
+            ]
+        )
         loop = DynamicToolLoop(llm, catalog)
         out = await loop.run(_loop_state())
         assert out["load_stage"] == "CANDIDATE_REGISTERED"
@@ -196,14 +201,16 @@ class TestDynamicToolLoop:
 
     async def test_request_full_tools_then_call(self):
         catalog = _FakeCatalog()
-        llm = _ScriptedLoopLLM([
-            _action("REQUEST_FULL_TOOLS", missing_capability="缺数据库"),
-            _action(
-                "TOOL_CALLS",
-                tool_calls=[{"id": "c1", "name": "get_weather", "arguments": {}}],
-            ),
-            _action("FINAL_ANSWER", final_answer="done"),
-        ])
+        llm = _ScriptedLoopLLM(
+            [
+                _action("REQUEST_FULL_TOOLS", missing_capability="缺数据库"),
+                _action(
+                    "TOOL_CALLS",
+                    tool_calls=[{"id": "c1", "name": "get_weather", "arguments": {}}],
+                ),
+                _action("FINAL_ANSWER", final_answer="done"),
+            ]
+        )
         loop = DynamicToolLoop(llm, catalog)
         out = await loop.run(_loop_state())
         assert out["load_stage"] == "FULL_REGISTERED"
@@ -215,9 +222,11 @@ class TestDynamicToolLoop:
 
     async def test_ask_user_returns_message(self):
         catalog = _FakeCatalog()
-        llm = _ScriptedLoopLLM([
-            _action("ASK_USER", ask_user_message="请问查哪个城市？"),
-        ])
+        llm = _ScriptedLoopLLM(
+            [
+                _action("ASK_USER", ask_user_message="请问查哪个城市？"),
+            ]
+        )
         loop = DynamicToolLoop(llm, catalog)
         out = await loop.run(_loop_state())
         assert out["final_answer"] == "请问查哪个城市？"
@@ -232,13 +241,15 @@ class TestDynamicToolLoop:
 
     async def test_unregistered_call_rejected_without_execution(self):
         catalog = _FakeCatalog()
-        llm = _ScriptedLoopLLM([
-            _action(
-                "TOOL_CALLS",
-                tool_calls=[{"id": "c1", "name": "not_registered", "arguments": {}}],
-            ),
-            _action("FINAL_ANSWER", final_answer="done"),
-        ])
+        llm = _ScriptedLoopLLM(
+            [
+                _action(
+                    "TOOL_CALLS",
+                    tool_calls=[{"id": "c1", "name": "not_registered", "arguments": {}}],
+                ),
+                _action("FINAL_ANSWER", final_answer="done"),
+            ]
+        )
         loop = DynamicToolLoop(llm, catalog)
         out = await loop.run(_loop_state())
         assert out["tool_results"][0]["error"] == "unregistered_tool"
@@ -249,17 +260,24 @@ class TestDynamicToolLoop:
     async def test_hitl_pause_approve_resume(self):
         catalog = _FakeCatalog(
             execute_results={
-                "write_file": {"awaiting_approval": True, "pending_tool_call": {"server": "builtin", "name": "write_file", "args": {}}},
+                "write_file": {
+                    "awaiting_approval": True,
+                    "pending_tool_call": {"server": "builtin", "name": "write_file", "args": {}},
+                },
             },
         )
-        llm = _ScriptedLoopLLM([
-            _action("SELECT_TOOLS", selected_tool_names=["write_file"]),
-            _action(
-                "TOOL_CALLS",
-                tool_calls=[{"id": "c1", "name": "write_file", "arguments": {"path": "/tmp/a"}}],
-            ),
-            _action("FINAL_ANSWER", final_answer="写入完成"),
-        ])
+        llm = _ScriptedLoopLLM(
+            [
+                _action("SELECT_TOOLS", selected_tool_names=["write_file"]),
+                _action(
+                    "TOOL_CALLS",
+                    tool_calls=[
+                        {"id": "c1", "name": "write_file", "arguments": {"path": "/tmp/a"}}
+                    ],
+                ),
+                _action("FINAL_ANSWER", final_answer="写入完成"),
+            ]
+        )
         loop = DynamicToolLoop(llm, catalog)
         out = await loop.run(_loop_state())
         out = await loop.run(_loop_state(**out))
@@ -280,16 +298,25 @@ class TestDynamicToolLoop:
 
     async def test_hitl_pause_reject_resume(self):
         catalog = _FakeCatalog(
-            execute_results={"write_file": {"awaiting_approval": True, "pending_tool_call": {"server": "builtin", "name": "write_file", "args": {}}}},
+            execute_results={
+                "write_file": {
+                    "awaiting_approval": True,
+                    "pending_tool_call": {"server": "builtin", "name": "write_file", "args": {}},
+                }
+            },
         )
-        llm = _ScriptedLoopLLM([
-            _action("SELECT_TOOLS", selected_tool_names=["write_file"]),
-            _action(
-                "TOOL_CALLS",
-                tool_calls=[{"id": "c1", "name": "write_file", "arguments": {"path": "/tmp/a"}}],
-            ),
-            _action("FINAL_ANSWER", final_answer="已取消"),
-        ])
+        llm = _ScriptedLoopLLM(
+            [
+                _action("SELECT_TOOLS", selected_tool_names=["write_file"]),
+                _action(
+                    "TOOL_CALLS",
+                    tool_calls=[
+                        {"id": "c1", "name": "write_file", "arguments": {"path": "/tmp/a"}}
+                    ],
+                ),
+                _action("FINAL_ANSWER", final_answer="已取消"),
+            ]
+        )
         loop = DynamicToolLoop(llm, catalog)
         out = await loop.run(_loop_state())
         out = await loop.run(_loop_state(**out))
@@ -330,6 +357,7 @@ class TestDynamicToolLoop:
 
 # ---- 路由 ------------------------------------------------------------------
 
+
 class TestToolLoopRouting:
     @pytest.mark.parametrize(
         ("patch", "expected"),
@@ -338,7 +366,10 @@ class TestToolLoopRouting:
             ({"final_answer": "done"}, "responder"),
             ({"tool_loop_active": False}, "responder"),
             ({"tool_loop_active": True, "load_stage": "CANDIDATE_REGISTERED"}, "tool_orchestrator"),
-            ({"tool_loop_active": True, "tool_results": [{"name": "x", "ok": True}]}, "tool_orchestrator"),
+            (
+                {"tool_loop_active": True, "tool_results": [{"name": "x", "ok": True}]},
+                "tool_orchestrator",
+            ),
             ({}, "responder"),
         ],
     )
@@ -349,6 +380,7 @@ class TestToolLoopRouting:
 
 
 # ---- LMRouter 动作解析 ------------------------------------------------------
+
 
 class TestActionParsing:
     def _parse(self, raw: dict, **kw: Any) -> dict | None:
@@ -436,9 +468,13 @@ class TestActionParsing:
         async def fake_route(*, task: str, prompt: str) -> str:
             assert task == "tool_orchestrate"
             for placeholder in (
-                "{{LOAD_STAGE}}", "{{USER_INPUT}}", "{{TOOL_SUMMARIES}}",
-                "{{REGISTERED_TOOLS}}", "{{FULL_TOOLSET_LOADED}}",
-                "{{TOOL_RESULTS}}", "{{MAX_SELECTED_TOOLS}}",
+                "{{LOAD_STAGE}}",
+                "{{USER_INPUT}}",
+                "{{TOOL_SUMMARIES}}",
+                "{{REGISTERED_TOOLS}}",
+                "{{FULL_TOOLSET_LOADED}}",
+                "{{TOOL_RESULTS}}",
+                "{{MAX_SELECTED_TOOLS}}",
             ):
                 assert placeholder not in prompt
             return json.dumps(_action("FINAL_ANSWER", final_answer="ok"))
@@ -477,12 +513,93 @@ class TestActionParsing:
 
 # ---- 新增常用工具 ------------------------------------------------------------
 
+
 class TestExtraTools:
     def test_datetime_now(self):
         result = builtin_datetime_now()
         assert result.ok is True
-        assert isinstance(result.content, str)
-        assert "T" in result.content  # ISO 8601
+        assert isinstance(result.content, dict)
+        assert "T" in result.content["datetime"]  # ISO 8601
+        assert result.content["weekday"].startswith("星期")
+        assert result.meta.get("utc_offset")  # 本地时区偏移非空
+
+    def test_datetime_now_lunar(self):
+        """zhdate 可用时返回农历中文描述。"""
+        pytest.importorskip("zhdate")
+        result = builtin_datetime_now()
+        assert result.ok is True
+        assert result.meta["lunar_available"] is True
+        assert result.content["lunar"]  # 如「二零二六年正月初一」
+
+    def test_datetime_now_explicit_offset(self):
+        result = builtin_datetime_now(tz_offset_hours=8, include_lunar=False)
+        assert result.ok is True
+        assert result.content["datetime"].endswith("+08:00")
+        assert "lunar" not in result.content
+
+    # ---- date_parse：相对时间 → 绝对日期（基准日 2026-08-06 周四）----
+
+    @pytest.mark.parametrize(
+        ("expr", "expected"),
+        [
+            ("今天", "2026-08-06"),
+            ("明天", "2026-08-07"),
+            ("后天", "2026-08-08"),
+            ("大后天", "2026-08-09"),
+            ("昨天", "2026-08-05"),
+            ("前天", "2026-08-04"),
+            ("3 天前".replace(" ", ""), "2026-08-03"),
+            ("五天后", "2026-08-11"),
+            ("下周一", "2026-08-10"),
+            ("本周五", "2026-08-07"),
+            ("周三", "2026-08-12"),  # 本周已过周三 → 指下周三
+            ("本月底", "2026-08-31"),
+            ("下月底", "2026-09-30"),
+            ("2026-08-07", "2026-08-07"),  # 显式日期透传
+        ],
+    )
+    def test_date_parse_single_date(self, expr, expected):
+        from agent.builtin.extra import builtin_date_parse
+
+        result = builtin_date_parse(expression=expr, base_date="2026-08-06")
+        assert result.ok is True, f"{expr}: {result.error}"
+        assert result.content["type"] == "date"
+        assert result.content["date"] == expected
+
+    def test_date_parse_range_recent_days(self):
+        from agent.builtin.extra import builtin_date_parse
+
+        result = builtin_date_parse(expression="最近三天", base_date="2026-08-06")
+        assert result.ok is True
+        assert result.content["type"] == "range"
+        assert result.content["start"] == "2026-08-04"
+        assert result.content["end"] == "2026-08-06"
+        assert result.content["days"] == 3
+
+    def test_date_parse_weekend(self):
+        from agent.builtin.extra import builtin_date_parse
+
+        result = builtin_date_parse(expression="这个周末", base_date="2026-08-06")
+        assert result.ok is True
+        assert result.content["type"] == "range"
+        assert result.content["start"] == "2026-08-08"  # 周六
+        assert result.content["end"] == "2026-08-09"  # 周日
+
+    def test_date_parse_unparsable_asks_user(self):
+        from agent.builtin.extra import builtin_date_parse
+
+        result = builtin_date_parse(expression="去年的那天", base_date="2026-08-06")
+        assert result.ok is False
+        assert result.error == "unparsable_expression"
+        assert "追问" in (result.hint or "")  # 提示上游追问而非猜测
+
+    def test_date_parse_registered(self):
+        """date_parse 已注册进目录（可被工具循环选中）。"""
+        from agent.builtin.models import BUILTIN_TOOL_NAMES
+        from agent.builtin.registry import TOOL_RISK_LEVEL
+
+        assert "date_parse" in BUILTIN_TOOL_NAMES
+        assert TOOL_RISK_LEVEL["date_parse"] == "low"
 
     def test_uuid4(self):
         result = builtin_uuid4()
@@ -511,7 +628,7 @@ class TestExtraTools:
         class _FakeResponse:
             status_code = 200
             content = b'{"ok": true}'
-            headers = {"content-type": "application/json"}
+            headers = {"content-type": "application/json"}  # noqa: RUF012 测试 fake 常量
 
         class _FakeClient:
             def __init__(self, *a, **kw):
@@ -533,6 +650,7 @@ class TestExtraTools:
 
 
 # ---- Rust 工具 Python 兜底 ---------------------------------------------------
+
 
 class TestPythonFallbacks:
     def test_stat_file(self, tmp_path):
@@ -568,6 +686,7 @@ class TestPythonFallbacks:
 
 # ---- 图级 e2e ---------------------------------------------------------------
 
+
 class TestGraphEndToEnd:
     async def test_tool_loop_path_runs_to_answer(self, monkeypatch):
         monkeypatch.setattr(settings, "tool_loop_enabled", True)
@@ -578,12 +697,14 @@ class TestGraphEndToEnd:
                     _action("SELECT_TOOLS", selected_tool_names=["calculator"]),
                     _action(
                         "TOOL_CALLS",
-                        tool_calls=[{
-                            "id": "c1",
-                            "name": "calculator",
-                            "arguments": {"expression": "2 * 21"},
-                            "purpose": "计算",
-                        }],
+                        tool_calls=[
+                            {
+                                "id": "c1",
+                                "name": "calculator",
+                                "arguments": {"expression": "2 * 21"},
+                                "purpose": "计算",
+                            }
+                        ],
                     ),
                     _action("FINAL_ANSWER", final_answer="结果是 42"),
                 ]

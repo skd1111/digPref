@@ -14,16 +14,15 @@
 
 2026-07-09 变更：环境名不再限于 4 项 preset，支持自由命名。
 """
+
 from __future__ import annotations
 
-import os
 import re
 import tempfile
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException
-
 from pydantic import BaseModel
 
 from .export import export_configs, import_configs
@@ -38,7 +37,6 @@ from .storage import (
     save_env,
     set_active_env,
 )
-
 
 # 与 models._ENV_PATTERN 保持同步。直接构造 `Environment(name)` 不会触发 Pydantic
 # 校验，所以这里手动校验一次，URL 路径里一旦给了非法格式就立刻 400。
@@ -180,9 +178,7 @@ def api_import(req: ImportRequest) -> ImportResponse:
         tmp_path = Path(tmp.name)
     try:
         try:
-            result = import_configs(
-                tmp_path, req.passphrase, plaintext_ok=req.plaintext_ok
-            )
+            result = import_configs(tmp_path, req.passphrase, plaintext_ok=req.plaintext_ok)
         except PlaceholderMissing as e:
             raise HTTPException(400, str(e))
         except (ValueError, FileNotFoundError) as e:
@@ -282,6 +278,4 @@ def _env_has_content(env: Environment) -> bool:
         cfg = load_env(env)
     except FileNotFoundError:
         return False
-    return bool(
-        cfg.databases or cfg.api_gateways or cfg.mcp_servers or cfg.target_servers
-    )
+    return bool(cfg.databases or cfg.api_gateways or cfg.mcp_servers or cfg.target_servers)

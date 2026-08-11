@@ -6,13 +6,10 @@
 - checkpointer：MemorySaver wrapper + save_reference
 - api：4 核心路由（create / list / get / delete）+ KB search
 """
+
 from __future__ import annotations
 
-import asyncio
-from pathlib import Path
-
 import pytest
-
 from agent.sessions.checkpointer import SessionCheckpointer
 from agent.sessions.knowledge_base import (
     KBConfig,
@@ -23,11 +20,10 @@ from agent.sessions.knowledge_base import (
     build_kb_context,
     kb_context_to_prompt_snippet,
 )
-from agent.sessions.models import Session
 from agent.sessions.storage import SessionStorage
 
-
 # ---- storage ---------------------------------------------------------------
+
 
 @pytest.fixture
 def storage(tmp_path):
@@ -93,8 +89,12 @@ def test_delete_session_cascades(storage):
 def test_append_message_persists_with_tool_args(storage):
     s = storage.create_session("s")
     m = storage.append_message(
-        s.id, "assistant", "ok", tool_name="db.query",
-        tool_args={"sql": "SELECT 1"}, tool_result="42",
+        s.id,
+        "assistant",
+        "ok",
+        tool_name="db.query",
+        tool_args={"sql": "SELECT 1"},
+        tool_result="42",
     )
     assert m.id > 0
     msgs = storage.list_messages(s.id)
@@ -135,6 +135,7 @@ def test_record_checkpoint_unique_constraint(storage):
 
 # ---- knowledge_base -------------------------------------------------------
 
+
 def test_kb_config_from_env(monkeypatch):
     monkeypatch.setenv("EAIDE_KB_BACKEND", "notion")
     monkeypatch.setenv("EAIDE_KB_BASE_URL", "https://wiki.example.com")
@@ -168,10 +169,16 @@ async def test_build_kb_context_returns_results():
 @pytest.mark.asyncio
 async def test_build_kb_context_empty_results_when_adapter_fails(monkeypatch):
     """适配器抛错 → 空 KBContext（best-effort，不抛错）。"""
+
     class _Broken:
         name = "broken"
-        def is_available(self): return True
-        async def search(self, **kw): raise RuntimeError("kaboom")
+
+        def is_available(self):
+            return True
+
+        async def search(self, **kw):
+            raise RuntimeError("kaboom")
+
     ctx = await build_kb_context("x", adapter=_Broken())
     assert ctx.results == []
     assert ctx.backend == "broken"
@@ -215,6 +222,7 @@ def test_kb_context_to_prompt_snippet_truncates():
 
 # ---- checkpointer ---------------------------------------------------------
 
+
 @pytest.fixture
 def cp(storage):
     return SessionCheckpointer(storage)
@@ -222,6 +230,7 @@ def cp(storage):
 
 def test_checkpointer_saver_is_memory_saver_by_default(cp):
     from langgraph.checkpoint.memory import MemorySaver
+
     assert isinstance(cp.saver, MemorySaver)
 
 
@@ -238,6 +247,7 @@ def test_checkpointer_save_reference_returns_id_and_lists(cp, storage):
 def test_checkpointer_save_reference_failure_best_effort(cp, monkeypatch):
     """save_reference 失败不抛错（best-effort）。"""
     s = cp._storage.create_session("s")
+
     # 把 storage 替换成 fake 让 record_checkpoint 抛错
     class _BoomStorage:
         def record_checkpoint(self, **kw):
@@ -250,14 +260,15 @@ def test_checkpointer_save_reference_failure_best_effort(cp, monkeypatch):
 
 # ---- api ------------------------------------------------------------------
 
+
 @pytest.fixture
 def api_client(tmp_path, monkeypatch):
     """FastAPI TestClient + 临时 DB（monkeypatch 默认 db_path）。"""
+    # 强制 sessions 用临时 DB
+    from agent.sessions import api as sessions_api
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    # 强制 sessions 用临时 DB
-    from agent.sessions import api as sessions_api
     test_db = tmp_path / "sessions_api_test.db"
     monkeypatch.setattr(sessions_api, "_storage", SessionStorage(test_db))
     monkeypatch.setattr(sessions_api, "_checkpointer", None)

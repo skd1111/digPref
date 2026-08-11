@@ -9,6 +9,7 @@ CLAUDE.md §6 红线：
 - 锁 TTL + 自动续租（V1 占位：TTL 30s + 无续租；V1.5 接真 Redis）
 - 按字典序获取（防死锁）
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -16,8 +17,9 @@ import contextlib
 import logging
 import time
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import AsyncIterator
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class VersionedState:
     """带 state_version 的状态对象（CAS 用）。"""
+
     data: dict
     state_version: int = 0
 
@@ -54,6 +57,7 @@ def cas_update(state: VersionedState, mutator) -> tuple[bool, int]:
 
 class _LockRecord:
     """单把锁的元数据（持有者 + TTL）。"""
+
     def __init__(self, owner: str, expires_at: float):
         self.owner = owner
         self.expires_at = expires_at

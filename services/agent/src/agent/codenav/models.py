@@ -1,8 +1,8 @@
 """Phase 2F 数据类（Symbol / JumpResult / IndexStatus）。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass
@@ -12,8 +12,8 @@ class Symbol:
     file_path: str  # 绝对路径
     start_line: int
     end_line: int
-    signature: Optional[str] = None
-    parent_class: Optional[str] = None
+    signature: str | None = None
+    parent_class: str | None = None
     language: str = "unknown"
 
 
@@ -23,15 +23,15 @@ class JumpResult:
     line: int
     confidence: float  # 1.0 = 本地索引命中, <1.0 = AI 推断
     source: str  # "local_index" | "not_found"  (V1 移除 ai_inference)
-    note: Optional[str] = None
+    note: str | None = None
 
 
 @dataclass
 class IndexStatus:
     total_files: int
     total_symbols: int
-    last_full_scan: Optional[float]  # timestamp
-    last_incremental: Optional[float]
+    last_full_scan: float | None  # timestamp
+    last_incremental: float | None
     is_scanning: bool
 
     def to_dict(self) -> dict:

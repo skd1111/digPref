@@ -8,13 +8,12 @@
 不覆盖（V1.3 阶段）：
 - watchfiles 异步 watcher 实际触发（依赖文件系统事件）
 """
+
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
-
 from agent.biznav.events import (
     EVT_FEATURE_AFFECTED,
     consume_biznav_events,
@@ -81,7 +80,7 @@ async def test_handle_changes_emits_affected_feature(tmp_path):
 
     watcher = AffectedFeaturesWatcher(project_root, "demo", storage)
     # 直接调 _handle_changes（不走 watchfiles）
-    await watcher._handle_changes([str(project_root / "controllers" / "order.py")])  # noqa: SLF001
+    await watcher._handle_changes([str(project_root / "controllers" / "order.py")])
 
     events = await consume_biznav_events()
     assert len(events) == 1
@@ -103,7 +102,7 @@ async def test_handle_changes_unrelated_file_emits_nothing(tmp_path):
     storage.upsert(f)
 
     watcher = AffectedFeaturesWatcher(tmp_path, "demo", storage)
-    await watcher._handle_changes([str(tmp_path / "README.md")])  # noqa: SLF001
+    await watcher._handle_changes([str(tmp_path / "README.md")])
 
     events = await consume_biznav_events()
     assert events == []
@@ -119,7 +118,7 @@ async def test_handle_changes_aggregates_multiple_features(tmp_path):
     storage.upsert(_make_feature("f2", ["shared/util.py"]))
 
     watcher = AffectedFeaturesWatcher(tmp_path, "demo", storage)
-    await watcher._handle_changes([str(tmp_path / "shared" / "util.py")])  # noqa: SLF001
+    await watcher._handle_changes([str(tmp_path / "shared" / "util.py")])
 
     events = await consume_biznav_events()
     assert len(events) == 1  # 1 个 batch event（不是 2 个）

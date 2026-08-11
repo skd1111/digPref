@@ -4,6 +4,7 @@ Design: blacklists based on substring matching are trivially bypassed
 (rm -rf / vs rm -rf /*, shutdown vs systemctl poweroff, etc.).
 Instead, we only allow an explicit set of safe commands and patterns.
 """
+
 from __future__ import annotations
 
 import re
@@ -202,7 +203,7 @@ def assert_safe(cmd: str) -> None:
 
 
 # Shell chaining / injection patterns
-_CHAINING_RE = re.compile(r'[;&|`$]|\$\(')
+_CHAINING_RE = re.compile(r"[;&|`$]|\$\(")
 
 
 def _assert_no_chaining(cmd: str) -> None:
@@ -224,7 +225,7 @@ def _assert_no_chaining(cmd: str) -> None:
         if in_double:
             if ch == '"':
                 in_double = False
-            elif ch == '\\' and nxt:
+            elif ch == "\\" and nxt:
                 i += 2  # skip escaped char
                 continue
             i += 1
@@ -240,17 +241,17 @@ def _assert_no_chaining(cmd: str) -> None:
             continue
 
         # Check for chaining operators outside quotes
-        if ch == ';':
+        if ch == ";":
             raise UnsafeCommandError("shell chaining ';' not allowed")
-        if ch == '|':
+        if ch == "|":
             raise UnsafeCommandError("shell pipe '|' not allowed")
-        if ch == '&' and nxt == '&':
+        if ch == "&" and nxt == "&":
             raise UnsafeCommandError("shell chaining '&&' not allowed")
-        if ch == '|' and nxt == '|':
+        if ch == "|" and nxt == "|":
             raise UnsafeCommandError("shell chaining '||' not allowed")
-        if ch == '`':
+        if ch == "`":
             raise UnsafeCommandError("command substitution backtick not allowed")
-        if ch == '$' and nxt == '(':
+        if ch == "$" and nxt == "(":
             raise UnsafeCommandError("command substitution '$()' not allowed")
 
         i += 1

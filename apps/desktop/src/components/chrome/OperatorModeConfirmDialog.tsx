@@ -150,11 +150,12 @@ interface OperatorModeConfirmDialogProps {
 }
 
 export const OPERATOR_MODE_CONTENT: AdvancedModeDialogContent = {
-  title: '切换到运营专家模式',
+  title: '切换到运营模式',
   bullets: [
-    '左侧资源栏将以 业务功能点 为中心展示（与开发模式的"系统资产"不同）',
-    '隐藏 执行链路 面板 + 底部 Xterm，UI 更聚焦对话',
-    '需要时按 Ctrl+~ 仍可拉出半屏 Xterm 抽屉',
+    '运营模式是独立页签（与开发模式并列），全屏渲染运营工作台',
+    '三栏布局：左侧业务列表（16 模块导航 + 功能点）+ 中间 Chat + 右侧工作台',
+    '功能点以 Skill 承载：选中业务 → 自动注入绑定 Skill 与专家团到会话',
+    '隐藏开发模式的系统资产栏 / 思维链 / 终端，UI 更聚焦业务办理',
   ],
   footerHint: '模式选择会持久化到本地，下次启动自动恢复。',
 };
@@ -181,7 +182,7 @@ export const DATA_MODE_CONTENT: AdvancedModeDialogContent = {
     '导出 Excel/PDF/CSV 会经过 PII 脱敏 + 数字水印 + 导出审计（合规可溯源）',
     '复杂清洗走受限 Python 沙箱（白名单 pandas/numpy，禁系统/网络调用）',
   ],
-  footerHint: '数据专家模式独立四象限 UI。当前为演示数据（前端 mock），后端引擎见 Phase 7。',
+  footerHint: '数据专家模式独立四象限 UI。模式选择会持久化到本地，下次启动自动恢复。',
   accentColor: '#059669', // 青绿色 — 数据/分析主题，区别于蓝(开发)与橙(审核)
 };
 

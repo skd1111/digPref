@@ -1,10 +1,9 @@
 """Phase 5 V0 · 审核专家事件 emit 机制。"""
+
 from __future__ import annotations
 
 import asyncio
 from collections import deque
-from typing import Any
-
 
 _audit_events: deque[tuple[str, dict]] = deque()
 _audit_lock = asyncio.Lock()

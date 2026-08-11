@@ -11,24 +11,24 @@ CLAUDE.md §6 安全红线：
 - 所有 LLM 调用前必经过 scrub_error_blocks() 脱敏
 - 缓存只存脱敏后的 payload（不允许原始 PII 进任何缓存）
 """
+
 from __future__ import annotations
 
 import hashlib
 import logging
-import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from agent.llm.router import LMRouter
-from agent.loganalysis import extractor, scrubber, router as llm_router
+from agent.loganalysis import extractor, scrubber
+from agent.loganalysis import router as llm_router
 from agent.loganalysis.models import (
     AnalysisCacheEntry,
     ErrorBlock,
     LogLevelClassifyResponse,
     RootCauseRequest,
-    RootCauseResponse,
     gen_request_id,
 )
 from agent.loganalysis.storage import LogAnalysisStorage
@@ -47,6 +47,7 @@ def _get_storage() -> LogAnalysisStorage:
     global _storage
     if _storage is None:
         from agent.loganalysis.storage import get_default_storage
+
         _storage = get_default_storage()
     return _storage
 
@@ -58,6 +59,7 @@ def reset_for_testing() -> None:
 
 def _get_llm() -> LMRouter:
     from agent.main import get_runtime
+
     return get_runtime().llm
 
 
@@ -161,15 +163,20 @@ async def loganalysis_root_cause(body: RootCauseRequestPayload):
     if body.blocks:
         blocks = [
             ErrorBlock(
-                start_line=p.start_line, end_line=p.end_line,
-                header=p.header, stack_trace=list(p.stack_trace),
-                level=p.level, fingerprint=p.fingerprint,
+                start_line=p.start_line,
+                end_line=p.end_line,
+                header=p.header,
+                stack_trace=list(p.stack_trace),
+                level=p.level,
+                fingerprint=p.fingerprint,
             )
             for p in body.blocks
         ]
     elif body.lines:
         blocks = extractor.extract_error_blocks(
-            body.lines, max_stack_lines=50, max_blocks=200,
+            body.lines,
+            max_stack_lines=50,
+            max_blocks=200,
         )
     else:
         raise HTTPException(400, "either blocks or lines must be provided")
@@ -177,10 +184,15 @@ async def loganalysis_root_cause(body: RootCauseRequestPayload):
     if not blocks:
         return RootCauseResponsePayload(
             summary="未检测到 ERROR 块；日志看起来正常。",
-            error_count=0, blocks_analyzed=0,
-            tokens_used=0, model_used="", elapsed_ms=0,
-            backend="noop", blocks=[],
-            cache_hit=False, request_id=request_id,
+            error_count=0,
+            blocks_analyzed=0,
+            tokens_used=0,
+            model_used="",
+            elapsed_ms=0,
+            backend="noop",
+            blocks=[],
+            cache_hit=False,
+            request_id=request_id,
         )
 
     # 2. PII 脱敏（CLAUDE.md §6 红线 —— 原始 PII 永远不进 LLM / 缓存）
@@ -191,7 +203,8 @@ async def loganalysis_root_cause(body: RootCauseRequestPayload):
     cache_hit = False
     if body.use_cache and body.file_fingerprint:
         cache_key = _make_cache_key(
-            body.file_fingerprint, body.analysis_type,
+            body.file_fingerprint,
+            body.analysis_type,
             summary_input=scrubbed_blocks,
         )
         cache_lookup = storage.get_analysis_cache(cache_key)
@@ -203,12 +216,14 @@ async def loganalysis_root_cause(body: RootCauseRequestPayload):
         file_path=body.file_path,
         error_blocks=scrubbed_blocks,
         context_window=body.context_window,
-        context_window_lines=body.lines[-body.context_window:] if body.lines else [],
+        context_window_lines=body.lines[-body.context_window :] if body.lines else [],
         max_tokens=body.max_tokens,
         analysis_type=body.analysis_type,
     )
     resp = await llm_router.analyze_root_cause(
-        req, llm=llm, scrubbed_blocks=scrubbed_blocks,
+        req,
+        llm=llm,
+        scrubbed_blocks=scrubbed_blocks,
         cache_lookup=cache_lookup,
     )
 
@@ -217,7 +232,8 @@ async def loganalysis_root_cause(body: RootCauseRequestPayload):
         try:
             entry = AnalysisCacheEntry.new(
                 cache_key=_make_cache_key(
-                    body.file_fingerprint, body.analysis_type,
+                    body.file_fingerprint,
+                    body.analysis_type,
                     summary_input=scrubbed_blocks,
                 ),
                 file_path=body.file_path,
@@ -249,7 +265,8 @@ async def loganalysis_log_level_classify(body: LogLevelClassifyRequest):
     """批量识别日志级别（端侧模型优先，失败兜底正则）。"""
     llm = _get_llm()
     resp: LogLevelClassifyResponse = await llm_router.classify_log_levels(
-        body.lines, llm=llm,
+        body.lines,
+        llm=llm,
     )
     return LogLevelClassifyResponsePayload(
         results=[r.to_dict() for r in resp.results],
@@ -298,6 +315,7 @@ def _make_cache_key(
 def _safe_json_dumps(obj: Any) -> str:
     """确保 PII 永不入缓存；万一有残留字符串，强制转码 + ensure_ascii。"""
     import json
+
     try:
         return json.dumps(obj, ensure_ascii=False)
     except (TypeError, ValueError) as e:

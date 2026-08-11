@@ -13,6 +13,7 @@ V1 简化：用 zipfile 把多个 skill yaml 打成一个 zip 供下载；导入
 - 不动审计 schema（V2 再考虑）
 - DSN 检查复用 schema.validate_no_dsn
 """
+
 from __future__ import annotations
 
 import io
@@ -33,9 +34,10 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ImportReport:
     """导入结果汇总。"""
-    imported: list[str] = field(default_factory=list)    # 成功导入的 skill id
-    skipped: list[str] = field(default_factory=list)     # 因已存在而跳过的 id
-    errors: list[dict] = field(default_factory=list)     # [{filename, reason}]
+
+    imported: list[str] = field(default_factory=list)  # 成功导入的 skill id
+    skipped: list[str] = field(default_factory=list)  # 因已存在而跳过的 id
+    errors: list[dict] = field(default_factory=list)  # [{filename, reason}]
 
     def to_dict(self) -> dict:
         return {

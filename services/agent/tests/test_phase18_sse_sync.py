@@ -3,6 +3,7 @@
 断言 graph/stream.py、src-tauri/src/stream/sse_bridge.rs、src/ipc/events.ts
 三处都声明了新增的三个事件通道（CLAUDE.md §4）。
 """
+
 from __future__ import annotations
 
 import re
@@ -35,7 +36,7 @@ def test_sse_bridge_rs_declares_phase18_channels():
         assert name in channels, f"sse_bridge.rs 缺少 agent://{name}"
     # map_event_to_channel 必须有短名映射分支
     for name in NEW_CHANNELS:
-        assert f'"{name}"' in text, f"sse_bridge.rs map_event_to_channel 缺少 \"{name}\" 分支"
+        assert f'"{name}"' in text, f'sse_bridge.rs map_event_to_channel 缺少 "{name}" 分支'
 
 
 def test_events_ts_declares_phase18_channels():

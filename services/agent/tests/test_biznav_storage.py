@@ -10,10 +10,10 @@
 - test_edit_history_written_on_update
 - test_rebuild_file_index
 """
+
 from __future__ import annotations
 
 import pytest
-
 from agent.biznav.models import Feature, RelatedFile
 from agent.biznav.storage import FeatureStorage, FeatureVersionConflict
 
@@ -77,10 +77,15 @@ def test_soft_delete_excludes_from_list(tmp_path):
 def test_hard_delete_cascades_file_index(tmp_path):
     db = str(tmp_path / "biznav.db")
     storage = FeatureStorage(db)
-    storage.upsert(_make_feature(id="a", related_files=[
-        RelatedFile(path="src/order/OrderService.java"),
-        RelatedFile(path="src/order/OrderController.java"),
-    ]))
+    storage.upsert(
+        _make_feature(
+            id="a",
+            related_files=[
+                RelatedFile(path="src/order/OrderService.java"),
+                RelatedFile(path="src/order/OrderController.java"),
+            ],
+        )
+    )
     # 反向索引已建
     hits = storage.find_features_by_file("src/order/OrderService.java", "demo")
     assert len(hits) == 1
@@ -131,6 +136,7 @@ def test_edit_history_written_on_update(tmp_path):
     storage.upsert(f)
     # 直接查 SQLite 验证
     import sqlite3
+
     with sqlite3.connect(db) as conn:
         rows = conn.execute(
             "SELECT feature_id, before_json, after_json FROM feature_edit_history "
@@ -139,6 +145,7 @@ def test_edit_history_written_on_update(tmp_path):
     assert len(rows) == 2  # 一次 insert + 一次 update
     # 第二次：after_json 中 name 是 "改后名字"
     import json
+
     after = json.loads(rows[1][2])
     assert after["name"] == "改后名字"
 
@@ -146,10 +153,15 @@ def test_edit_history_written_on_update(tmp_path):
 def test_rebuild_file_index(tmp_path):
     db = str(tmp_path / "biznav.db")
     storage = FeatureStorage(db)
-    storage.upsert(_make_feature(id="a", related_files=[
-        RelatedFile(path="old/a.java"),
-        RelatedFile(path="old/b.java"),
-    ]))
+    storage.upsert(
+        _make_feature(
+            id="a",
+            related_files=[
+                RelatedFile(path="old/a.java"),
+                RelatedFile(path="old/b.java"),
+            ],
+        )
+    )
     storage.rebuild_file_index("a", ["new/x.java", "new/y.java"])
     # 旧路径已被重建清除
     assert storage.find_features_by_file("old/a.java", "demo") == []
@@ -158,6 +170,7 @@ def test_rebuild_file_index(tmp_path):
     assert {f.id for f in hits} == {"a"}
     # 重建后索引里只有 new 路径
     import sqlite3
+
     with sqlite3.connect(db) as conn:
         rows = conn.execute(
             "SELECT file_path FROM feature_file_index WHERE feature_id='a' ORDER BY file_path"

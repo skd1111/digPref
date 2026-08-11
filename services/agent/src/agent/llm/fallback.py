@@ -17,12 +17,14 @@ V2 增量：
     - 但也允许在 raise_errors=True 时冒泡真实异常
     - Router 默认 raise_errors=False；Fallback 链要求 raise_errors=True
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, TypeVar
+from typing import TypeVar
 
 logger = logging.getLogger("agent.llm.fallback")
 
@@ -134,7 +136,7 @@ async def with_fallback(
             if circuit_breaker_registry is not None:
                 cb.on_failure()
             degradation_count += 1
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             # 客户端内部 try/except 兜底时不会到这里
             # 这里是保险，捕获一切未知错误并切换下一级
             trail.append((backend_name, f"unexpected: {type(e).__name__}"))
@@ -146,26 +148,28 @@ async def with_fallback(
 
         # V2 增量：指数退避（仅在 attempt < len(chain)-1 时 sleep）
         if sleep_between > 0 and attempt < len(chain) - 1:
-            await asyncio.sleep(sleep_between * (2 ** attempt))
+            await asyncio.sleep(sleep_between * (2**attempt))
 
     # V2 增量：emit llm_degraded SSE 事件（CLAUDE.md §4 三处同步）
     if degradation_count > 0:
         try:
             from agent.llm.metrics import emit_router_event
-            emit_router_event("llm_degraded", {
-                "label": label,
-                "trail": trail,
-                "fallback_used_count": degradation_count,
-                "chain_len": len(chain),
-            })
+
+            emit_router_event(
+                "llm_degraded",
+                {
+                    "label": label,
+                    "trail": trail,
+                    "fallback_used_count": degradation_count,
+                    "chain_len": len(chain),
+                },
+            )
         except Exception as e:
             logger.debug("emit_llm_degraded_failed err=%s", e)
 
     # 全链失败
     if raise_on_all_fail:
-        raise LLMBackendError(
-            f"all backends failed for {label}: {trail}"
-        ) from last_err
+        raise LLMBackendError(f"all backends failed for {label}: {trail}") from last_err
 
     logger.error("[%s] all backends failed: %s", label, trail)
     return FallbackResult(

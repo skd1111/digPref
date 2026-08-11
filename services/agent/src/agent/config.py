@@ -33,11 +33,17 @@ class Settings(BaseSettings):
     # ---- LLM 路由 ----
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen2.5:14b"
+    # 端侧 Ollama 总开关（BUGFIX #89）：未配置端侧模型时置 0，所有 LLM 链路零探测。
+    # 已建 router.db.llm_backends 表的环境以「模型管理」里的 local 后端为准（无 local 行 = 未配置）。
+    ollama_enabled: bool = True
     # 内网企业 LLM（兼容 OpenAI 协议）。
-    # 默认指向集群内网关；生产环境通过环境变量覆盖。
-    private_llm_base_url: str | None = "http://172.1.0.134:8000/v1"
-    private_llm_api_key: str | None = "internal-no-auth"
-    private_llm_model: str | None = "DeepSeek-RD-Llama-70B-Int8"
+    # 默认为空：是否启用内网后端只看「模型管理」（router.db.llm_backends）里
+    # 有没有启用的 private 后端；确需环境变量注入时才通过 EAIDE_PRIVATE_LLM_*
+    # 覆盖。不要内置占位网关地址 —— 不可达的默认地址会让每条消息白等
+    # TCP 连接超时（BUGFIX #57）。
+    private_llm_base_url: str | None = None
+    private_llm_api_key: str | None = None
+    private_llm_model: str | None = None
 
     # ---- MCP ----
     mcp_config_path: str = "mcp.yaml"
@@ -71,6 +77,10 @@ class Settings(BaseSettings):
     builtin_allowed_paths: list[str] = Field(default_factory=list)
     # 单文件最大字节数（超过转 logviewer）
     builtin_max_file_bytes: int = Field(default=100 * 1024 * 1024, ge=1024)
+    # file_to_markdown 工具：外部 markitdown CLI 路径（可选覆盖；默认空 = 仅用进程内库）
+    builtin_markitdown_executable: str = ""
+    # file_to_markdown 工具：转换超时（秒）
+    builtin_markitdown_timeout_sec: float = Field(default=60.0, ge=1.0, le=600.0)
 
     # ---- Phase 4 本地端侧模型 ----
     # 文本小模型（Qwen2.5-0.5B，意图分类/列计划）
@@ -91,6 +101,12 @@ class Settings(BaseSettings):
     rag_enabled: bool = True
     # 默认 embedding 维度（bge-small-zh-v1.5 = 384）
     local_embedding_dim: int = Field(default=384, ge=64, le=4096)
+
+    # ---- 意图向量快速路由（semantic-router 模式，2026-08-07）----
+    # 总开关：命中预置 Route 时零 LLM 直出意图分析；未命中/不可用静默回退原链路
+    semantic_route_enabled: bool = False
+    # 余弦相似度命中阈值（低于此值视为未命中，回退 LLM 分析）
+    semantic_route_threshold: float = Field(default=0.78, ge=0.5, le=1.0)
 
     # ---- Phase 13 DSpark 推测解码 ----
     # 策略 yaml 路径（不存在 / 解析失败 → 落回 DEFAULT_POLICIES）
@@ -141,6 +157,8 @@ class Settings(BaseSettings):
     # ---- 文档风险合规审核（审核专家 · 文档审核）----
     # 文档审核 SQLite 路径（与 audit_expert / preview 等 db 物理隔离）
     doc_review_db_path: str = "doc_review.db"
+    # 知识库目录（grep 式匹配引用依据；目录不存在时 findings.kb_refs 返 []）
+    doc_review_kb_dir: str = "knowledge-base"
     # 文档审核模型名（缺省取 ollama_model）
     doc_review_model: str | None = None
     # 分类阶段读取文档前 N 字符
@@ -148,9 +166,12 @@ class Settings(BaseSettings):
     # 分析分块大小（字符）与重叠
     doc_review_chunk_max_chars: int = Field(default=8000, ge=1000, le=32000)
     doc_review_chunk_overlap: int = Field(default=200, ge=0, le=2000)
+    # 分析并发度：风险维度×分块 单元的 LLM 并发调用数（限流防云端 429）
+    doc_review_analyze_concurrency: int = Field(default=3, ge=1, le=8)
     # 文档审核 LLM 路由链（按序降级）：mock / ollama / private / cloud
-    # cloud 一环仅在「模型管理」存在已启用云端后端（router.db.llm_backends, type=cloud, enabled=1）时生效
-    doc_review_llm_chain: list[str] = Field(default_factory=lambda: ["ollama", "private", "cloud"])
+    # 云端优先：本机 Ollama 常未启动、private 常未配置，先试云端避免白等连接超时；
+    # 云端不可用时再依次回退 private / ollama
+    doc_review_llm_chain: list[str] = Field(default_factory=lambda: ["cloud", "private", "ollama"])
 
     # ---- Phase 7 V0 数据专家模式 ----
     # 数据专家 SQLite 路径（与 audit / router / knowledge / ssh 等 db 物理隔离）
@@ -167,6 +188,11 @@ class Settings(BaseSettings):
     data_export_watermark: bool = True
     # 导出强制 PII 脱敏（生产别关）
     data_require_mask_on_export: bool = True
+    # 运行环境（EAIDE_ENV）："dev" | "prod"，默认 prod（fail-safe）
+    env: str = "prod"
+    # SQL 白名单豁免开关：仅当 env=="dev" 且本开关=true 时，
+    # 数据专家模式才放行非 SELECT 语句（降级黑名单校验）
+    data_allow_non_select_in_dev: bool = False
 
     # ---- Phase 12 V1.5 多智能体规模化调度 ----
     # Orchestrator 权威持久层 SQLite（与 audit / router / sessions 等 db 物理隔离）

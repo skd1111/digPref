@@ -72,3 +72,21 @@ CREATE TABLE IF NOT EXISTS router_weights (
     availability REAL NOT NULL DEFAULT 0.05,
     updated_at INTEGER NOT NULL
 );
+
+-- Token 用量按日聚合（状态栏实时速率 + 当日总量 + 调用次数 + 费用；llm/token_usage.py 写入）
+CREATE TABLE IF NOT EXISTS token_usage_daily (
+    day TEXT PRIMARY KEY,             -- 'YYYY-MM-DD'
+    upload_tokens INTEGER NOT NULL DEFAULT 0,    -- prompt_tokens（上传）
+    download_tokens INTEGER NOT NULL DEFAULT 0,  -- completion_tokens（下载）
+    call_count INTEGER NOT NULL DEFAULT 0,       -- 模型调用次数
+    cost_total REAL NOT NULL DEFAULT 0.0,        -- 当日总费用（按模型管理 cost_per_1k_tokens 计）
+    updated_at INTEGER
+);
+
+-- LLM active backend unified config (KV; llm_active = JSON, sole long-term source of truth; legacy llm-config.json migrated here on startup)
+CREATE TABLE IF NOT EXISTS llm_kv (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+

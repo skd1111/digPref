@@ -9,6 +9,7 @@
 2026-07-09 变更：环境名（`Environment`）从 4 项硬编码枚举改为自由格式字符串。
     dev/test/staging/prod 仅作为首次启动的 seed 项提示，可任意增删 / 重命名。
 """
+
 from __future__ import annotations
 
 import re
@@ -16,7 +17,6 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field, SecretStr, field_validator
 from pydantic_core import core_schema
-
 
 # ---- 环境名类型 ------------------------------------------------------------
 #
@@ -49,18 +49,14 @@ class Environment(str):
     PROD: ClassVar[str] = "prod"
 
     @classmethod
-    def __get_pydantic_core_schema__(cls, source_type, handler):  # noqa: ARG003
-        def _validate(value, info=None):  # noqa: ARG001
+    def __get_pydantic_core_schema__(cls, source_type, handler):
+        def _validate(value, info=None):
             if isinstance(value, cls):
                 return value
             if not isinstance(value, str):
-                raise TypeError(
-                    f"environment 必须为 str，got {type(value).__name__}"
-                )
+                raise TypeError(f"environment 必须为 str，got {type(value).__name__}")
             if not _ENV_PATTERN.match(value):
-                raise ValueError(
-                    f"环境名非法：必须匹配 ^[a-z][a-z0-9._-]{{0,62}}$，got {value!r}"
-                )
+                raise ValueError(f"环境名非法：必须匹配 ^[a-z][a-z0-9._-]{{0,62}}$，got {value!r}")
             return cls(value)
 
         def _serialize(value):
@@ -212,4 +208,4 @@ class EnvConfig(BaseModel):
             ("databases", "password"),
             ("api_gateways", "api_key"),
             ("target_servers", "password"),
-        ]  # type: ignore  # noqa: F822
+        ]  # type: ignore

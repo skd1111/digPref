@@ -3,6 +3,7 @@
 物理隔离：data_expert.db 与 audit / router / knowledge / ssh / audit_expert 等独立。
 结果集大对象 → 本地 Parquet 文件（result_data_ref 存路径），不塞进 SQLite。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -13,7 +14,6 @@ from typing import Any
 import aiosqlite
 
 from agent.config import settings
-
 
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -80,9 +80,7 @@ class DataExpertStorage:
         async with self._lock:
             db = await self._connect()
             try:
-                cur = await db.execute(
-                    "SELECT * FROM data_sources WHERE id = ?", (source_id,)
-                )
+                cur = await db.execute("SELECT * FROM data_sources WHERE id = ?", (source_id,))
                 row = await cur.fetchone()
             finally:
                 await db.close()
@@ -115,8 +113,17 @@ class DataExpertStorage:
                          result_metadata, result_data_ref, chart_config, created_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (task_id, name, user_id, query_sql, python_script,
-                     meta_json, result_data_ref, chart_json, created_at),
+                    (
+                        task_id,
+                        name,
+                        user_id,
+                        query_sql,
+                        python_script,
+                        meta_json,
+                        result_data_ref,
+                        chart_json,
+                        created_at,
+                    ),
                 )
                 await db.commit()
             finally:
@@ -141,9 +148,7 @@ class DataExpertStorage:
         async with self._lock:
             db = await self._connect()
             try:
-                cur = await db.execute(
-                    "SELECT * FROM analysis_tasks WHERE id = ?", (task_id,)
-                )
+                cur = await db.execute("SELECT * FROM analysis_tasks WHERE id = ?", (task_id,))
                 row = await cur.fetchone()
             finally:
                 await db.close()
@@ -178,8 +183,16 @@ class DataExpertStorage:
                         export_format=excluded.export_format,
                         created_by=excluded.created_by, is_public=excluded.is_public
                     """,
-                    (template_id, name, description, task_id, schedule_cron,
-                     export_format, created_by, 1 if is_public else 0),
+                    (
+                        template_id,
+                        name,
+                        description,
+                        task_id,
+                        schedule_cron,
+                        export_format,
+                        created_by,
+                        1 if is_public else 0,
+                    ),
                 )
                 await db.commit()
             finally:
@@ -195,8 +208,22 @@ class DataExpertStorage:
                 await db.close()
         return [_template_row_to_dict(r) for r in rows]
 
+    async def list_templates_with_cron(self) -> list[dict]:
+        """带定时计划的报表模板（供 ReportScheduler，缺口 7）。"""
+        async with self._lock:
+            db = await self._connect()
+            try:
+                cur = await db.execute(
+                    "SELECT * FROM report_templates WHERE schedule_cron != '' ORDER BY name"
+                )
+                rows = await cur.fetchall()
+            finally:
+                await db.close()
+        return [_template_row_to_dict(r) for r in rows]
+
 
 # ---- Parquet 结果落盘 / 读取 -------------------------------------------------
+
 
 def save_result_parquet(df: Any, task_id: str) -> str:
     """将 DataFrame 落盘为 Parquet，返回文件路径。"""
@@ -210,10 +237,12 @@ def save_result_parquet(df: Any, task_id: str) -> str:
 def load_result_parquet(path: str) -> Any:
     """从 Parquet 文件读取 DataFrame。"""
     import pandas as pd
+
     return pd.read_parquet(path)
 
 
 # ---- 行 → dict helpers -------------------------------------------------------
+
 
 def _source_row_to_dict(row: tuple) -> dict:
     cols = ["id", "name", "type", "connection_ref", "schema_cache", "updated_at"]
@@ -227,8 +256,17 @@ def _source_row_to_dict(row: tuple) -> dict:
 
 
 def _task_row_to_dict(row: tuple) -> dict:
-    cols = ["id", "name", "user_id", "query_sql", "python_script",
-            "result_metadata", "result_data_ref", "chart_config", "created_at"]
+    cols = [
+        "id",
+        "name",
+        "user_id",
+        "query_sql",
+        "python_script",
+        "result_metadata",
+        "result_data_ref",
+        "chart_config",
+        "created_at",
+    ]
     d = dict(zip(cols, row))
     for key in ("result_metadata", "chart_config"):
         if d.get(key):
@@ -240,8 +278,16 @@ def _task_row_to_dict(row: tuple) -> dict:
 
 
 def _template_row_to_dict(row: tuple) -> dict:
-    cols = ["id", "name", "description", "task_id", "schedule_cron",
-            "export_format", "created_by", "is_public"]
+    cols = [
+        "id",
+        "name",
+        "description",
+        "task_id",
+        "schedule_cron",
+        "export_format",
+        "created_by",
+        "is_public",
+    ]
     return dict(zip(cols, row))
 
 

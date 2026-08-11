@@ -15,8 +15,10 @@ export interface ChatMessage {
   /**
    * execution = Codex/Claude 风格的执行链路块（role='system' + kind='execution'）。
    * 渲染为可折叠的灰色 step block（intent / plan / tool_call / tool_result / repair / summarise / explain）。
+   * error = 流异常终止的系统消息（2026-08-07），前端渲染「重试」按钮。
+   * search = 搜索/检索类工具调用（2026-08-10），前端渲染 aicss 风格搜索卡片。
    */
-  kind?: 'execution' | 'normal';
+  kind?: 'execution' | 'normal' | 'error' | 'search';
   /** execution kind 时附带的分类标签 + 耗时（前端用来着色） */
   category?: string;
   latencyMs?: number;

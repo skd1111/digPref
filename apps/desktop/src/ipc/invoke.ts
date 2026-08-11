@@ -17,11 +17,49 @@ import type {
   DocSummary,
 } from "@eaide/shared-protocol";
 
+/**
+ * Rust 侧签名为 `fn xxx(args: Value)` 的 _op 分发 command：
+ * Tauri 按形参名映射 invoke 载荷，必须把参数包进 `args` 键，
+ * 否则报 "missing required key args"（连 handler 都进不去）。
+ */
+const ARGS_WRAPPED_COMMANDS = new Set([
+  "audit_decide",
+  "doc_review",
+  "doc_review_export_word",
+]);
+
+// ---- Token 用量（与 Python llm/usage_api.py 的 GET /llm/token-usage 对齐）----
+export interface TokenUsageSnapshot {
+  /** 当日日期 'YYYY-MM-DD' */
+  day: string;
+  /** 速率统计窗口（秒，默认 30） */
+  window_seconds: number;
+  /** 上传（prompt）速率 tokens/s */
+  rate_upload_per_s: number;
+  /** 下载（completion）速率 tokens/s */
+  rate_download_per_s: number;
+  /** 模型调用速率 次/s */
+  rate_calls_per_s: number;
+  /** 当日上传总量 */
+  today_upload_tokens: number;
+  /** 当日下载总量 */
+  today_download_tokens: number;
+  /** 当日合计 */
+  today_total_tokens: number;
+  /** 当日模型调用次数（跨重启保留） */
+  today_call_count: number;
+  /** 当日总费用（按模型管理 cost_per_1k_tokens 计，跨重启保留） */
+  today_cost_total: number;
+  /** 当日按模型费用明细（进程内，重启后重新累计） */
+  cost_by_model: Record<string, number>;
+}
+
 export async function invoke<T = unknown>(
   cmd: string,
   args?: Record<string, unknown>,
 ): Promise<T> {
-  return tauriInvoke<T>(cmd, args);
+  const payload = ARGS_WRAPPED_COMMANDS.has(cmd) ? { args: args ?? {} } : args;
+  return tauriInvoke<T>(cmd, payload);
 }
 
 // ---------- Typed command surface ----------
@@ -166,6 +204,12 @@ export const ipc = {
     operator?: string,
   ) => invoke<void>("agent_approval", { approvalId, decision, operator }),
   cancel: (runId: string) => invoke<void>("agent_cancel", { runId }),
+  /** 会话标题摘要（2026-08-07）：后端失败返空 title，前端保留截断标题 */
+  summarizeTitle: (userPrompt: string, assistantReply?: string) =>
+    invoke<{ title: string }>("chat_summarize_title", {
+      userPrompt,
+      ...(assistantReply != null ? { assistantReply } : {}),
+    }),
 
   listAssets: () => invoke<unknown[]>("asset_list"),
   addAsset: (asset: Record<string, unknown>) =>
@@ -276,17 +320,29 @@ export const ipc = {
       findings: DocFinding[];
     }>("doc_review", { _op: "findings", doc_id, run_id }),
   docReviewStatus: (doc_id: string) =>
-    invoke<{ doc_id: string; run_id?: string; status: string; error?: string }>(
-      "doc_review",
-      {
-        _op: "status",
-        doc_id,
-      },
-    ),
+    invoke<{
+      doc_id: string;
+      run_id?: string;
+      status: string;
+      error?: string;
+      /** 分析进度 0..1（排队/历史无记录时为 null） */
+      progress?: number | null;
+    }>("doc_review", {
+      _op: "status",
+      doc_id,
+    }),
   docReviewDelete: (doc_id: string) =>
     invoke<{ doc_id: string; deleted: boolean }>("doc_review", {
       _op: "delete",
       doc_id,
+    }),
+
+  /** 导出审核结果为 Word：Rust 下载 docx 二进制并写入 save_path */
+  docReviewExportWord: (doc_id: string, mode: "full" | "risks_only", save_path: string) =>
+    invoke<{ path: string; bytes: number }>("doc_review_export_word", {
+      doc_id,
+      mode,
+      save_path,
     }),
 
   // Phase 2F V0: 代码导航
@@ -367,6 +423,24 @@ export const ipc = {
       confidence: number;
       backend?: string | null;
     }>("code_nav_explain", { body }),
+
+  /** 流式解释：增量经 EVT.CODENAV_EXPLAIN_DELTA 事件推送，invoke 返回最终结果 */
+  codeNavExplainStream: (body: {
+    symbol: string;
+    current_file: string;
+    line?: number;
+    context?: string;
+    selection_start_line?: number | null;
+    selection_end_line?: number | null;
+    selection_text?: string | null;
+  }) =>
+    invoke<{
+      symbol: string;
+      text: string;
+      source: "llm" | "mock";
+      confidence: number;
+      backend?: string | null;
+    }>("code_nav_explain_stream", { body }),
 
   codeNavLlmConfig: () =>
     invoke<{
@@ -497,6 +571,14 @@ export const ipc = {
   routerDeleteBackend: (name: string) =>
     invoke<{ ok: boolean }>("router_delete_backend", { name }),
 
+  /** 保存/启停模型后热重载 LMRouter（端侧自定义 URL/端口无需重启 Agent 生效）。 */
+  routerReloadContext: () =>
+    invoke<{
+      ok: boolean;
+      ollama_max_ctx: number | null;
+      private_max_ctx: number | null;
+    }>("router_reload_context"),
+
   /** Phase 2C V2.0：实时 metrics（circuits + budget + backends）。5 秒轮询用。 */
   routerGetMetrics: () =>
     invoke<{
@@ -583,6 +665,51 @@ export const ipc = {
   /** Phase 2D：重新扫描整个 skills 目录。 */
   skillsReload: () => invoke<{ ok: boolean; count: number }>("skills_reload"),
 
+  /** 专家团：列出全部。 */
+  expertTeamsList: () => invoke<{ teams: unknown[] }>("expert_teams_list"),
+
+  /** 专家团：获取单个。 */
+  expertTeamsGet: (teamId: string) =>
+    invoke<Record<string, unknown>>("expert_teams_get", { teamId }),
+
+  /** 专家团：保存（upsert，写 YAML + 重载）。 */
+  expertTeamsSave: (teamId: string, body: Record<string, unknown>) =>
+    invoke<{ ok: boolean }>("expert_teams_save", { teamId, body }),
+
+  /** 专家团：删除。 */
+  expertTeamsDelete: (teamId: string) =>
+    invoke<{ ok: boolean }>("expert_teams_delete", { teamId }),
+
+  /** 专家团：导入（完整对象 或 {content: "...YAML 文本"}，后端解析）。 */
+  expertTeamsImport: (body: Record<string, unknown>) =>
+    invoke<{ ok: boolean; team_id: string }>("expert_teams_import", { body }),
+
+  /** 专家团：导出全部（id → YAML 文本）。 */
+  expertTeamsExportAll: () =>
+    invoke<{ teams: Record<string, string> }>("expert_teams_export_all"),
+
+  /** 专家团：业务 → 专家团推荐（预设→LLM 三级降级→关键词，永不报错）。 */
+  expertTeamsRecommend: (body: Record<string, unknown>) =>
+    invoke<{
+      team_ids: string[];
+      confidence: number;
+      reasoning: string;
+      source: string;
+    }>("expert_teams_recommend", { body }),
+
+  /** 专家团：导入资产包 zip（team.yaml 提示词 + templates/ 交付物模板，base64）。 */
+  expertTeamsImportPackage: (fileName: string, contentBase64: string) =>
+    invoke<{ ok: boolean; team_id: string; templates: string[] }>("expert_teams_import_package", {
+      fileName,
+      contentBase64,
+    }),
+
+  /** 专家团：导出资产包 zip（base64，含 team.yaml + 当前生效模板）。 */
+  expertTeamsExportPackage: (teamId: string) =>
+    invoke<{ file_name: string; content_base64: string }>("expert_teams_export_package", {
+      teamId,
+    }),
+
   /**
    * 阻塞等 Agent 就绪（轮询 GET /health）。返回 ready=true 时方可放心发业务请求。
    * timeout_s 默认 30s。失败时 ready=false + error 信息。
@@ -594,6 +721,12 @@ export const ipc = {
       health_url?: string;
       error?: string;
     }>("agent_wait_ready", { timeoutS }),
+
+  /**
+   * GET /llm/token-usage —— Token 用量快照（状态栏「Agent: 就绪」旁实时展示）。
+   * 速率区分上传（prompt）/ 下载（completion），当日总量跨重启保留。
+   */
+  tokenUsageGet: () => invoke<TokenUsageSnapshot>("token_usage_get"),
 
   /** GET /version — Agent 启动指纹（pid + boot_time + endpoints 列表）。用于诊断 404。 */
   agentGetVersion: () =>
@@ -826,6 +959,248 @@ export const ipc = {
       project_name,
     }),
 
+  /** 项目画像（init 风格，2026-08-05）：导入工程时生成，chat 发送时前置注入提示词 */
+  biznavProfile: (project_name: string) =>
+    invoke<{
+      project_name: string;
+      has_profile: boolean;
+      profile: string;
+      project_root?: string;
+      updated_at?: number;
+    }>("biznav_profile", { projectName: project_name }),
+
+  // reqflow V1：运营专家需求改造工作流（需求卡片）10 wrapper，
+  // Tauri cmd 见 apps/desktop/src-tauri/src/commands/reqflow.rs。
+  reqflowCreateBatch: (body: {
+    project_name: string;
+    name?: string;
+    created_by?: string;
+  }) => invoke<Record<string, unknown>>("reqflow_create_batch", { body }),
+
+  reqflowListBatches: (projectName?: string) =>
+    invoke<{
+      batches: Record<string, unknown>[];
+      stats: Record<string, Record<string, number>>;
+    }>("reqflow_list_batches", { projectName }),
+
+  reqflowGenerateCard: (body: {
+    feature_ids: string[];
+    project_name: string;
+    system_name?: string;
+    conversation_summary: string;
+    session_id?: string;
+  }) => invoke<{ draft: Record<string, unknown> }>("reqflow_generate_card", { body }),
+
+  reqflowListCards: (opts?: {
+    batchId?: string;
+    status?: string;
+    featureId?: string;
+    projectName?: string;
+  }) =>
+    invoke<{ cards: Record<string, unknown>[]; total: number }>(
+      "reqflow_list_cards",
+      {
+        batchId: opts?.batchId,
+        status: opts?.status,
+        featureId: opts?.featureId,
+        projectName: opts?.projectName,
+      },
+    ),
+
+  reqflowCreateCard: (body: Record<string, unknown>) =>
+    invoke<Record<string, unknown>>("reqflow_create_card", { body }),
+
+  reqflowUpdateCard: (cardId: string, body: Record<string, unknown>) =>
+    invoke<Record<string, unknown>>("reqflow_update_card", { cardId, body }),
+
+  reqflowDeleteCard: (cardId: string) =>
+    invoke<{ ok: boolean }>("reqflow_delete_card", { cardId }),
+
+  reqflowListCardVersions: (cardId: string) =>
+    invoke<{
+      card_id: string;
+      current_version: number;
+      versions: { version: number; changed_by: string; created_at: number }[];
+    }>("reqflow_list_card_versions", { cardId }),
+
+  reqflowGetCardVersion: (cardId: string, version: number) =>
+    invoke<{
+      card_id: string;
+      version: number;
+      snapshot: Record<string, unknown>;
+    }>("reqflow_get_card_version", { cardId, version }),
+
+  /** md → {markdown}；docx → {base64, filename}（前端 atob 还原二进制落盘） */
+  reqflowExport: (batchId: string, format: 'md' | 'docx') =>
+    invoke<{
+      markdown?: string;
+      base64?: string;
+      filename?: string;
+      format?: string;
+    }>("reqflow_export", { batchId, format }),
+
+  /** 导出文件落盘（md 传 content_text，docx 传 content_base64） */
+  reqflowWriteExport: (
+    path: string,
+    payload: { content_text?: string; content_base64?: string },
+  ) =>
+    invoke<{ ok: boolean; path: string; bytes: number }>("reqflow_write_export", {
+      path,
+      contentText: payload.content_text,
+      contentBase64: payload.content_base64,
+    }),
+
+  // Phase 2H：运营工作台业务记录（记录卡片 CRUD + AI 总结）
+  opsCreateRecord: (body: Record<string, unknown>) =>
+    invoke<Record<string, unknown>>("ops_create_record", { body }),
+
+  opsListRecords: (opts?: {
+    featureId?: string;
+    projectName?: string;
+    limit?: number;
+  }) =>
+    invoke<{ records: Record<string, unknown>[]; total: number }>(
+      "ops_list_records",
+      {
+        featureId: opts?.featureId,
+        projectName: opts?.projectName,
+        limit: opts?.limit,
+      },
+    ),
+
+  opsGetRecord: (recordId: string) =>
+    invoke<Record<string, unknown>>("ops_get_record", { recordId }),
+
+  opsDeleteRecord: (recordId: string) =>
+    invoke<{ ok: boolean }>("ops_delete_record", { recordId }),
+
+  opsSummarizeRecord: (body: {
+    feature_id: string;
+    project_name: string;
+    business_type?: string;
+    conversation: Array<{ role: string; content: string }>;
+    session_id?: string;
+  }) =>
+    invoke<{ draft: Record<string, unknown> }>("ops_summarize_record", { body }),
+
+  // 专家验收工作流 Case（2026-08-10，取代运营模式大 Chat）
+  opsCaseGet: (opts?: { projectName?: string; featureId?: string }) =>
+    invoke<{
+      case_id: string;
+      files: Record<string, unknown>[];
+      qa: Record<string, unknown>[];
+      drafts?: Record<string, unknown>[];
+    }>(
+      "ops_case_get",
+      { projectName: opts?.projectName, featureId: opts?.featureId },
+    ),
+
+  /** 清空 Case 重新开始办理（BUGFIX #85）。 */
+  opsCaseClear: (opts?: { projectName?: string; featureId?: string }) =>
+    invoke<{ ok: boolean; case_id: string; files: number; qa: number; drafts: number }>(
+      "ops_case_clear",
+      { projectName: opts?.projectName, featureId: opts?.featureId },
+    ),
+
+  opsCaseFileAdd: (body: {
+    case_id: string;
+    team_id: string;
+    member_key: string;
+    file_name: string;
+    content_base64: string;
+  }) => invoke<Record<string, unknown>>("ops_case_file_add", { body }),
+
+  opsCaseFileReview: (fileId: string) =>
+    invoke<Record<string, unknown>>("ops_case_file_review", { fileId }),
+
+  opsCaseFileOverride: (fileId: string, body: { status: string; note?: string }) =>
+    invoke<Record<string, unknown>>("ops_case_file_override", { fileId, body }),
+
+  opsCaseFileDelete: (fileId: string) =>
+    invoke<{ ok: boolean }>("ops_case_file_delete", { fileId }),
+
+  /** 交付物柜：预览材料内容（BUGFIX #79，base64）。 */
+  opsCaseFileContent: (fileId: string) =>
+    invoke<{ file_name: string; content_base64: string }>("ops_case_file_content", { fileId }),
+
+  /** 交付物柜：另存到指定路径（后端直接复制文件）。 */
+  opsCaseFileSaveAs: (fileId: string, targetPath: string) =>
+    invoke<{ ok: boolean; path: string }>(
+      "ops_case_file_save_as",
+      { fileId, body: { target_path: targetPath } },
+    ),
+
+  opsCaseAsk: (body: {
+    case_id: string;
+    team_id: string;
+    member_key: string;
+    question: string;
+  }) =>
+    invoke<{ qa: Record<string, unknown>; draft?: Record<string, unknown> }>(
+      "ops_case_ask",
+      { body },
+    ),
+
+  /** 交付草稿：保存填写值（BUGFIX #78 界面直填）。 */
+  opsCaseDraftSave: (draftId: string, body: { values: Record<string, string> }) =>
+    invoke<Record<string, unknown>>("ops_case_draft_save", { draftId, body }),
+
+  /** 交付草稿：提交 → 自动入材料走专家审核，通过即入交付物。 */
+  opsCaseDraftSubmit: (draftId: string) =>
+    invoke<{ draft: Record<string, unknown>; file: Record<string, unknown> }>(
+      "ops_case_draft_submit",
+      { draftId },
+    ),
+
+  opsCaseExport: (body: {
+    case_id: string;
+    target_path: string;
+    feature_name?: string;
+    team_id?: string;
+    team_name?: string;
+    checklist?: string[];
+  }) =>
+    invoke<{ ok: boolean; path: string; file_count: number }>("ops_case_export", { body }),
+
+  opsCaseCrosscheck: (caseId: string) =>
+    invoke<{
+      case_id: string;
+      inconsistencies: Array<{ field: string; values: Array<{ file: string; value: string }> }>;
+      low_confidence: Array<{ file: string; field: string; value: string; confidence: number }>;
+      consistent: boolean;
+    }>("ops_case_crosscheck", { caseId }),
+
+  // Phase 2H：数据字典（公共参数独立维护，Skill 按 key 引用）
+  dictListItems: (category?: string) =>
+    invoke<{ items: Record<string, unknown>[]; total: number }>(
+      "dict_list_items",
+      { category },
+    ),
+
+  dictSearchItems: (q: string, limit?: number) =>
+    invoke<{ query: string; items: Record<string, unknown>[]; total: number }>(
+      "dict_search_items",
+      { q, limit },
+    ),
+
+  dictListCategories: () =>
+    invoke<{ categories: string[] }>("dict_list_categories"),
+
+  dictCreateItem: (body: {
+    key: string;
+    category: string;
+    label: string;
+    value: string;
+    description?: string;
+    updated_by?: string;
+  }) => invoke<Record<string, unknown>>("dict_create_item", { body }),
+
+  dictUpdateItem: (key: string, body: Record<string, unknown>) =>
+    invoke<Record<string, unknown>>("dict_update_item", { key, body }),
+
+  dictDeleteItem: (key: string) =>
+    invoke<{ ok: boolean }>("dict_delete_item", { key }),
+
   // 在系统资源管理器中定位到文件（Tab 右键菜单）
   revealInExplorer: (path: string) =>
     invoke<string>("reveal_in_explorer", { path }),
@@ -912,10 +1287,11 @@ export const ipc = {
       shared_at: number;
       messages: Array<Record<string, unknown>>;
       checkpoints: Array<Record<string, unknown>>;
-    }>("sessions_get", { session_id }),
+      // BUGFIX：Tauri command 参数需 camelCase（sessionId），传 session_id 会 missing required key
+    }>("sessions_get", { sessionId: session_id }),
 
   sessionsDelete: (session_id: string) =>
-    invoke<void>("sessions_delete", { session_id }),
+    invoke<void>("sessions_delete", { sessionId: session_id }),
 
   sessionsKbSearch: (body: { query: string; top_k?: number }) =>
     invoke<{
@@ -1223,14 +1599,20 @@ export const ipc = {
   dataRunSql: (sql: string, sourceId?: string, confirmed?: boolean) =>
     invoke<{
       ok: boolean;
+      task_id?: string;
       columns: string[];
       dtypes: string[];
       rows: Array<Array<string | number>>;
+      result_data_ref?: string;
+      stream_ref?: string;
       row_count: number;
       elapsed_ms: number;
       truncated: boolean;
       error?: string;
-      need_confirm?: boolean;
+      /** 重查询 HITL：后端返回 needs_confirm=true 时需用户确认后 confirmed=true 重提 */
+      needs_confirm?: boolean;
+      message?: string;
+      sql?: string;
     }>("data_run_sql", {
       sql,
       sourceId: sourceId ?? null,
@@ -1259,12 +1641,13 @@ export const ipc = {
       reason: string;
     }>("data_chart_recommend", { columns, dtypes, rowCount }),
 
-  /** POST /data/export/{fmt} —— 导出 */
+  /** POST /data/export/{fmt} —— 导出（task_id 优先，服务端取数） */
   dataExport: (
     fmt: string,
     columns: string[],
     rows: Array<Array<string | number>>,
     title?: string,
+    taskId?: string,
   ) =>
     invoke<{
       path: string;
@@ -1272,7 +1655,31 @@ export const ipc = {
       row_count: number;
       watermark: string;
       format: string;
-    }>("data_export", { fmt, columns, rows, title: title ?? "数据报表" }),
+    }>("data_export", {
+      fmt,
+      columns,
+      rows,
+      title: title ?? "数据报表",
+      taskId: taskId ?? null,
+    }),
+
+  /** WS 中继：拉取大结果集 Arrow 流（结果经 EVT.DATA_STREAM_CHUNK/DONE 事件送达） */
+  dataStreamResult: (taskId: string) =>
+    invoke<number>("data_stream_result", { taskId }),
+
+  /** GET /data/tasks —— 历史分析任务列表 */
+  dataListTasks: (limit?: number) =>
+    invoke<{
+      tasks: Array<{
+        id: string;
+        name: string;
+        query_sql: string;
+        result_metadata: { columns?: string[]; row_count?: number } | null;
+        result_data_ref: string;
+        created_at: number;
+      }>;
+      count: number;
+    }>("data_list_tasks", { limit: limit ?? null }),
 
   /** POST /data/templates —— 保存报表模板 */
   dataSaveTemplate: (

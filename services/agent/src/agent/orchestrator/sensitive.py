@@ -15,6 +15,7 @@
     scrubber 负责「脱敏后再发」，本模块负责「压根不发」。两者互补，均不依赖对方
     （避免跨 Phase 循环依赖）。
 """
+
 from __future__ import annotations
 
 import re
@@ -36,11 +37,27 @@ _PII_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 # DB 行 / 凭证特征字段名
-_CREDENTIAL_KEYS = frozenset({
-    "password", "passwd", "pwd", "secret", "api_key", "apikey", "token",
-    "dsn", "connection_string", "conn_str", "private_key", "authorization",
-    "credit_card", "id_card", "ssn", "session_id", "cookie",
-})
+_CREDENTIAL_KEYS = frozenset(
+    {
+        "password",
+        "passwd",
+        "pwd",
+        "secret",
+        "api_key",
+        "apikey",
+        "token",
+        "dsn",
+        "connection_string",
+        "conn_str",
+        "private_key",
+        "authorization",
+        "credit_card",
+        "id_card",
+        "ssn",
+        "session_id",
+        "cookie",
+    }
+)
 
 # SQL 错误 / DB 报错特征
 _SQL_ERROR_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -52,13 +69,15 @@ _SQL_ERROR_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 
 # DDL/DML 语句 + 结果行（说明 prompt 里塞了真实数据库内容）
 _SQL_RESULTSET_PATTERN = re.compile(
-    r"\bSELECT\b[\s\S]{0,200}\bFROM\b", re.I,
+    r"\bSELECT\b[\s\S]{0,200}\bFROM\b",
+    re.I,
 )
 
 
 @dataclass
 class SensitivityVerdict:
     """敏感负载检测结论。"""
+
     local_only: bool
     reasons: list[str] = field(default_factory=list)
 
@@ -154,6 +173,6 @@ def classify_spec(spec: Any, prompt: str = "") -> SensitivityVerdict:
 
 __all__ = [
     "SensitivityVerdict",
-    "prompt_safe_for_remote",
     "classify_spec",
+    "prompt_safe_for_remote",
 ]

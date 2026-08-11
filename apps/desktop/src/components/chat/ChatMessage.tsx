@@ -1,33 +1,233 @@
 /**
  * ChatMessage — renders a single message in the conversation stream.
- * Discriminates by role:
- *   - user      → right-aligned bubble
- *   - assistant → left-aligned, can embed CodeBlock / ApprovalCard
- *   - tool      → collapsed raw MCP payload (debug view)
- *   - system    → small grey inline notice
+ *
+ * 尺寸约束（2026-08-04）：
+ *   - user / assistant 消息框各占 chat 区横向宽度的 2/5（由父组件传入 px 上限）
+ *   - 用户消息超过 10 行折叠：悬停显示全文浮层，点击展开 / 收起
+ *   - 智能体消息不折叠：2/5 宽度内全量展示
  */
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { ChatMessage as ChatMessageT } from '@eaide/shared-protocol';
 import { isMockText } from '@/lib/mockFilter';
+import { stripClarifyBlock } from '@/lib/clarify';
 import { CodeBlock } from './CodeBlock';
 import { ApprovalCard } from './ApprovalCard';
+import { Markdown } from './Markdown';
+import { AiSearchIndicator } from './AiStatus';
 
 interface Props {
   message: ChatMessageT;
+  /** chat 区横向宽度的 2/5（px）；未提供时不做宽度限制 */
+  maxWidth?: number | undefined;
+  /** 流式输出中（仅最后一条 assistant 消息为 true）→ 末尾显示闪烁光标 */
+  streaming?: boolean | undefined;
 }
 
-export function ChatMessage({ message }: Props): JSX.Element {
+/** 用户消息折叠时的最大行数 */
+const COLLAPSE_LINES = 10;
+
+function useContentOverflow(
+  ref: { current: HTMLDivElement | null },
+  key: string,
+): boolean {
+  const [overflow, setOverflow] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const check = (): void => {
+      setOverflow(el.scrollHeight > el.clientHeight + 1);
+    };
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [key, ref]);
+  return overflow;
+}
+
+export function ChatMessage({ message, maxWidth, streaming }: Props): JSX.Element {
   // 不显示任何 mock 占位数据（后端 mock 输出统一带 （mock） 前缀）
   if (isMockText(message.content)) {
     return <></>;
   }
-  // TODO: implement full role-based rendering
+  // 流异常终止的系统消息：红调卡片 + 「重试」按钮（2026-08-07）
+  if (message.role === 'system' && message.kind === 'error') {
+    return <ErrorBubble message={message} />;
+  }
+  // 搜索/检索类工具调用：aicss 风格搜索卡片（2026-08-10）
+  if (message.role === 'system' && message.kind === 'search') {
+    return (
+      <AiSearchIndicator
+        query={message.content}
+        done={message.status !== 'running'}
+      />
+    );
+  }
   return (
     <div className="mb-3">
-      <div className="text-xs text-fg-dim">{message.role}</div>
-      <div className="rounded border border-border bg-bg-subtle p-2">
-        {message.content}
-        {message.code && <CodeBlock code={message.code} language={message.codeLang ?? 'sql'} />}
-        {message.pendingApproval && <ApprovalCard approval={message.pendingApproval} />}
+      <div className="mb-0.5 text-2xs" style={{ color: '#9ca3af' }}>
+        {message.role === 'user' ? '你' : message.role}
+      </div>
+      {message.role === 'user' ? (
+        <UserBubble message={message} maxWidth={maxWidth} />
+      ) : (
+        <AssistantBubble message={message} maxWidth={maxWidth} streaming={streaming} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * 悬停复制按钮（2026-08-07）：气泡右上角，hover 气泡时浮现。
+ * 复制纯文本内容（不含 Markdown 标记之外的渲染装饰）。
+ */
+function CopyButton({ text }: { text: string }): JSX.Element {
+  const [copied, setCopied] = useState(false);
+  const copy = (): void => {
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      title="复制内容"
+      className="absolute right-1 top-1 rounded border px-1.5 py-0.5 text-[10px] opacity-0 transition-opacity group-hover:opacity-100"
+      style={{
+        backgroundColor: copied ? '#10a37f' : '#ffffff',
+        borderColor: copied ? '#10a37f' : '#e7e5e4',
+        color: copied ? '#ffffff' : '#6b7280',
+      }}
+    >
+      {copied ? '✓' : '⧉'}
+    </button>
+  );
+}
+
+function UserBubble({
+  message,
+  maxWidth,
+}: {
+  message: ChatMessageT;
+  maxWidth?: number | undefined;
+}): JSX.Element {
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const overflowing = useContentOverflow(contentRef, `${message.id}-${message.content}`);
+  const widthStyle: CSSProperties =
+    maxWidth && maxWidth > 0 ? { maxWidth } : {};
+
+  const collapsedStyle: CSSProperties = expanded
+    ? { ...widthStyle }
+    : {
+        ...widthStyle,
+        overflow: 'hidden',
+        display: '-webkit-box',
+        WebkitLineClamp: COLLAPSE_LINES,
+        WebkitBoxOrient: 'vertical',
+      };
+
+  return (
+    <div className="flex justify-end">
+      <div className="group relative max-w-[85%]">
+        <div
+          ref={contentRef}
+          onClick={() => setExpanded((v) => !v)}
+          title={overflowing && !expanded ? '点击展开 / 悬停查看全部' : undefined}
+          className="whitespace-pre-wrap break-words rounded-2xl p-2.5 text-ui"
+          style={{ ...collapsedStyle, backgroundColor: '#eef4f2', color: '#202124' }}
+        >
+          {message.content}
+          {message.code && <CodeBlock code={message.code} language={message.codeLang ?? 'sql'} />}
+          {message.pendingApproval && <ApprovalCard approval={message.pendingApproval} />}
+        </div>
+        <CopyButton text={message.content} />
+        {/* 悬停浮层：展示折叠掉的全部内容（不拦截点击，点击仍走展开逻辑） */}
+        {overflowing && !expanded && (
+          <div
+            className="pointer-events-none absolute inset-0 z-20 hidden overflow-auto whitespace-pre-wrap break-words rounded border p-2 text-ui shadow-xl group-hover:block"
+            style={{ ...widthStyle, maxHeight: '50vh', backgroundColor: '#ffffff', borderColor: '#e7e5e4', color: '#202124' }}
+          >
+            {message.content}
+          </div>
+        )}
+        {overflowing && !expanded && (
+          <div className="mt-0.5 text-right text-[10px]" style={{ color: '#9ca3af' }}>
+            内容较长 · 悬停查看全部，点击展开
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AssistantBubble({
+  message,
+  maxWidth,
+  streaming,
+}: {
+  message: ChatMessageT;
+  maxWidth?: number | undefined;
+  streaming?: boolean | undefined;
+}): JSX.Element {
+  const widthStyle: CSSProperties =
+    maxWidth && maxWidth > 0 ? { maxWidth } : {};
+  // 选项式追问（2026-08-05）：clarify 围栏块由输入框上方卡片渲染，
+  // 正文不展示原始 JSON
+  const displayContent = stripClarifyBlock(message.content);
+
+  return (
+    <div className="flex">
+      <div className="group relative max-w-[85%]">
+        {/* aicss Text Response 风格（2026-08-10）：助手回复去框化，纯 prose 排版 */}
+        <div
+          className="whitespace-pre-wrap break-words py-0.5 text-ui"
+          style={{ ...widthStyle, color: '#202124' }}
+        >
+          {/* 助手回复走轻量 Markdown 渲染（标题/列表/代码/表格），样式见 globals.css .md-body */}
+          <Markdown text={displayContent} />
+          {/* 流式输出中：末尾闪烁光标（打字机感，2026-08-07） */}
+          {streaming && <span className="stream-cursor" aria-hidden="true" />}
+          {message.code && <CodeBlock code={message.code} language={message.codeLang ?? 'sql'} />}
+          {message.pendingApproval && <ApprovalCard approval={message.pendingApproval} />}
+        </div>
+        {!streaming && <CopyButton text={displayContent} />}
+      </div>
+    </div>
+  );
+}
+
+/** 重试事件名：ChatInput 监听后重发最后一条用户消息 */
+export const CHAT_RETRY_EVENT = 'eaide-chat-retry';
+
+/** 快捷提问事件名（2026-08-07）：欢迎页点击示例卡 → ChatInput 直接发送（detail = 文本） */
+export const CHAT_SEND_EVENT = 'eaide-chat-send';
+
+/**
+ * 错误消息气泡：红调边框卡片 + 重试按钮（2026-08-07）。
+ * 重试通过 window CustomEvent 通知 ChatInput（发送管道在那里），
+ * 避免把整个发送链路提到消息层。
+ */
+function ErrorBubble({ message }: { message: ChatMessageT }): JSX.Element {
+  return (
+    <div className="mb-3">
+      <div
+        className="flex items-center gap-3 rounded border px-3 py-2"
+        style={{ borderColor: '#fca5a5', backgroundColor: '#fef2f2' }}
+      >
+        <span className="text-ui" style={{ color: '#dc2626' }}>
+          ⚠ {message.content}
+        </span>
+        <button
+          type="button"
+          onClick={() => window.dispatchEvent(new CustomEvent(CHAT_RETRY_EVENT))}
+          className="ml-auto flex-shrink-0 rounded border px-3 py-0.5 text-2xs font-semibold transition-colors"
+          style={{ borderColor: '#dc2626', color: '#dc2626', backgroundColor: '#ffffff' }}
+        >
+          ↻ 重试
+        </button>
       </div>
     </div>
   );

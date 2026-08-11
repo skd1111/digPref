@@ -7,6 +7,7 @@
 设计：start() 启动后台 task；stop() 取消。watcher 跟 indexer 解耦，watcher
 持有 indexer 引用即可。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -26,7 +27,7 @@ _DEBOUNCE_SECONDS = 0.3
 
 
 class FileWatcher:
-    def __init__(self, indexer: "WorkspaceIndexer", root_paths: list[str]):
+    def __init__(self, indexer: WorkspaceIndexer, root_paths: list[str]):
         self.indexer = indexer
         self._root_paths = [str(p) for p in root_paths]
         self._task: asyncio.Task | None = None
@@ -62,9 +63,7 @@ class FileWatcher:
                     debounce_buf[path] = change
                 # 等待 debounce 窗口
                 try:
-                    await asyncio.wait_for(
-                        self._stop_event.wait(), timeout=_DEBOUNCE_SECONDS
-                    )
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=_DEBOUNCE_SECONDS)
                     break  # stop_event 被 set
                 except asyncio.TimeoutError:
                     pass

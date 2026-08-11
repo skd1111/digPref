@@ -4,6 +4,7 @@
   - 点击前验证页面仍然存在（防止 TOCTOU —— 其他协程可能已关闭页面）
   - 如果指定了 expected_domain，验证当前页面 URL 域名匹配（防止重定向攻击）
 """
+
 from __future__ import annotations
 
 from urllib.parse import urlparse

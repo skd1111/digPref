@@ -9,12 +9,12 @@
 
 V1 不跨进程（EAIDE 是单 Agent 进程，跨进程用 SSE 即可）。
 """
+
 from __future__ import annotations
 
 import asyncio
 from collections import deque
 from typing import Any
-
 
 # 进程内事件队列（无界，由 stream.py 流式消费）
 _builtin_events: deque[tuple[str, dict]] = deque()
@@ -83,6 +83,7 @@ async def flush_builtin_events() -> int:
 
 # ---- 工厂辅助（dispatcher 调用更顺手）---------------------------------------
 
+
 async def emit_tool_started(
     *,
     tool_name: str,
@@ -100,14 +101,17 @@ async def emit_tool_started(
         needs_hitl: 是否触发 HITL。
         call_id: 调度批次 ID（UUID4 hex）。
     """
-    await emit_builtin_event(EVT_BUILTIN_TOOL_STARTED, {
-        "kind": EVT_BUILTIN_TOOL_STARTED,
-        "tool_name": tool_name,
-        "args_keys": sorted(args.keys()),
-        "risk_level": risk_level,
-        "needs_hitl": needs_hitl,
-        "call_id": call_id,
-    })
+    await emit_builtin_event(
+        EVT_BUILTIN_TOOL_STARTED,
+        {
+            "kind": EVT_BUILTIN_TOOL_STARTED,
+            "tool_name": tool_name,
+            "args_keys": sorted(args.keys()),
+            "risk_level": risk_level,
+            "needs_hitl": needs_hitl,
+            "call_id": call_id,
+        },
+    )
 
 
 def emit_tool_started_sync(
@@ -119,14 +123,17 @@ def emit_tool_started_sync(
     call_id: str,
 ) -> None:
     """同步版 emit_tool_started（dispatcher 在 to_thread 内调用）。"""
-    emit_builtin_event_sync(EVT_BUILTIN_TOOL_STARTED, {
-        "kind": EVT_BUILTIN_TOOL_STARTED,
-        "tool_name": tool_name,
-        "args_keys": sorted(args.keys()),
-        "risk_level": risk_level,
-        "needs_hitl": needs_hitl,
-        "call_id": call_id,
-    })
+    emit_builtin_event_sync(
+        EVT_BUILTIN_TOOL_STARTED,
+        {
+            "kind": EVT_BUILTIN_TOOL_STARTED,
+            "tool_name": tool_name,
+            "args_keys": sorted(args.keys()),
+            "risk_level": risk_level,
+            "needs_hitl": needs_hitl,
+            "call_id": call_id,
+        },
+    )
 
 
 async def emit_tool_done(
@@ -141,17 +148,20 @@ async def emit_tool_done(
     result_meta: dict | None = None,
 ) -> None:
     """Emit builtin_tool_done 事件。"""
-    await emit_builtin_event(EVT_BUILTIN_TOOL_DONE, {
-        "kind": EVT_BUILTIN_TOOL_DONE,
-        "tool_name": tool_name,
-        "call_id": call_id,
-        "ok": ok,
-        "error": error,
-        "elapsed_ms": elapsed_ms,
-        "risk_level": risk_level,
-        "content_size": content_size,
-        "result_meta": result_meta or {},
-    })
+    await emit_builtin_event(
+        EVT_BUILTIN_TOOL_DONE,
+        {
+            "kind": EVT_BUILTIN_TOOL_DONE,
+            "tool_name": tool_name,
+            "call_id": call_id,
+            "ok": ok,
+            "error": error,
+            "elapsed_ms": elapsed_ms,
+            "risk_level": risk_level,
+            "content_size": content_size,
+            "result_meta": result_meta or {},
+        },
+    )
 
 
 def emit_tool_done_sync(
@@ -166,17 +176,20 @@ def emit_tool_done_sync(
     result_meta: dict | None = None,
 ) -> None:
     """同步版 emit_tool_done。"""
-    emit_builtin_event_sync(EVT_BUILTIN_TOOL_DONE, {
-        "kind": EVT_BUILTIN_TOOL_DONE,
-        "tool_name": tool_name,
-        "call_id": call_id,
-        "ok": ok,
-        "error": error,
-        "elapsed_ms": elapsed_ms,
-        "risk_level": risk_level,
-        "content_size": content_size,
-        "result_meta": result_meta or {},
-    })
+    emit_builtin_event_sync(
+        EVT_BUILTIN_TOOL_DONE,
+        {
+            "kind": EVT_BUILTIN_TOOL_DONE,
+            "tool_name": tool_name,
+            "call_id": call_id,
+            "ok": ok,
+            "error": error,
+            "elapsed_ms": elapsed_ms,
+            "risk_level": risk_level,
+            "content_size": content_size,
+            "result_meta": result_meta or {},
+        },
+    )
 
 
 async def emit_tool_denied(
@@ -187,10 +200,13 @@ async def emit_tool_denied(
     reason: str,
 ) -> None:
     """Emit builtin_tool_denied 事件（HITL 拒绝后）。"""
-    await emit_builtin_event(EVT_BUILTIN_TOOL_DENIED, {
-        "kind": EVT_BUILTIN_TOOL_DENIED,
-        "tool_name": tool_name,
-        "call_id": call_id,
-        "approval_id": approval_id,
-        "reason": reason,
-    })
+    await emit_builtin_event(
+        EVT_BUILTIN_TOOL_DENIED,
+        {
+            "kind": EVT_BUILTIN_TOOL_DENIED,
+            "tool_name": tool_name,
+            "call_id": call_id,
+            "approval_id": approval_id,
+            "reason": reason,
+        },
+    )

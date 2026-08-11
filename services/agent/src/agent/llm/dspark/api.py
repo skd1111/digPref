@@ -11,6 +11,7 @@ V0 范围：
 审计：所有写入端点（draft-model-path / config）落 audit.sqlite，
 actor_type='system'，event_type='dspark_config_change'（与设计文档 §3.4 + CLAUDE.md 一致）。
 """
+
 from __future__ import annotations
 
 import json
@@ -30,7 +31,6 @@ from agent.llm.dspark.policy import (
     load_speculative_policies,
     set_local_only_tasks,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +68,7 @@ def _audit_db_path() -> str:
     写入路径与测试期望路径错位。
     """
     from agent.config import settings
+
     explicit = os.environ.get("EAIDE_AUDIT_DB_PATH")
     if explicit:
         return explicit
@@ -156,7 +157,9 @@ class DSparkRuntime:
 
     def reload_policies(self) -> int:
         """重新加载 yaml；返回加载后的策略数。"""
-        self.policy_map = load_speculative_policies(Path(self.yaml_path) if self.yaml_path else None)
+        self.policy_map = load_speculative_policies(
+            Path(self.yaml_path) if self.yaml_path else None
+        )
         logger.info("[DSpark] reloaded policies: %d entries", len(self.policy_map))
         return len(self.policy_map)
 
@@ -173,8 +176,13 @@ class DSparkRuntime:
 
     def update_config(self, updates: dict[str, Any]) -> None:
         """运行时更新配置（POST /dspark/config 调一次）。"""
-        allowed = {"draft_model_path", "context_size", "gpu_layers",
-                    "enable_global", "short_output_threshold"}
+        allowed = {
+            "draft_model_path",
+            "context_size",
+            "gpu_layers",
+            "enable_global",
+            "short_output_threshold",
+        }
         clean = {k: v for k, v in updates.items() if k in allowed and v is not None}
         if clean:
             self.config = self.config.model_copy(update=clean)
@@ -241,13 +249,15 @@ def get_policies() -> list[dict[str, Any]]:
     rt = get_runtime()
     out: list[dict[str, Any]] = []
     for cat, pol in sorted(rt.policy_map.items()):
-        out.append({
-            "task_category": cat,
-            "mode": pol.mode,
-            "n_draft": pol.n_draft,
-            "draft_p_min": pol.draft_p_min,
-            "enabled": pol.enabled,
-        })
+        out.append(
+            {
+                "task_category": cat,
+                "mode": pol.mode,
+                "n_draft": pol.n_draft,
+                "draft_p_min": pol.draft_p_min,
+                "enabled": pol.enabled,
+            }
+        )
     return out
 
 
@@ -370,6 +380,7 @@ def decide_for_task(task_category: str, max_tokens: int) -> tuple[SpeculativePol
     转发到 policy._decide_dspark_with_reason —— 保证与 decide_dspark 顺序一致。
     """
     from agent.llm.dspark.policy import get_local_only_tasks
+
     rt = _runtime
     if rt is None:
         # runtime 未初始化 → 走 helper 的 off-no-runtime 分支
@@ -387,4 +398,3 @@ def decide_for_task(task_category: str, max_tokens: int) -> tuple[SpeculativePol
         policies=rt.policy_map,
         local_only_tasks=get_local_only_tasks(),
     )
-

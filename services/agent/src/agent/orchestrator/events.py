@@ -21,6 +21,7 @@ CLAUDE.md §4 SSE 三处同步：
     hitl_bridge 通过本模块 emit `approval` 事件，前端 ApprovalCard 直接复用
     （CLAUDE.md §1：HITL 是脊梁，不重造审批通道）。
 """
+
 from __future__ import annotations
 
 from collections import deque
@@ -37,12 +38,14 @@ EVT_SUB_AGENT_DONE: str = "sub_agent_done"
 # 复用主图审批通道（不新增）
 EVT_APPROVAL: str = "approval"
 
-_ALLOWED_KINDS = frozenset({
-    EVT_SUB_AGENT_SPAWN,
-    EVT_SUB_AGENT_PROGRESS,
-    EVT_SUB_AGENT_DONE,
-    EVT_APPROVAL,
-})
+_ALLOWED_KINDS = frozenset(
+    {
+        EVT_SUB_AGENT_SPAWN,
+        EVT_SUB_AGENT_PROGRESS,
+        EVT_SUB_AGENT_DONE,
+        EVT_APPROVAL,
+    }
+)
 
 
 def emit_orchestrator_event(kind: str, payload: dict[str, Any]) -> None:

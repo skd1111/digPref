@@ -13,6 +13,7 @@ CLAUDE.md §1 HITL 不可绕过：本模块的 write 操作本身不触发 HITL
 CLAUDE.md §5 凭证保险箱：share_token 不放 Keyring（仅会话级标识），
 解密用对称密钥走 Keyring 一次性取。
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -30,13 +31,11 @@ class SessionAccessDenied(PermissionError):
         self.session_id = session_id
         self.actor = actor
         self.required = required
-        super().__init__(
-            f"actor {actor!r} lacks {required!r} permission on session {session_id}"
-        )
+        super().__init__(f"actor {actor!r} lacks {required!r} permission on session {session_id}")
 
 
 def check_session_access(
-    storage: "SessionStorage",
+    storage: SessionStorage,
     session_id: str,
     actor: str,
     required: SharePermission = "read",
@@ -59,7 +58,7 @@ class ShareManager:
     不持有状态（每次调用走 storage）。
     """
 
-    def __init__(self, storage: "SessionStorage"):
+    def __init__(self, storage: SessionStorage):
         self.storage = storage
 
     # ---- share_token CRUD -----------------------------------------------
@@ -94,9 +93,13 @@ class ShareManager:
         expires_at = None
         if expires_in_ms and int(expires_in_ms) > 0:
             from .storage import now_ms
+
             expires_at = now_ms() + int(expires_in_ms)
         return self.storage.add_share_token(
-            session_id, permission, expires_at, actor=actor,
+            session_id,
+            permission,
+            expires_at,
+            actor=actor,
         )
 
     def revoke_share_token(
@@ -124,7 +127,10 @@ class ShareManager:
     ) -> bool:
         """授予 target_actor 对 session 的 permission。"""
         return self.storage.grant_permission(
-            session_id, target_actor, permission, granter=granter,
+            session_id,
+            target_actor,
+            permission,
+            granter=granter,
         )
 
     # ---- 权限检查 + 装饰器辅助 ----------------------------------------
@@ -160,7 +166,7 @@ class ShareManager:
 
 
 __all__ = [
-    "ShareManager",
     "SessionAccessDenied",
+    "ShareManager",
     "check_session_access",
 ]

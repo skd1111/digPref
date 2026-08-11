@@ -8,10 +8,9 @@
 本测试直接断言 _LOCAL_ONLY_TASKS 集合包含上述 task kind，
 确保任何后续修改不会意外移除这些安全约束。
 """
+
 import pytest
-
 from agent.llm.router import _LOCAL_ONLY_TASKS
-
 
 # ---- ★ 红线：Phase 7 敏感任务必须在 _LOCAL_ONLY_TASKS 中 -------------------------
 
@@ -58,6 +57,7 @@ def test_historical_tasks_still_local(task_kind: str):
 
 # ---- _LOCAL_ONLY_TASKS 是 frozenset（不可篡改）------------------------------------
 
+
 def test_local_only_tasks_is_frozenset():
     """_LOCAL_ONLY_TASKS 必须是 frozenset（不可变集合）。"""
     assert isinstance(_LOCAL_ONLY_TASKS, frozenset), (
@@ -66,6 +66,7 @@ def test_local_only_tasks_is_frozenset():
 
 
 # ---- LMRouter 路由逻辑验证 --------------------------------------------------------
+
 
 def test_local_only_tasks_never_use_private():
     """_LOCAL_ONLY_TASKS 中的任务不会路由到 private（云端）后端。
@@ -80,7 +81,6 @@ def test_local_only_tasks_never_use_private():
 
     # 检查源码中包含 _LOCAL_ONLY_TASKS 判断
     import inspect
+
     source = inspect.getsource(LMRouter.pick)
-    assert "_LOCAL_ONLY_TASKS" in source, (
-        "pick 必须检查 _LOCAL_ONLY_TASKS"
-    )
+    assert "_LOCAL_ONLY_TASKS" in source, "pick 必须检查 _LOCAL_ONLY_TASKS"

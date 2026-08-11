@@ -9,6 +9,7 @@ V1 简化（生产 V1.5 接真 TOTP）：
 CLAUDE.md §5 凭证保险箱红线：
   - 共享密钥存 OS Keyring 服务名 `com.eaide.desktop.audit.totp`
 """
+
 from __future__ import annotations
 
 import base64
@@ -16,8 +17,6 @@ import hashlib
 import hmac
 import logging
 import time
-from typing import Optional
-
 
 logger = logging.getLogger(__name__)
 
@@ -50,11 +49,11 @@ def _hotp(secret_b32: str, counter: int, digits: int = 6) -> str:
         | (hmac_digest[offset + 1] & 0xFF) << 16
         | (hmac_digest[offset + 2] & 0xFF) << 8
         | (hmac_digest[offset + 3] & 0xFF)
-    ) % (10 ** digits)
+    ) % (10**digits)
     return str(code_int).zfill(digits)
 
 
-def generate_totp(secret_b32: str, timestamp: Optional[float] = None, digits: int = 6) -> str:
+def generate_totp(secret_b32: str, timestamp: float | None = None, digits: int = 6) -> str:
     """生成当前时间 TOTP。
 
     Args:
@@ -74,7 +73,7 @@ def generate_totp(secret_b32: str, timestamp: Optional[float] = None, digits: in
 def verify_totp(
     secret_b32: str,
     code: str,
-    timestamp: Optional[float] = None,
+    timestamp: float | None = None,
     window: int = 1,
 ) -> bool:
     """验证 TOTP（允许 ±1 窗口）。
@@ -112,6 +111,7 @@ def get_or_create_user_secret(username: str) -> str:
     """
     try:
         import keyring  # type: ignore
+
         secret = keyring.get_password(KEYRING_SERVICE_TOTP, username)
     except Exception:
         secret = None
@@ -120,6 +120,7 @@ def get_or_create_user_secret(username: str) -> str:
         secret = _DEFAULT_TEST_SECRET_B32
         try:
             import keyring  # type: ignore
+
             keyring.set_password(KEYRING_SERVICE_TOTP, username, secret)
         except Exception as exc:
             logger.warning("audit_totp_secret_save_failed user=%s: %s", username, exc)

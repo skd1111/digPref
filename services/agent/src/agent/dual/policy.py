@@ -8,6 +8,7 @@
 
 红线：策略只影响"失败后怎么办"，不改变风险闸门——medium+ 风险照样过 hitl_gate。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -28,9 +29,15 @@ _REPAIR_BUDGET_BY_LEVEL: dict[ValidatorLevel, int] = {
 }
 
 # 本地文件类 builtin 工具 → mixed 拆解歧义时的 coding 判据
-_FILE_TOOL_NAMES = frozenset({
-    "write_file", "edit_file", "create_file", "apply_patch", "run_tests",
-})
+_FILE_TOOL_NAMES = frozenset(
+    {
+        "write_file",
+        "edit_file",
+        "create_file",
+        "apply_patch",
+        "run_tests",
+    }
+)
 
 
 @dataclass

@@ -3,14 +3,13 @@
 验收硬门槛（design §11）：
   - Python 沙箱 100% 拦截恶意系统调用（os.system / open / socket 全封）
 """
-import pytest
 
+import pytest
 from agent.dataexpert.sandbox.policy import (
     SandboxViolationError,
     is_safe,
     validate_ast,
 )
-
 
 # ---- 恶意 import 全封 ----------------------------------------------------------
 
@@ -96,6 +95,7 @@ def test_allowed_scripts(script: str):
 
 # ---- is_safe 接口 ------------------------------------------------------------------
 
+
 def test_is_safe_returns_tuple():
     """is_safe 返回 (bool, str) 元组。"""
     ok, err = is_safe("import pandas as pd")
@@ -112,3 +112,35 @@ def test_syntax_error():
     ok, err = is_safe("def foo(")
     assert ok is False
     assert "语法错误" in err
+
+
+# ---- DataFrame 链路（缺口 8：SQL 结果注入沙箱） ----------------------------
+
+
+async def test_sandbox_with_df_input_ref(tmp_path, monkeypatch):
+    """df_input_ref 注入 df 变量；脚本输出 result → 新 Parquet ref。"""
+    import pandas as pd
+    from agent.config import settings
+
+    monkeypatch.setattr(settings, "data_result_dir", str(tmp_path / "results"))
+    from agent.dataexpert.sandbox.executor import run
+    from agent.dataexpert.storage import save_result_parquet
+
+    df = pd.DataFrame({"a": [1, 2, 3]})
+    ref = save_result_parquet(df, "t_src")
+
+    res = await run("result = df.assign(b=df['a'] * 2)", df_input_ref=ref)
+    assert res.ok, res.error
+    assert res.out_df_ref and res.out_df_ref != ref
+    out = pd.read_parquet(res.out_df_ref)
+    assert list(out.columns) == ["a", "b"]
+    assert int(out["b"].sum()) == 12
+
+
+async def test_sandbox_df_input_ref_must_exist():
+    """不存在的 df_input_ref → 报错不崩溃。"""
+    from agent.dataexpert.sandbox.executor import run
+
+    res = await run("x = 1", df_input_ref="no/such/file.parquet")
+    assert res.ok is False
+    assert res.error

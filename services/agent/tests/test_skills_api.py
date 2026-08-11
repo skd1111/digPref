@@ -1,10 +1,10 @@
 """FastAPI /skills/* 路由测试。"""
-import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
+import pytest
 from agent.skills import api as api_mod
 from agent.skills.loader import SkillLoader
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 
 @pytest.fixture
@@ -13,12 +13,15 @@ def client(tmp_path):
     test_dir = tmp_path / "eaide" / "skills"
     loader = SkillLoader(test_dir)
     loader._dir.mkdir(parents=True, exist_ok=True)
-    (loader._dir / "test.yaml").write_text("""
+    (loader._dir / "test.yaml").write_text(
+        """
 schema_version: "1.0"
 id: test_skill
 name: 测试技能
 trigger_keywords: [test]
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
     loader.load_all()
     # 保存旧 _loader 引用
     saved_loader = api_mod._loader

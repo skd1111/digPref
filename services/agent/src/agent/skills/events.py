@@ -10,6 +10,7 @@ CLAUDE.md §4 SSE 三处同步（V1.3）：
       → TS ipc/events.ts::EVT
     - 通道名严格一致：`skill_matched`
 """
+
 from __future__ import annotations
 
 import asyncio

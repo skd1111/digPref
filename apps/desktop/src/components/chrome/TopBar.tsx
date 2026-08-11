@@ -10,13 +10,14 @@
  */
 import { EnvironmentIndicator } from './EnvironmentIndicator';
 import { ModeSwitcher } from './ModeSwitcher';
+import { TokenUsageBadge } from './TokenUsageBadge';
 import { useUIStore } from '@/store/uiStore';
 
 /** Agent 状态文案 —— 与底部 StatusBar 保持一致，读真实 agentStatus。 */
 const AGENT_LABEL = {
   idle: 'Agent: 空闲',
   busy: 'Agent: 处理中…',
-  error: 'Agent: 出错',
+  error: 'Agent: 未连接',
   ready: 'Agent: 就绪',
   unknown: 'Agent: 未连接',
 } as const;
@@ -47,7 +48,7 @@ export function TopBar(): JSX.Element {
       {/* 中：模式切换器（更醒目） */}
       <ModeSwitcher large />
 
-      {/* 右：Agent 状态 + Phase 9 @ 我的未读数 */}
+      {/* 右：Token 用量 + Agent 状态 + Phase 9 @ 我的未读数 */}
       <div className="flex items-center gap-2 text-2xs" style={{ color: '#616161' }}>
         {pendingCollabMentionCount > 0 && (
           <span
@@ -58,6 +59,10 @@ export function TopBar(): JSX.Element {
             💬 @{pendingCollabMentionCount > 9 ? '9+' : pendingCollabMentionCount}
           </span>
         )}
+        {/* Token 用量：实时速率（↑上传/↓下载）+ 当日总量，2s 轮询；悬浮向下弹明细卡片 */}
+        <span className="rounded px-2 py-0.5" style={{ backgroundColor: '#e4e4e4' }}>
+          <TokenUsageBadge placement="bottom" />
+        </span>
         <span className="rounded px-2 py-0.5" style={{ backgroundColor: '#ececec' }}>
           ⚡ {AGENT_LABEL[agentStatus]}
         </span>

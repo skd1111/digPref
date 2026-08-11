@@ -1,12 +1,10 @@
 """test_codenav_watcher.py —— 文件监听 → 增量索引测试。"""
+
 from __future__ import annotations
 
-import asyncio
 import time
-from pathlib import Path
 
 import pytest
-
 from agent.codenav.indexer import WorkspaceIndexer
 from agent.codenav.query import SymbolQuery
 from agent.codenav.watcher import FileWatcher
@@ -41,6 +39,7 @@ async def test_incremental_update_modified_file(tmp_path):
     time.sleep(0.05)
     new_mtime = time.time() + 1
     import os
+
     os.utime(str(f), (new_mtime, new_mtime))
 
     await idx.incremental_update([str(f)])

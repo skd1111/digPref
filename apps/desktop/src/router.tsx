@@ -7,6 +7,7 @@
  *   /settings/about           -> 关于
  *   /settings/skills          -> 技能
  *   /settings/codenav         -> 代码导航
+ *   /settings/advanced        -> 高级设置（推理模式 + 会话自主性）
  */
 import { createBrowserRouter } from 'react-router-dom';
 import { WorkspaceLayout } from './layouts/WorkspaceLayout';
@@ -26,10 +27,12 @@ export const router = createBrowserRouter([
       { path: 'settings/terminal', element: <SettingsView /> },
       { path: 'settings/about', element: <SettingsView /> },
       { path: 'settings/skills', element: <SettingsView /> },
+      { path: 'settings/expert-teams', element: <SettingsView /> },
       { path: 'settings/dspark', element: <SettingsView /> },
       { path: 'settings/router', element: <SettingsView /> },
       { path: 'settings/codenav', element: <SettingsView /> },
       { path: 'settings/toolchain', element: <SettingsView /> },  // Phase 18
+      { path: 'settings/advanced', element: <SettingsView /> },  // 高级设置（2026-08-05）
     ],
   },
 ]);

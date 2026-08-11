@@ -2,11 +2,10 @@
 
 V0 模式：纯关键词匹配。V1 升级 LLM 意图分类（Ollama）+ 关键词回退。
 """
+
 from __future__ import annotations
 
-import asyncio
 import logging
-from typing import Optional
 
 from agent.skills.intent_classifier import classify_with_llm
 from agent.skills.loader import SkillLoader
@@ -46,12 +45,16 @@ class SkillRouter:
         if self._pick_backend_by_role("utility"):
             try:
                 utility_result = await self._classify_with_one_backend(
-                    user_prompt, skills, "utility",
+                    user_prompt,
+                    skills,
+                    "utility",
                 )
                 if utility_result and utility_result.skill_id and utility_result.confidence >= 0.34:
                     return SkillRoutingResult(
                         skill_id=utility_result.skill_id,
-                        skill_name=self._loader.get(utility_result.skill_id).name if self._loader.get(utility_result.skill_id) else "",
+                        skill_name=self._loader.get(utility_result.skill_id).name
+                        if self._loader.get(utility_result.skill_id)
+                        else "",
                         confidence=utility_result.confidence,
                         matched_keywords=[],
                     )
@@ -62,12 +65,16 @@ class SkillRouter:
         if self._pick_backend_by_role("reasoning"):
             try:
                 reason_result = await self._classify_with_one_backend(
-                    user_prompt, skills, "reasoning",
+                    user_prompt,
+                    skills,
+                    "reasoning",
                 )
                 if reason_result and reason_result.skill_id and reason_result.confidence >= 0.34:
                     return SkillRoutingResult(
                         skill_id=reason_result.skill_id,
-                        skill_name=self._loader.get(reason_result.skill_id).name if self._loader.get(reason_result.skill_id) else "",
+                        skill_name=self._loader.get(reason_result.skill_id).name
+                        if self._loader.get(reason_result.skill_id)
+                        else "",
                         confidence=reason_result.confidence,
                         matched_keywords=[],
                     )
@@ -144,4 +151,3 @@ class SkillRouter:
             for ex in skill.few_shot_examples:
                 parts.append(f"[{ex.role}] {ex.content}")
         return "\n".join(parts)
-

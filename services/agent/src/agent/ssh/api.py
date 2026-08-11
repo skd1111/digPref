@@ -13,16 +13,14 @@
 V0 PoC 范围：仅 password 认证 + 单命令执行（echo 模式）+ SFTP 列目录 + 下载。
 V1 接力：PTY 交互 + publickey + 端口转发 + 跳板机。
 """
+
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from agent.config import settings
-from agent.ssh.client import _scrub_password
 from agent.ssh.events import (
     EVT_SSH_COMMAND_DONE,
     EVT_SSH_CONNECTED,
@@ -38,16 +36,15 @@ from agent.ssh.models import (
     SshConnectionError,
     SshError,
     SshPathSecurityError,
-    SshSessionNotFoundError,
 )
-from agent.ssh.session_manager import get_default_manager, reset_default_manager
-from agent.ssh.storage import get_default_storage, reset_default_storage
-
+from agent.ssh.session_manager import get_default_manager
+from agent.ssh.storage import get_default_storage
 
 router = APIRouter(prefix="/ssh", tags=["ssh"])
 
 
 # ---- Pydantic schemas ------------------------------------------------------
+
 
 class ConnectRequest(BaseModel):
     host: str
@@ -95,6 +92,7 @@ class SessionResponse(BaseModel):
 
 # ---- 6 端点 --------------------------------------------------------------
 
+
 @router.post("/connect", response_model=SessionResponse)
 async def connect(req: ConnectRequest) -> SessionResponse:
     """创建会话 + 连接（V0 password 认证）。"""
@@ -110,22 +108,28 @@ async def connect(req: ConnectRequest) -> SessionResponse:
             connect_timeout=req.connect_timeout,
         )
     except SshAuthError as exc:
-        emit_event_sync(EVT_SSH_ERROR, {
-            "kind": EVT_SSH_ERROR,
-            "host": req.host,
-            "port": req.port,
-            "username": req.username,
-            "error": str(exc),
-        })
+        emit_event_sync(
+            EVT_SSH_ERROR,
+            {
+                "kind": EVT_SSH_ERROR,
+                "host": req.host,
+                "port": req.port,
+                "username": req.username,
+                "error": str(exc),
+            },
+        )
         raise HTTPException(status_code=401, detail=f"auth failed: {exc}")
     except SshConnectionError as exc:
-        emit_event_sync(EVT_SSH_ERROR, {
-            "kind": EVT_SSH_ERROR,
-            "host": req.host,
-            "port": req.port,
-            "username": req.username,
-            "error": str(exc),
-        })
+        emit_event_sync(
+            EVT_SSH_ERROR,
+            {
+                "kind": EVT_SSH_ERROR,
+                "host": req.host,
+                "port": req.port,
+                "username": req.username,
+                "error": str(exc),
+            },
+        )
         raise HTTPException(status_code=502, detail=f"connection failed: {exc}")
     except SshPathSecurityError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -146,13 +150,16 @@ async def connect(req: ConnectRequest) -> SessionResponse:
     except Exception:
         pass
 
-    emit_event_sync(EVT_SSH_CONNECTED, {
-        "kind": EVT_SSH_CONNECTED,
-        "session_id": meta.session_id,
-        "host": meta.host,
-        "port": meta.port,
-        "username": meta.username,
-    })
+    emit_event_sync(
+        EVT_SSH_CONNECTED,
+        {
+            "kind": EVT_SSH_CONNECTED,
+            "session_id": meta.session_id,
+            "host": meta.host,
+            "port": meta.port,
+            "username": meta.username,
+        },
+    )
     return SessionResponse(
         session_id=meta.session_id,
         host=meta.host,
@@ -180,10 +187,13 @@ async def disconnect(session_id: str) -> DisconnectResponse:
     except Exception:
         pass
 
-    emit_event_sync(EVT_SSH_DISCONNECTED, {
-        "kind": EVT_SSH_DISCONNECTED,
-        "session_id": session_id,
-    })
+    emit_event_sync(
+        EVT_SSH_DISCONNECTED,
+        {
+            "kind": EVT_SSH_DISCONNECTED,
+            "session_id": session_id,
+        },
+    )
     return DisconnectResponse(session_id=session_id, disconnected=True)
 
 
@@ -220,14 +230,17 @@ async def exec_command(req: ExecRequest) -> dict[str, Any]:
     except Exception:
         pass
 
-    emit_event_sync(EVT_SSH_COMMAND_DONE, {
-        "kind": EVT_SSH_COMMAND_DONE,
-        "session_id": req.session_id,
-        "command": result.command,
-        "ok": result.ok,
-        "exit_code": result.exit_code,
-        "elapsed_ms": result.elapsed_ms,
-    })
+    emit_event_sync(
+        EVT_SSH_COMMAND_DONE,
+        {
+            "kind": EVT_SSH_COMMAND_DONE,
+            "session_id": req.session_id,
+            "command": result.command,
+            "ok": result.ok,
+            "exit_code": result.exit_code,
+            "elapsed_ms": result.elapsed_ms,
+        },
+    )
     return {
         "session_id": req.session_id,
         "command": result.command,

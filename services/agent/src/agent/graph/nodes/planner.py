@@ -4,6 +4,7 @@ The planner is given the live MCP tool catalogue so it can produce calls
 that match the schema exactly. The tool catalogue is fetched lazily on
 first plan and cached for the lifetime of the graph.
 """
+
 from __future__ import annotations
 
 import time
@@ -37,7 +38,7 @@ async def planner_node(
             history=history,
             tool_specs=tool_specs,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return {
             "plan": [],
             "plan_explanation": f"planner error: {exc}",
@@ -104,7 +105,7 @@ async def _get_tool_specs(mcp: McpClient) -> tuple[dict, ...]:
             return _cache_result
         try:
             specs = await mcp.list_tools()
-        except Exception:  # noqa: BLE001
+        except Exception:
             return ()
         # 只缓存可序列化的字段（去除 callable）
         _cache_result = tuple(

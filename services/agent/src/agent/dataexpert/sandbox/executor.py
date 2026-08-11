@@ -10,6 +10,7 @@
   - 内存 ≤ 2GB（settings.data_sandbox_mem_mb）
   - 执行 ≤ 30s（settings.data_sandbox_timeout）
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -23,9 +24,8 @@ from agent.config import settings
 from agent.dataexpert.models import SandboxResult
 from agent.dataexpert.sandbox.policy import SandboxViolationError, validate_ast
 
-
 # 子进程执行脚本模板
-_WORKER_TEMPLATE = '''
+_WORKER_TEMPLATE = """
 import sys
 import json
 
@@ -54,25 +54,28 @@ if input_path:
 def load_result():
     return df_inputs.get("df", pd.DataFrame())
 
-# 执行用户代码
+# 执行用户代码（df 已注入为上一步 SQL 结果 DataFrame，缺口 8）
 _user_ns = {{"pd": pd, "np": np, "load_result": load_result, "df_inputs": df_inputs}}
+if "df" in df_inputs:
+    _user_ns["df"] = df_inputs["df"]
 exec(compile(open(r"{script_path}", encoding="utf-8").read(), "<sandbox>", "exec"), _user_ns)
 
-# 输出结果
+# 输出结果（result 优先；df 注入后始终存在，只能作兑底）
 output_path = r"{output_path}"
-if "df" in _user_ns and hasattr(_user_ns["df"], "to_parquet"):
-    _user_ns["df"].to_parquet(output_path, index=False)
-elif "result" in _user_ns and hasattr(_user_ns["result"], "to_parquet"):
+if "result" in _user_ns and hasattr(_user_ns["result"], "to_parquet"):
     _user_ns["result"].to_parquet(output_path, index=False)
+elif "df" in _user_ns and hasattr(_user_ns["df"], "to_parquet"):
+    _user_ns["df"].to_parquet(output_path, index=False)
 
 print(json.dumps({{"ok": True}}))
-'''
+"""
 
 
 async def run(
     script: str,
     df_inputs: dict[str, Any] | None = None,
     *,
+    df_input_ref: str = "",
     mem_mb: int | None = None,
     timeout_s: int | None = None,
 ) -> SandboxResult:
@@ -80,7 +83,7 @@ async def run(
 
     流程：
       1. policy.validate_ast(script) —— AST 白名单校验（禁 import os/sys/...）
-      2. 写临时脚本 + 输入 Parquet
+      2. 写临时脚本 + 输入 Parquet（df_inputs 或 df_input_ref 直传，缺口 8）
       3. asyncio.create_subprocess_exec 启动子进程
       4. asyncio.wait_for 限时（默认 30s）
       5. 读取输出 Parquet → SandboxResult
@@ -88,6 +91,8 @@ async def run(
     Args:
         script: Python 源代码。
         df_inputs: 输入 DataFrame 字典（可选）。
+        df_input_ref: 上一步 SQL 结果的 Parquet 路径（可选，优先于 df_inputs；
+            子进程内直接读盘，避免父进程重复加载大结果集）。
         mem_mb: 内存上限 MB（默认取 settings）。
         timeout_s: 超时秒数（默认取 settings）。
 
@@ -98,6 +103,15 @@ async def run(
         mem_mb = settings.data_sandbox_mem_mb
     if timeout_s is None:
         timeout_s = settings.data_sandbox_timeout
+
+    # df_input_ref 预校验（存在性 + .parquet 后缀，防路径注入）
+    if df_input_ref:
+        ref_path = Path(df_input_ref)
+        if not ref_path.is_file() or ref_path.suffix != ".parquet":
+            return SandboxResult(
+                ok=False,
+                error=f"df_input_ref 无效（不存在或非 Parquet）: {df_input_ref}",
+            )
 
     # 安全层 1：AST 校验
     try:
@@ -119,10 +133,14 @@ async def run(
         # 写用户脚本
         script_path.write_text(script, encoding="utf-8")
 
-        # 写输入 DataFrame
+        # 输入 DataFrame：df_input_ref 直传优先（子进程直接读盘），否则写 df_inputs
         has_input = False
-        if df_inputs:
-            for key, df in df_inputs.items():
+        input_ref_str = ""
+        if df_input_ref:
+            input_ref_str = df_input_ref
+            has_input = True
+        elif df_inputs:
+            for _key, df in df_inputs.items():
                 if hasattr(df, "to_parquet"):
                     df.to_parquet(str(input_path), index=False)
                     has_input = True
@@ -131,7 +149,7 @@ async def run(
         # 组装 worker 脚本
         worker_code = _WORKER_TEMPLATE.format(
             mem_mb=mem_mb,
-            input_path=str(input_path) if has_input else "",
+            input_path=input_ref_str if df_input_ref else (str(input_path) if has_input else ""),
             script_path=str(script_path),
             output_path=str(output_path),
         )
@@ -141,7 +159,8 @@ async def run(
         # 启动子进程
         try:
             proc = await asyncio.create_subprocess_exec(
-                sys.executable, str(worker_path),
+                sys.executable,
+                str(worker_path),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(tmp),
@@ -181,6 +200,7 @@ async def run(
                 result_dir = Path(settings.data_result_dir)
                 result_dir.mkdir(parents=True, exist_ok=True)
                 import uuid
+
                 out_name = f"sandbox_{uuid.uuid4().hex[:12]}.parquet"
                 out_ref = str(result_dir / out_name)
                 output_path.replace(out_ref)

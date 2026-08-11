@@ -7,19 +7,21 @@ Uses mocked LLM + MCP — no network — to exercise:
     - Auto-Repair: tool error → repair (retry) → success → responder
     - Auto-Repair exhaustion: tool error × N → responder surfaces failure
 """
+
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
 import pytest
-
 from agent.graph.compile import Runtime, compile_graph
 from agent.graph.interrupt import _LOCAL_DECISIONS, post_decision
 from agent.graph.state import empty_state
 
-
 # ---- Shared mocks ---------------------------------------------------------
+
+# 定时审批/拒绝调度任务的强引用（防 GC 提前回收 fire-and-forget task）
+_bg_tasks: set[asyncio.Task] = set()
+
 
 class _ScriptedLLM:
     """An LMRouter stub that returns scripted plans + canned repair + summary."""
@@ -33,9 +35,15 @@ class _ScriptedLLM:
 
     async def plan(self, *, intent, user_prompt, history, tool_specs):
         return (
-            [{"server": "db", "name": "db.query",
-              "args": {"sql": "SELECT 1"}, "risk_level": "read",
-              "rationale": "test"}],
+            [
+                {
+                    "server": "db",
+                    "name": "db.query",
+                    "args": {"sql": "SELECT 1"},
+                    "risk_level": "read",
+                    "rationale": "test",
+                }
+            ],
             "scripted plan",
         )
 
@@ -56,18 +64,25 @@ class _FlakyMCP:
         self.calls = 0
 
     async def list_tools(self):
-        return [{
-            "server": "db",
-            "name": "db.query",
-            "inputSchema": {"type": "object", "properties": {"sql": {"type": "string"}}},
-        }]
+        return [
+            {
+                "server": "db",
+                "name": "db.query",
+                "inputSchema": {"type": "object", "properties": {"sql": {"type": "string"}}},
+            }
+        ]
 
     async def invoke(self, call, *, timeout_sec, row_limit):
         self.calls += 1
         if self.calls <= self.fails:
             raise RuntimeError(f"flaky failure #{self.calls}")
-        return {"ok": True, "columns": ["n"], "rows": [[42]], "truncated": False,
-                "rows_returned": 1}
+        return {
+            "ok": True,
+            "columns": ["n"],
+            "rows": [[42]],
+            "truncated": False,
+            "rows_returned": 1,
+        }
 
 
 class _WritePlanLLM:
@@ -82,9 +97,15 @@ class _WritePlanLLM:
 
     async def plan(self, *, intent, user_prompt, history, tool_specs):
         return (
-            [{"server": "db", "name": "db.execute",
-              "args": {"sql": "UPDATE t SET x=1 WHERE id=1", "approval_id": "TEST"},
-              "risk_level": "medium", "rationale": "test"}],
+            [
+                {
+                    "server": "db",
+                    "name": "db.execute",
+                    "args": {"sql": "UPDATE t SET x=1 WHERE id=1", "approval_id": "TEST"},
+                    "risk_level": "medium",
+                    "rationale": "test",
+                }
+            ],
             "scripted write plan",
         )
 
@@ -99,8 +120,13 @@ class _WritePlanLLM:
 
 class _WriteMCP:
     async def list_tools(self):
-        return [{"server": "db", "name": "db.execute",
-                 "inputSchema": {"type": "object", "properties": {"sql": {"type": "string"}}}}]
+        return [
+            {
+                "server": "db",
+                "name": "db.execute",
+                "inputSchema": {"type": "object", "properties": {"sql": {"type": "string"}}},
+            }
+        ]
 
     async def invoke(self, call, *, timeout_sec, row_limit):
         return {"ok": True, "rows_affected": 1}
@@ -108,11 +134,13 @@ class _WriteMCP:
 
 # ---- Build the graph with the same Runtime dataclass used in compile.py --
 
+
 def _build(llm, mcp):
     return compile_graph(Runtime(llm=llm, mcp=mcp))
 
 
 # ---- Tests ----------------------------------------------------------------
+
 
 @pytest.fixture(autouse=True)
 def _clear_local_decisions():
@@ -136,7 +164,7 @@ class TestReadOnlyPath:
             events.append(evt)
         assert llm.summarise_calls == 1
         # final state should contain the answer
-        last_node = list(events[-1].keys())[0]
+        last_node = next(iter(events[-1].keys()))
         assert last_node == "responder"
 
 
@@ -158,7 +186,7 @@ class TestAutoRepair:
     @pytest.mark.asyncio
     async def test_gives_up_after_max_retries(self):
         llm = _ScriptedLLM()
-        mcp = _FlakyMCP(fails=10)   # never succeeds
+        mcp = _FlakyMCP(fails=10)  # never succeeds
         graph = _build(llm, mcp)
         last_answer = None
         async for chunk in graph.astream(
@@ -184,7 +212,9 @@ class TestHitlPath:
             await asyncio.sleep(0.2)
             await post_decision("TEST", "approve")
 
-        asyncio.create_task(_approve_later())
+        task = asyncio.create_task(_approve_later())
+        _bg_tasks.add(task)
+        task.add_done_callback(_bg_tasks.discard)
         llm = _WritePlanLLM()
         mcp = _WriteMCP()
         graph = _build(llm, mcp)
@@ -202,7 +232,9 @@ class TestHitlPath:
             await asyncio.sleep(0.2)
             await post_decision("TEST", "reject")
 
-        asyncio.create_task(_reject())
+        task = asyncio.create_task(_reject())
+        _bg_tasks.add(task)
+        task.add_done_callback(_bg_tasks.discard)
         llm = _WritePlanLLM()
         mcp = _WriteMCP()
         graph = _build(llm, mcp)

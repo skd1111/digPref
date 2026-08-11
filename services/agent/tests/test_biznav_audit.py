@@ -4,6 +4,7 @@
 - test_5_audit_events_distinct_strings
 - test_module_exports_5_constants
 """
+
 from __future__ import annotations
 
 
@@ -15,6 +16,7 @@ def test_5_audit_events_distinct_strings():
         EVT_FEATURE_UPDATE,
         EVT_YAML_RELOAD,
     )
+
     constants = [
         EVT_FEATURE_EXTRACT,
         EVT_FEATURE_UPDATE,
@@ -38,6 +40,7 @@ def test_5_audit_events_distinct_strings():
 
 def test_module_exports_5_constants():
     import agent.biznav.audit as audit_mod
+
     # __all__ 应包含这 5 个变量名（Python 语义）
     expected_names = [
         "EVT_FEATURE_EXTRACT",

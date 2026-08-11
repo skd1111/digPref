@@ -8,12 +8,12 @@
   同样的形态被 related_apis / related_tables / business_rules 复用
 - Feature.from_dict / to_dict 兼容 YAML / JSON 反序列化、与 storage 列对齐
 """
+
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field, asdict
-from typing import Any, Optional
-
+from dataclasses import dataclass, field
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # 关联类型
@@ -47,13 +47,13 @@ class RelatedTable:
 @dataclass
 class BusinessRule:
     text: str
-    structured: Optional[dict] = None
+    structured: dict | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {"text": self.text, "structured": self.structured}
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "BusinessRule":
+    def from_dict(cls, d: dict[str, Any]) -> BusinessRule:
         return cls(
             text=str(d.get("text", "")),
             structured=d.get("structured"),
@@ -73,17 +73,22 @@ class Feature:
     category: str = "未分类"
     project_name: str = ""
     project_root: str = ""
+    # Phase 2H：绑定的业务 Skill（历史字段，保留兼容；运营链路已改由专家团承载）
+    skill_id: str | None = None
+    # 中期改造（2026-08-07）：功能点直连专家团预设（选中业务零延迟自动选团；
+    # 未预设时由 recommender 拿功能点名 + 全部专家团描述让 LLM 判断）
+    expert_team_ids: list[str] = field(default_factory=list)
     # 字段顺序相关_files 必须先于 related_apis（设计文档 §3.3 + 序列化兼容）
     related_files: list[RelatedFile] = field(default_factory=list)
     related_apis: list[RelatedApi] = field(default_factory=list)
     related_tables: list[RelatedTable] = field(default_factory=list)
     business_rules: list[BusinessRule] = field(default_factory=list)
     source: str = "ai"  # 'ai' | 'manual' | 'merged'
-    ai_confidence: Optional[float] = None
+    ai_confidence: float | None = None
     version: int = 1
     created_at: int = 0
     updated_at: int = 0
-    deleted_at: Optional[int] = None
+    deleted_at: int | None = None
 
     # ---- 序列化 ---------------------------------------------------------
 
@@ -96,6 +101,8 @@ class Feature:
             "category": self.category,
             "project_name": self.project_name,
             "project_root": self.project_root,
+            "skill_id": self.skill_id,
+            "expert_team_ids": list(self.expert_team_ids),
             "related_files": [{"path": rf.path, "role": rf.role} for rf in self.related_files],
             "related_apis": [
                 {"method": a.method, "path": a.path, "description": a.description}
@@ -114,7 +121,7 @@ class Feature:
         }
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "Feature":
+    def from_dict(cls, d: dict[str, Any]) -> Feature:
         """从 dict 构造（YAML/JSON 导入 + 从 DB row 重建）。容错：缺字段给默认值。"""
         return cls(
             id=str(d.get("id", "")),
@@ -123,6 +130,8 @@ class Feature:
             category=str(d.get("category", "未分类")),
             project_name=str(d.get("project_name", "")),
             project_root=str(d.get("project_root", "")),
+            skill_id=d.get("skill_id"),
+            expert_team_ids=[str(x) for x in (d.get("expert_team_ids") or [])],
             related_files=[
                 RelatedFile(path=str(rf.get("path", "")), role=str(rf.get("role", "")))
                 for rf in (d.get("related_files") or [])
@@ -142,9 +151,7 @@ class Feature:
                 )
                 for t in (d.get("related_tables") or [])
             ],
-            business_rules=[
-                BusinessRule.from_dict(r) for r in (d.get("business_rules") or [])
-            ],
+            business_rules=[BusinessRule.from_dict(r) for r in (d.get("business_rules") or [])],
             source=str(d.get("source", "ai")),
             ai_confidence=d.get("ai_confidence"),
             version=int(d.get("version", 1)),
@@ -186,9 +193,9 @@ class ExtractionJob:
     total_files: int = 0
     processed_files: int = 0
     features_generated: int = 0
-    error_message: Optional[str] = None
+    error_message: str | None = None
     started_at: int = 0
-    finished_at: Optional[int] = None
+    finished_at: int | None = None
 
 
 @dataclass
@@ -235,7 +242,7 @@ def related_files_to_json(items: list[RelatedFile]) -> str:
     return json.dumps([{"path": rf.path, "role": rf.role} for rf in items], ensure_ascii=False)
 
 
-def related_files_from_json(s: Optional[str]) -> list[RelatedFile]:
+def related_files_from_json(s: str | None) -> list[RelatedFile]:
     """JSON 字符串 → RelatedFile 列表。空/None/坏字符串一律返空列表。"""
     if not s:
         return []
@@ -264,7 +271,7 @@ def _related_apis_to_json(items: list[RelatedApi]) -> str:
     )
 
 
-def _related_apis_from_json(s: Optional[str]) -> list[RelatedApi]:
+def _related_apis_from_json(s: str | None) -> list[RelatedApi]:
     if not s:
         return []
     try:
@@ -293,7 +300,7 @@ def _related_tables_to_json(items: list[RelatedTable]) -> str:
     )
 
 
-def _related_tables_from_json(s: Optional[str]) -> list[RelatedTable]:
+def _related_tables_from_json(s: str | None) -> list[RelatedTable]:
     if not s:
         return []
     try:
@@ -318,7 +325,20 @@ def _business_rules_to_json(items: list[BusinessRule]) -> str:
     return json.dumps([r.to_dict() for r in items], ensure_ascii=False)
 
 
-def _business_rules_from_json(s: Optional[str]) -> list[BusinessRule]:
+def _expert_team_ids_from_json(s: str | None) -> list[str]:
+    """JSON 字符串 → 专家团 id 列表。空/None/坏字符串一律返空列表。"""
+    if not s:
+        return []
+    try:
+        raw = json.loads(s)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(raw, list):
+        return []
+    return [str(x) for x in raw]
+
+
+def _business_rules_from_json(s: str | None) -> list[BusinessRule]:
     if not s:
         return []
     try:

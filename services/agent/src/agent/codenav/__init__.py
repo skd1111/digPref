@@ -11,6 +11,7 @@
 - mcp_tools: MCP 工具注册
 - api: FastAPI 路由
 """
+
 from __future__ import annotations
 
-__all__ = ["models", "language_registry", "indexer", "query", "watcher", "mcp_tools", "api"]
+__all__ = ["api", "indexer", "language_registry", "mcp_tools", "models", "query", "watcher"]

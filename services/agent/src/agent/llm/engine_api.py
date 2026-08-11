@@ -11,33 +11,31 @@
 LMRouter 委托：4 个公开 API（classify_intent / plan / repair_call / summarise）
 内部调 RouterEngine.route_request(role=...) 选后端。
 """
+
 from __future__ import annotations
 
 import logging
-import os
 import time
-from typing import Optional
 
 import httpx
 from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel, Field
 
-from agent.llm.budget import BudgetController
 from agent.codenav.llm_client import reset_default_client as _reset_codenav_client
+from agent.llm.budget import BudgetController
 from agent.llm.circuit_breaker import CircuitBreakerRegistry
 from agent.llm.engine import RouterEngine
 from agent.llm.metrics import MetricsRecorder
 from agent.llm.models import LLMBackend, RoutingDecision, Sensitivity, TaskCategory
 from agent.llm.router import LMRouter
 from agent.llm.storage import (
-    cost_summary,
+    delete_backend,
+    get_backend,
     get_router_weights,
     list_backends,
     recent_decisions,
     set_router_weights,
     upsert_backend,
-    delete_backend,
-    get_backend,
 )
 
 logger = logging.getLogger(__name__)
@@ -46,7 +44,7 @@ router = APIRouter(prefix="/router", tags=["router"])
 
 
 # 进程级单例（V0 mock 引擎 + 真实存储）。V1 改成从 storage 加载 backends
-_ENGINE: Optional[RouterEngine] = None
+_ENGINE: RouterEngine | None = None
 
 
 def _get_engine() -> RouterEngine:
@@ -60,37 +58,52 @@ def _get_engine() -> RouterEngine:
     global _ENGINE
     if _ENGINE is None:
         from agent.config import settings
+
         # V0 默认 3 个后端（V1 改从 storage 加载）
         default_backends = [
             LLMBackend(
-                name="ollama-utility", type="local",
-                base_url=settings.ollama_base_url, model_name="qwen2.5:0.5b",
-                cost_per_1k_tokens=0.0, timeout_seconds=5,
-                data_residency="local", role="utility", enabled=True,
+                name="ollama-utility",
+                type="local",
+                base_url=settings.ollama_base_url,
+                model_name="qwen2.5:0.5b",
+                cost_per_1k_tokens=0.0,
+                timeout_seconds=5,
+                data_residency="local",
+                role="utility",
+                enabled=True,
             ),
             LLMBackend(
-                name="deepseek-reasoning", type="private",
+                name="deepseek-reasoning",
+                type="private",
                 base_url="http://internal-deepseek.lan/v1",
-                model_name="deepseek-r1", cost_per_1k_tokens=0.001,
-                timeout_seconds=20, data_residency="private",
-                role="reasoning", enabled=True,
+                model_name="deepseek-r1",
+                cost_per_1k_tokens=0.001,
+                timeout_seconds=20,
+                data_residency="private",
+                role="reasoning",
+                enabled=True,
             ),
             LLMBackend(
-                name="gpt4o-execution", type="cloud",
+                name="gpt4o-execution",
+                type="cloud",
                 base_url="https://api.openai.com/v1",
-                model_name="gpt-4o", cost_per_1k_tokens=0.03,
-                timeout_seconds=60, data_residency="cloud",
+                model_name="gpt-4o",
+                cost_per_1k_tokens=0.03,
+                timeout_seconds=60,
+                data_residency="cloud",
                 api_key_ref="llm.openai.api_key",
-                role="execution", enabled=True,
+                role="execution",
+                enabled=True,
             ),
         ]
         # V2 增量：sync 读持久化权重（best-effort，失败用默认）
         persisted_weights = None
         try:
             import sqlite3 as _sq
-            from pathlib import Path as _P
+            from pathlib import Path
+
             db_path = settings.llm_router_db_path
-            if _P(db_path).exists():
+            if Path(db_path).exists():
                 conn = _sq.connect(db_path, timeout=5)
                 try:
                     cur = conn.execute(
@@ -99,8 +112,11 @@ def _get_engine() -> RouterEngine:
                     row = cur.fetchone()
                     if row:
                         persisted_weights = {
-                            "capability": row[0], "cost": row[1], "latency": row[2],
-                            "compliance": row[3], "availability": row[4],
+                            "capability": row[0],
+                            "cost": row[1],
+                            "latency": row[2],
+                            "compliance": row[3],
+                            "availability": row[4],
                         }
                 finally:
                     conn.close()
@@ -117,6 +133,44 @@ def _get_engine() -> RouterEngine:
 
 
 # ---- API 端点 ----
+
+
+class ActiveBackendBody(BaseModel):
+    """active 后端统一配置（双轨制统一后唯一入口）。"""
+
+    active: str = Field(pattern="^(mock|ollama|private|custom)$")
+    ollama: dict = Field(default_factory=dict)
+    private: dict = Field(default_factory=dict)
+    custom: dict = Field(default_factory=dict)
+
+
+@router.get("/active")
+async def get_active_backend() -> dict:
+    """回显已持久化的 active 配置（供前端编辑；不含 env 覆盖态）。"""
+    from agent.llm.active_config import load_saved_active
+
+    return load_saved_active()
+
+
+@router.put("/active")
+async def set_active_backend(body: ActiveBackendBody) -> dict:
+    """保存 active 配置到 router.db + 热应用（env + settings + 主对话 router 重建）。"""
+    from agent.llm.active_config import apply_active, save_active
+
+    cfg = body.model_dump()
+    save_active(cfg)
+    applied = apply_active(cfg)
+    # 主对话 runtime 缓存的是旧 LMRouter（_mock_mode/连接参数已固化）→ 重建
+    try:
+        from agent import main as agent_main
+
+        if agent_main._runtime is not None:
+            agent_main._runtime.llm = LMRouter()
+    except Exception as exc:
+        logger.warning("active backend switch: runtime router refresh skipped: %s", exc)
+    logger.info("active backend switched to %s", applied.get("active"))
+    return {"ok": True, "active": applied.get("active")}
+
 
 @router.get("/metrics")
 async def get_metrics() -> dict:
@@ -137,6 +191,27 @@ async def get_decisions(limit: int = 50) -> dict:
     """最近 routing_decisions（真实表读取）。"""
     rows = await recent_decisions(limit=limit)
     return {"decisions": rows}
+
+
+@router.get("/cache-stats")
+async def get_cache_stats_endpoint() -> dict:
+    """Phase 17 V0：分层缓存命中率统计（L1 实时计数 + routing_decisions 历史口径）。"""
+    from agent.llm.cache_stats import get_cache_stats
+
+    return get_cache_stats()
+
+
+class CacheToggleBody(BaseModel):
+    enabled: bool = Field(..., description="L1 精确响应缓存开关（一键回滚）")
+
+
+@router.post("/cache-toggle")
+async def set_cache_enabled(body: CacheToggleBody) -> dict:
+    """Phase 17 V0：L1 缓存一键开关（关闭后链路等价无缓存现状）。"""
+    from agent.llm.router import set_l1_cache_enabled
+
+    set_l1_cache_enabled(body.enabled)
+    return {"ok": True, "l1_enabled": body.enabled}
 
 
 @router.get("/backends")
@@ -182,9 +257,18 @@ async def update_backend(name: str, body: dict = Body(...)) -> dict:
 
 # LLMBackend 允许的字段（避免 Pydantic / dataclass 报错）
 _LLM_BACKEND_FIELDS = {
-    "name", "type", "base_url", "api_key_ref", "model_name", "capabilities",
-    "max_context", "cost_per_1k_tokens", "timeout_seconds",
-    "data_residency", "enabled", "role",
+    "name",
+    "type",
+    "base_url",
+    "api_key_ref",
+    "model_name",
+    "capabilities",
+    "max_context",
+    "cost_per_1k_tokens",
+    "timeout_seconds",
+    "data_residency",
+    "enabled",
+    "role",
 }
 
 
@@ -199,17 +283,23 @@ async def delete_backend_endpoint(name: str) -> dict:
 @router.get("/weights")
 async def get_weights() -> dict:
     """读 router_weights 单行；不存在则返回默认（与 Engine 内存一致）。"""
-    import asyncio as _aio
     try:
         w = await get_router_weights()
     except Exception as e:
         logger.warning("get_weights_failed err=%s", e)
-        w = {"capability": 0.35, "cost": 0.25, "latency": 0.20, "compliance": 0.15, "availability": 0.05}
+        w = {
+            "capability": 0.35,
+            "cost": 0.25,
+            "latency": 0.20,
+            "compliance": 0.15,
+            "availability": 0.05,
+        }
     return {"weights": w}
 
 
 class WeightsBody(BaseModel):
     """PUT /router/weights body —— 5 维评分权重。"""
+
     capability: float = Field(ge=0.0, le=1.0)
     cost: float = Field(ge=0.0, le=1.0)
     latency: float = Field(ge=0.0, le=1.0)
@@ -260,6 +350,7 @@ async def reset_breaker(name: str) -> dict:
 
 class SparkModeBody(BaseModel):
     """POST /router/spark-mode body"""
+
     enabled: bool
 
 
@@ -272,6 +363,7 @@ async def set_spark_mode(body: SparkModeBody) -> dict:
     """
     try:
         from agent.main import get_runtime
+
         runtime = get_runtime()
         runtime.llm.set_spark_mode(body.enabled)
     except Exception as e:
@@ -290,14 +382,13 @@ async def reload_max_context_endpoint() -> dict:
     """
     try:
         from agent.main import get_runtime
+
         runtime = get_runtime()
         runtime.llm.reload_max_context()
         return {
             "ok": True,
             "ollama_max_ctx": runtime.llm.ollama.max_context,
-            "private_max_ctx": (
-                runtime.llm.private.max_context if runtime.llm.private else None
-            ),
+            "private_max_ctx": (runtime.llm.private.max_context if runtime.llm.private else None),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"reload failed: {e}")
@@ -415,8 +506,7 @@ async def test_backend_connection(body: dict = Body(...)) -> dict:
     except httpx.HTTPStatusError as e:
         # 404 通常不是模型不存在，而是 base_url 协议/路径不对（缺 /v1 等）
         hint = (
-            "（请确认 base_url 为 OpenAI 兼容端点，路径含 /v1，"
-            "如 https://api.minimaxi.com/v1）"
+            "（请确认 base_url 为 OpenAI 兼容端点，路径含 /v1，如 https://api.minimaxi.com/v1）"
             if e.response.status_code == 404
             else ""
         )
@@ -444,6 +534,7 @@ async def test_backend_connection(body: dict = Body(...)) -> dict:
 
 # ---- 委托接口（供 LMRouter 内部调用） ----
 
+
 def route_via_engine(
     task_kind: str,
     user_prompt: str,
@@ -454,12 +545,12 @@ def route_via_engine(
     """LMRouter 4 个公开 API 内部调这个，按 task_kind 推断 role + sensitivity。"""
     eng = _get_engine()
     role_map = {
-        "intent": "utility",         # 端侧小模型
-        "plan": "reasoning",         # 推理模型
-        "repair": "reasoning",       # 推理模型
-        "summarise": "execution",    # 复杂模型
+        "intent": "utility",  # 端侧小模型
+        "plan": "reasoning",  # 推理模型
+        "repair": "reasoning",  # 推理模型
+        "summarise": "execution",  # 复杂模型
     }
-    role = role_map.get(task_kind, "execution")
+    role_map.get(task_kind, "execution")
     cat_map = {
         "intent": TaskCategory.SIMPLE,
         "plan": TaskCategory.COMPLEX,

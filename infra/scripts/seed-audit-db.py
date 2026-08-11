@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """seed-audit-db.py — bootstrap an empty audit SQLite with the canonical schema."""
+
 from __future__ import annotations
 
 import argparse

@@ -8,10 +8,10 @@
 - test_storage_upsert_rejects_invalid_business_rule
 - test_to_system_prompt_with_structured_placeholder
 """
+
 from __future__ import annotations
 
 import pytest
-
 from agent.biznav.models import BusinessRule, Feature, RelatedFile
 from agent.biznav.rule_engine import (
     BUSINESS_RULE_MAX_LEN,

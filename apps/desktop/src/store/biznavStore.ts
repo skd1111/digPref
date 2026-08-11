@@ -6,7 +6,7 @@
  *     `deleteFeature` / `importYaml` / `exportYaml`（V0 的 `updateFeature` /
  *     `reindex` / `resetToMock` 全部保留作演示兜底）
  *   - 数据源：`backendReady=true` 时走真后端 (`biznavListFeatures` 等)，
- *     否则保留 V0 的 18 个 mock（FeatureDetailPanel 的 demo banner 仍生效）
+ *     否则保留 V0 的 18 个 mock（仅演示用）
  *   - UI 状态（drawer / editor / selectedFeatureId）原封不动
  *
  * 重要：所有 actions 纯本地状态变更，**不调 chatStore**。
@@ -31,6 +31,7 @@ interface BackendFeatureRaw {
   category: string;
   project_name: string;
   project_root: string;
+  skill_id?: string | null;
   related_files?: unknown[];
   related_apis?: unknown[];
   related_tables?: unknown[];
@@ -59,6 +60,7 @@ function rawToFeature(raw: BackendFeatureRaw): Feature {
     category: raw.category,
     project_name: raw.project_name,
     project_root: raw.project_root,
+    skill_id: raw.skill_id ?? null,
     related_files: (raw.related_files ?? []) as Feature['related_files'],
     related_apis: (raw.related_apis ?? []) as Feature['related_apis'],
     related_tables: (raw.related_tables ?? []) as Feature['related_tables'],
@@ -87,6 +89,14 @@ interface BiznavState {
   error: string | null;
   lastExportYaml: string | null;
 
+  // 导入工程 + AI 提取功能点状态（后台任务轮询）
+  extracting: boolean;
+  /** 后台任务阶段：'pending' | 'scanning' | 'extracting'（done/failed 后清空） */
+  extractStage: string | null;
+  extractError: string | null;
+  /** 提取进度百分比（0-100）；processed_files / total_files，无法计算时为 null */
+  extractProgress: number | null;
+
   // UI 状态
   selectedFeatureId: string | null;
   drawerOpen: boolean;
@@ -98,6 +108,8 @@ interface BiznavState {
   closeDrawer: () => void;
   openEditor: (id: string) => void;
   closeEditor: () => void;
+  /** Phase 2H：后端不可用时本地新增功能点（运营工作台「＋ 新建」兜底） */
+  addLocalFeature: (f: Feature) => void;
   updateFeature: (id: string, patch: Partial<Feature>) => void;
   reindex: () => void;
   resetToMock: () => void;
@@ -113,6 +125,8 @@ interface BiznavState {
   deleteFeature: (id: string, project_name: string) => Promise<void>;
   importYaml: (yaml_text: string, mode: 'merge' | 'replace') => Promise<void>;
   exportYaml: (project_name: string) => Promise<string | null>;
+  /** 导入工程目录 → 触发后端 AI 提取功能点 → 轮询 status 直到完成后自动 loadFeatures */
+  importProjectAndExtract: (folder: string) => Promise<void>;
 }
 
 // ---------- Fisher-Yates 洗牌 ----------
@@ -138,6 +152,11 @@ export const useBiznavStore = create<BiznavState>((set, get) => ({
   error: null,
   lastExportYaml: null,
 
+  extracting: false,
+  extractStage: null,
+  extractError: null,
+  extractProgress: null,
+
   selectedFeatureId: null,
   drawerOpen: false,
   editorOpen: false,
@@ -148,6 +167,13 @@ export const useBiznavStore = create<BiznavState>((set, get) => ({
   closeDrawer: () => set({ drawerOpen: false }),
   openEditor: (id) => set({ editorOpen: true, selectedFeatureId: id }),
   closeEditor: () => set({ editorOpen: false }),
+
+  addLocalFeature: (f) =>
+    set((s) => ({
+      features: s.features.some((x) => x.id === f.id)
+        ? s.features.map((x) => (x.id === f.id ? f : x))
+        : [...s.features, f],
+    })),
 
   updateFeature: (id, patch) =>
     set((s) => ({
@@ -177,11 +203,17 @@ export const useBiznavStore = create<BiznavState>((set, get) => ({
   loadFeatures: async (opts) => {
     set({ loading: true, error: null });
     try {
-      const raws = (await ipc.biznavListFeatures(opts)) as BackendFeatureRaw[];
+      const resp = (await ipc.biznavListFeatures(opts)) as unknown;
+      // 后端 GET /biznav/features 返回 { project_name, features, total } 对象（非数组），
+      // 直接 .map 会抛 "(intermediate value).map is not a function" —— 解包兼容两种形态
+      const raws: BackendFeatureRaw[] = Array.isArray(resp)
+        ? (resp as BackendFeatureRaw[])
+        : ((resp as { features?: BackendFeatureRaw[] } | null)?.features ?? []);
       set({
         features: raws.map(rawToFeature),
         loading: false,
         backendReady: true,
+        ...(opts?.project_name ? { projectName: opts.project_name } : {}),
       });
     } catch (e) {
       set({
@@ -242,6 +274,91 @@ export const useBiznavStore = create<BiznavState>((set, get) => ({
       set({ error: e instanceof Error ? e.message : String(e) });
       return null;
     }
+  },
+
+  // 导入工程 → AI 提取功能点（后台任务 + 2s 轮询 status，SSE 事件 V1.3 才真发不可依赖）
+  importProjectAndExtract: async (folder) => {
+    // project_name 取目录 basename（兼容 Windows 反斜杠）
+    const name = folder.split(/[\\/]/).filter(Boolean).pop() || folder;
+    set({
+      projectName: name,
+      projectRoot: folder,
+      extracting: true,
+      extractStage: 'pending',
+      extractError: null,
+      extractProgress: null,
+      error: null,
+    });
+    try {
+      await ipc.biznavExtract({ project_name: name, project_root: folder });
+    } catch (e) {
+      set({
+        extracting: false,
+        extractStage: null,
+        extractProgress: null,
+        extractError: `启动提取任务失败：${e instanceof Error ? e.message : String(e)}`,
+      });
+      return;
+    }
+    // 轮询 job 状态（最长 10 分钟；大项目 LLM 提取较慢）
+    const deadline = Date.now() + 10 * 60 * 1000;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 2000));
+      try {
+        const st = await ipc.biznavStatus(name);
+        const job = (st?.job ?? undefined) as
+          | {
+              status?: string;
+              error_message?: string | null;
+              total_files?: number;
+              processed_files?: number;
+              features_generated?: number;
+            }
+          | undefined;
+        const status = job?.status ?? 'pending';
+        // 进度百分比：processed_files / total_files（extracting 阶段有意义）
+        const total = job?.total_files ?? 0;
+        const processed = job?.processed_files ?? 0;
+        const progress =
+          total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : null;
+        if (status === 'done') {
+          set({
+            extracting: false,
+            extractStage: null,
+            extractProgress: null,
+            backendReady: true,
+          });
+          await get().loadFeatures({ project_name: name });
+          // 防御：done 但 0 产出（如工程里没有受支持的源码文件）→ 给提示而不是静默空列表
+          if ((job?.features_generated ?? 0) === 0) {
+            set({
+              extractError:
+                job?.error_message ||
+                '提取完成但未生成任何功能点（工程中可能没有受支持的源码文件）',
+            });
+          }
+          return;
+        }
+        if (status === 'failed') {
+          set({
+            extracting: false,
+            extractStage: null,
+            extractProgress: null,
+            extractError: job?.error_message || '提取任务失败',
+          });
+          return;
+        }
+        set({ extractStage: status, extractProgress: progress });
+      } catch {
+        // status 探测瞬时失败不中断轮询
+      }
+    }
+    set({
+      extracting: false,
+      extractStage: null,
+      extractProgress: null,
+      extractError: '提取超时（10 分钟），请稍后点击 ↻ 刷新',
+    });
   },
 }));
 

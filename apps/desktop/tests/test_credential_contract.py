@@ -12,6 +12,7 @@ Rust 实现是真相之源，但对整个系统真正重要的契约是：
 
 运行：`pytest apps/desktop/tests/test_credential_contract.py -v`
 """
+
 from __future__ import annotations
 
 import re
@@ -25,7 +26,7 @@ def _read(path: Path) -> str:
     return path.read_bytes().decode("utf-8")
 
 
-ROOT = Path(__file__).resolve().parents[1]   # apps/desktop
+ROOT = Path(__file__).resolve().parents[1]  # apps/desktop
 TAURI_SRC = ROOT / "src-tauri" / "src"
 DESKTOP_SRC = ROOT / "src"
 CREDENTIALS_DIR = TAURI_SRC / "credentials"
@@ -34,6 +35,7 @@ IPC_DIR = DESKTOP_SRC / "ipc"
 
 
 # ---- Rust 源码不变量 -------------------------------------------------------
+
 
 class TestRustVaultAPI:
     def test_vault_module_exists(self):
@@ -53,7 +55,7 @@ class TestRustVaultAPI:
 
     def test_vault_rejects_empty_value(self):
         src = (CREDENTIALS_DIR / "mod.rs").read_bytes().decode("utf-8")
-        assert 'refusing to store empty credential' in src
+        assert "refusing to store empty credential" in src
 
     def test_get_returns_none_for_missing(self):
         src = (CREDENTIALS_DIR / "mod.rs").read_bytes().decode("utf-8")
@@ -80,25 +82,29 @@ class TestRustCommands:
         src = (COMMANDS_DIR / "credentials.rs").read_bytes().decode("utf-8")
         # 找出 credential_set 函数体
         block = re.search(
-            r'pub fn credential_set.*?^\}',
+            r"pub fn credential_set.*?^\}",
             src,
             re.DOTALL | re.MULTILINE,
         )
         assert block, "未找到 credential_set 函数体"
         body = block.group(0)
-        assert "value" not in re.findall(r'"value"', body) or 'len' in body
+        assert "value" not in re.findall(r'"value"', body) or "len" in body
         assert "len" in body, "审计行必须记 len，不能记 value"
 
     def test_lib_rs_registers_all_commands(self):
         src = (TAURI_SRC / "lib.rs").read_bytes().decode("utf-8")
         for cmd in (
-            "credential_get", "credential_set", "credential_delete",
-            "credential_list", "credential_service_name",
+            "credential_get",
+            "credential_set",
+            "credential_delete",
+            "credential_list",
+            "credential_service_name",
         ):
             assert f"credentials::{cmd}" in src, f"lib.rs 缺少 {cmd}"
 
 
 # ---- TS / 前端不变量 -------------------------------------------------------
+
 
 class TestFrontendNeverSeesSecrets:
     def test_no_dsn_in_frontend(self):
@@ -112,15 +118,12 @@ class TestFrontendNeverSeesSecrets:
                 r"mysql://",
                 r"sqlite://",
                 r"BEGIN\s+[A-Z]+\s+KEY",
-                r"AKIA[0-9A-Z]{16}",         # AWS access keys
+                r"AKIA[0-9A-Z]{16}",  # AWS access keys
                 r"-----BEGIN .*PRIVATE KEY-----",
             ):
                 for m in re.finditer(pattern, text):
                     offenders.append(f"{path}：{m.group(0)[:40]}")
-        assert not offenders, (
-            "前端严禁内嵌原始凭证。命中：\n  " +
-            "\n  ".join(offenders[:10])
-        )
+        assert not offenders, "前端严禁内嵌原始凭证。命中：\n  " + "\n  ".join(offenders[:10])
 
     def test_invoke_only_exposes_get_with_namespaced_key(self):
         src = (IPC_DIR / "invoke.ts").read_bytes().decode("utf-8")
@@ -137,12 +140,13 @@ class TestFrontendNeverSeesSecrets:
         offenders = []
         for path in DESKTOP_SRC.rglob("*.{ts,tsx,js,jsx}"):
             text = path.read_bytes().decode("utf-8")
-            for m in re.finditer(r"console\.log\(.*?(?:secret|password|token|api_key)", text):
+            for _m in re.finditer(r"console\.log\(.*?(?:secret|password|token|api_key)", text):
                 offenders.append(f"{path}")
         assert not offenders, f"发现疑似打印密钥的 console.log：{offenders}"
 
 
 # ---- Capabilities（Tauri 权限） --------------------------------------------
+
 
 class TestCapabilitiesPermissions:
     def test_default_capability_does_not_grant_fs_or_shell(self):

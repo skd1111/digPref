@@ -21,12 +21,13 @@ V2 增量：
 - `spark_route()` Spark 模式双跳（reasoning→execution）
 - `route_request` 末尾调 `metrics.emit_event("llm_route_decided", ...)`
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import uuid
-from typing import Awaitable, Callable, Optional
+from collections.abc import Awaitable, Callable
 
 from agent.llm.budget import BudgetController
 from agent.llm.circuit_breaker import CircuitBreakerRegistry
@@ -37,6 +38,7 @@ from agent.llm.models import (
     Sensitivity,
     TaskCategory,
 )
+from agent.llm.prompts import load_prompt, render_prompt
 from agent.llm.rules import apply_hard_rules
 from agent.llm.scoring import score_backend
 
@@ -54,16 +56,23 @@ class RouterEngine:
         metrics: MetricsRecorder | None = None,
         weights: dict | None = None,
         spark_enabled: bool = False,
-        backend_callers: Optional[dict[str, Callable[[str, str], Awaitable[str]]]] = None,
+        backend_callers: dict[str, Callable[[str, str], Awaitable[str]]] | None = None,
     ):
         self._backends = list(backends)
         self._budget = budget or BudgetController()
         self._breakers = breakers or CircuitBreakerRegistry()
         self._metrics = metrics or MetricsRecorder()
-        self._weights = dict(weights) if weights else {
-            "capability": 0.35, "cost": 0.25, "latency": 0.20,
-            "compliance": 0.15, "availability": 0.05,
-        }
+        self._weights = (
+            dict(weights)
+            if weights
+            else {
+                "capability": 0.35,
+                "cost": 0.25,
+                "latency": 0.20,
+                "compliance": 0.15,
+                "availability": 0.05,
+            }
+        )
         self._spark_enabled = spark_enabled
         # V2.5 增量：spark_route 用 backend_callers 真调 LLM（reasoning → execution）
         # backend_name → async (kind, user_prompt) → str
@@ -126,10 +135,10 @@ class RouterEngine:
         task_kind: str,
         category: TaskCategory,
         sensitivity: Sensitivity,
-        request_id: Optional[str] = None,
+        request_id: str | None = None,
         estimated_tokens: int = 1000,
         user_id: str = "anonymous",
-        role_override: Optional[str] = None,
+        role_override: str | None = None,
     ) -> RoutingDecision:
         """编排一次路由决策。返回 RoutingDecision（含 fallback chain + Trace）。
 
@@ -154,7 +163,8 @@ class RouterEngine:
             decision.candidates = []
             logger.warning(
                 "engine_no_candidates_after_rules request_id=%s role_override=%s",
-                req_id, role_override,
+                req_id,
+                role_override,
             )
             self._metrics.record(decision)
             self._metrics.emit_event("llm_route_decided", decision.trace_dict())
@@ -172,7 +182,6 @@ class RouterEngine:
 
         # 3. 预算 + 4. 熔断 联合检查
         actual_backend_name: str | None = None
-        fallback_used = False
         for b, _ in scored:
             # 熔断器放行
             cb = self._breakers.get_or_create(b.name)
@@ -184,15 +193,20 @@ class RouterEngine:
             if not verdict.allowed:
                 logger.info(
                     "engine_budget_exceed_skip backend=%s reason=%s",
-                    b.name, verdict.reason,
+                    b.name,
+                    verdict.reason,
                 )
                 continue
             actual_backend_name = b.name
             break
 
         decision.actual_backend = actual_backend_name
-        decision.fallback_used = (actual_backend_name != decision.primary_backend) if actual_backend_name else False
-        decision.estimated_cost = self._budget.estimate(scored[0][0], estimated_tokens) if scored else 0.0
+        decision.fallback_used = (
+            (actual_backend_name != decision.primary_backend) if actual_backend_name else False
+        )
+        decision.estimated_cost = (
+            self._budget.estimate(scored[0][0], estimated_tokens) if scored else 0.0
+        )
 
         # 5. cache_l1 命中（V0 简化：占位，总是 miss）
         decision.cache_hit = False
@@ -200,6 +214,7 @@ class RouterEngine:
         # 6. Phase 13 DSpark 决策注入（best-effort，DSpark runtime 可能未初始化）
         try:
             from agent.llm.dspark.api import decide_for_task
+
             pol, reason = decide_for_task(
                 task_category=task_kind,
                 max_tokens=estimated_tokens,
@@ -210,17 +225,22 @@ class RouterEngine:
             # 草稿模型路径：从 dspark config 拿（policy.enabled 时才有）
             if pol.enabled:
                 from agent.llm.dspark.api import get_runtime
+
                 rt = get_runtime()
                 decision.draft_model = rt.config.draft_model_path
             decision.dspark_reason = reason
             # 记录到 DSpark 引擎（供前端加速卡读取）
-            from agent.llm.dspark.engine import engine as dspark_engine, make_record
-            dspark_engine.record(make_record(
-                task_category=task_kind,
-                decision=decision,
-                reason=reason,
-                max_tokens=estimated_tokens,
-            ))
+            from agent.llm.dspark.engine import engine as dspark_engine
+            from agent.llm.dspark.engine import make_record
+
+            dspark_engine.record(
+                make_record(
+                    task_category=task_kind,
+                    decision=decision,
+                    reason=reason,
+                    max_tokens=estimated_tokens,
+                )
+            )
         except Exception as e:
             # DSpark 决策失败不能阻塞主路由（best-effort）
             logger.warning("engine_dspark_decide_failed request_id=%s err=%s", req_id, e)
@@ -293,10 +313,10 @@ class RouterEngine:
             if reasoning_caller and execution_caller:
                 try:
                     # 第 1 跳：reasoning → 拿 draft（带超时）
-                    draft_prompt = (
-                        f"你是 reasoning 模型。请对以下用户请求做粗略规划（不超过 200 字）：\n\n"
-                        f"{context_prefix}"
-                        f"用户请求：{user_prompt}"
+                    draft_prompt = render_prompt(
+                        load_prompt("spark_reasoning"),
+                        CONTEXT_PREFIX=context_prefix,
+                        USER_PROMPT=user_prompt,
                     )
                     draft = await asyncio.wait_for(
                         reasoning_caller(f"spark-reasoning-{task_kind}", draft_prompt),
@@ -304,11 +324,11 @@ class RouterEngine:
                     )
                     execution_decision.spark_draft = draft
                     # 第 2 跳：execution → draft 拼 prompt 前缀 + 实际推理（带超时）
-                    execution_prompt = (
-                        f"### 草稿（reasoning 模型产出）\n\n{draft}\n\n"
-                        f"---\n请基于上述草稿继续完善用户请求的最终回答：\n\n"
-                        f"{context_prefix}"
-                        f"用户请求：{user_prompt}"
+                    execution_prompt = render_prompt(
+                        load_prompt("spark_execution"),
+                        DRAFT=draft,
+                        CONTEXT_PREFIX=context_prefix,
+                        USER_PROMPT=user_prompt,
                     )
                     execution_output = await asyncio.wait_for(
                         execution_caller(f"spark-execution-{task_kind}", execution_prompt),
@@ -318,28 +338,37 @@ class RouterEngine:
                 except asyncio.TimeoutError:
                     logger.warning(
                         "spark_route_timeout reason=%s exec=%s timeout=%.1fs",
-                        reasoning_backend, execution_backend, spark_timeout_sec,
+                        reasoning_backend,
+                        execution_backend,
+                        spark_timeout_sec,
                     )
                 except Exception as e:
                     # LLM 调用失败不阻塞（best-effort；回退到 placeholder）
                     # 若 reasoning 成功但 execution 失败，重置 draft 标记部分成功
-                    if execution_decision.spark_draft and not execution_decision.spark_draft.startswith("[reasoning"):
+                    if (
+                        execution_decision.spark_draft
+                        and not execution_decision.spark_draft.startswith("[reasoning")
+                    ):
                         execution_decision.spark_draft = (
-                            f"[reasoning draft from {reasoning_backend} "
-                            f"(execution failed: {e})]"
+                            f"[reasoning draft from {reasoning_backend} (execution failed: {e})]"
                         )
                     logger.warning(
                         "spark_route_llm_call_failed reason=%s exec=%s err=%s",
-                        reasoning_backend, execution_backend, e,
+                        reasoning_backend,
+                        execution_backend,
+                        e,
                     )
 
         # emit SSE 标记 Spark 模式双跳
-        self._metrics.emit_event("llm_route_decided", {
-            **execution_decision.trace_dict(),
-            "spark_mode": True,
-            "spark_reasoning_backend": reasoning_decision.actual_backend,
-            "spark_execution_backend": execution_decision.actual_backend,
-        })
+        self._metrics.emit_event(
+            "llm_route_decided",
+            {
+                **execution_decision.trace_dict(),
+                "spark_mode": True,
+                "spark_reasoning_backend": reasoning_decision.actual_backend,
+                "spark_execution_backend": execution_decision.actual_backend,
+            },
+        )
         return execution_decision
 
     # ---- 状态查询接口（前端面板用） ----

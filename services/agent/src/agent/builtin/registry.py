@@ -10,22 +10,44 @@ V1 扩展：
   - Rust 工具注册（通过 Tauri Command 远端调用）
   - 5 Python 轻量工具（calculator / json_parse / json_format / regex_match / url_parse）
 """
+
 from __future__ import annotations
 
-import asyncio
-import inspect
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
+from agent.builtin.capabilities import (
+    builtin_biznav_features,
+    builtin_file_symbols,
+    builtin_symbol_search,
+)
+from agent.builtin.documents import (
+    builtin_excel_export,
+    builtin_excel_query,
+    builtin_pdf_merge,
+    builtin_pdf_split,
+    builtin_word_generate,
+)
+from agent.builtin.extra import (
+    builtin_csv_parse,
+    builtin_date_parse,
+    builtin_datetime_now,
+    builtin_http_get,
+    builtin_http_post,
+    builtin_text_split,
+    builtin_uuid4,
+)
 from agent.builtin.files import (
     builtin_edit_file,
     builtin_list_dir,
     builtin_read_file,
     builtin_write_file,
 )
-from agent.builtin.capabilities import (
-    builtin_biznav_features,
-    builtin_file_symbols,
-    builtin_symbol_search,
+from agent.builtin.git import (
+    builtin_git_commit,
+    builtin_git_diff,
+    builtin_git_log,
+    builtin_git_status,
 )
 from agent.builtin.lightweight import (
     builtin_calculator,
@@ -34,24 +56,11 @@ from agent.builtin.lightweight import (
     builtin_regex_match,
     builtin_url_parse,
 )
-from agent.builtin.extra import (
-    builtin_csv_parse,
-    builtin_datetime_now,
-    builtin_http_get,
-    builtin_http_post,
-    builtin_text_split,
-    builtin_uuid4,
-)
-from agent.builtin.git import (
-    builtin_git_commit,
-    builtin_git_diff,
-    builtin_git_log,
-    builtin_git_status,
-)
-from agent.builtin.models import BUILTIN_TOOL_NAMES, RiskLevel, ToolResult
-from agent.builtin.search import builtin_grep
+from agent.builtin.logfile import builtin_log_read_lines, builtin_log_search
+from agent.builtin.markdown_convert import builtin_file_to_markdown
+from agent.builtin.models import BUILTIN_TOOL_NAMES, RiskLevel
 from agent.builtin.schemas import get_builtin_schema
-
+from agent.builtin.search import builtin_grep
 
 # 工具风险等级映射（V0 + V1 轻量）
 TOOL_RISK_LEVEL: dict[str, RiskLevel] = {
@@ -69,29 +78,41 @@ TOOL_RISK_LEVEL: dict[str, RiskLevel] = {
     "url_parse": "low",
     # V1 Rust 工具（仅占位；真实风险等级由 Rust 端 evaluate_hitl 决定）
     "stat_file": "read",
-    "mkdir": "medium",       # 创建目录 → 影响文件系统
-    "delete_file": "high",   # 删除不可逆
-    "move_file": "high",     # 移动不可逆
+    "mkdir": "medium",  # 创建目录 → 影响文件系统
+    "delete_file": "high",  # 删除不可逆
+    "move_file": "high",  # 移动不可逆
     "find": "read",
     "glob": "read",
     "hash": "read",
     "base64": "read",
-    "shell": "critical",     # shell 命令 —— 高危，需 HITL
+    "shell": "critical",  # shell 命令 —— 高危，需 HITL
     # V3 Python 常用工具（全部 low —— 无副作用 / 受控 I/O）
     "datetime_now": "low",
+    "date_parse": "low",
     "uuid4": "low",
     "http_get": "low",
     "csv_parse": "low",
     "text_split": "low",
     # V4 扩展工具（2026-08-04）
-    "http_post": "medium",    # 写接口 → 改变外部系统状态，走 HITL
+    "http_post": "medium",  # 写接口 → 改变外部系统状态，走 HITL
     "git_status": "read",
     "git_diff": "read",
     "git_log": "read",
-    "git_commit": "medium",   # 写仓库历史，走 HITL
+    "git_commit": "medium",  # 写仓库历史，走 HITL
     "symbol_search": "read",
     "file_symbols": "read",
     "biznav_features": "read",
+    # V5 文件转换工具（只读转换，不写任何文件）
+    "file_to_markdown": "read",
+    # V6 文档处理工具族（查询只读；生成 / 合并 / 拆分写文件 → HITL）
+    "excel_query": "read",
+    "excel_export": "medium",
+    "pdf_merge": "medium",
+    "pdf_split": "medium",
+    "word_generate": "medium",
+    # V7 大文件查看与搜索（纯只读，绝不修改文件）
+    "log_read_lines": "read",
+    "log_search": "read",
 }
 
 
@@ -100,7 +121,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "read_file": (
         "Read a file's content. Supports line range (start_line, max_lines). "
         "Returns text content + size/line_count/truncated meta. "
-        "For files > 100MB, use logviewer instead."
+        "For files > 100MB, use builtin_log_read_lines instead."
     ),
     "write_file": (
         "Atomically write content to a file (temp + rename). "
@@ -118,7 +139,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "grep": (
         "Search text patterns in files/directories. Supports regex/literal, "
         "case-insensitive, context lines (-C). "
-        "Use ripgrep if available (faster). For files > 100MB, use logviewer."
+        "Use ripgrep if available (faster). For files > 100MB, use builtin_log_search."
     ),
     "calculator": (
         "AST-safe arithmetic evaluation. Supports + - * / // % ** and unary +/-. "
@@ -155,8 +176,15 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "base64": "Base64 encode/decode a string or file content. Read-only.",
     "shell": "Execute a shell command. Requires HITL approval (critical risk). Use sparingly.",
     "datetime_now": (
-        "Get the current date/time, optional UTC offset hours (e.g. 8 for UTC+8). "
-        "Returns ISO 8601 by default. Use for time-sensitive reasoning."
+        "Get the current date/time (defaults to system local timezone; optional UTC offset "
+        "hours, e.g. 8 for UTC+8). Returns date, weekday and the Chinese lunar date (农历, "
+        "e.g. 正月初一). Use for ANY time-sensitive question: 今天几号、农历初几、星期几、现在几点。"
+    ),
+    "date_parse": (
+        "Convert a Chinese relative-time expression to an absolute date (YYYY-MM-DD). "
+        "Supports 今天/明天/后天/大后天/昨天/前天, N 天前/后, 本周/下周/上周周X, 周末, "
+        "最近 N 天 (range), 本月底. ALWAYS call this instead of passing relative words "
+        "(like 明天/下周一) directly to tools that require YYYY-MM-DD. If unparsable, ask the user."
     ),
     "uuid4": "Generate a random v4 UUID string. Use when you need a unique identifier.",
     "http_get": (
@@ -206,6 +234,56 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "Query business feature points (业务功能点) of a project from the biznav index, "
         "optionally filtered by category. Read-only."
     ),
+    # V5 文件转换工具（markitdown，2026-08-10）
+    "file_to_markdown": (
+        "Convert a file to Markdown text via markitdown (supports docx / pdf / pptx / "
+        "xlsx / html / epub / images and more). ALWAYS use this tool whenever the user "
+        "needs to read, extract or convert any office / document file to text or "
+        "Markdown (文件转 md / 提取合同、报告、表格内容). Returns the full Markdown in "
+        "content. Read-only."
+    ),
+    # V6 文档处理工具族（Excel / PDF / Word，2026-08-10）
+    "excel_query": (
+        "Structured query over Excel (.xlsx) / CSV files. action='sheets' lists sheet "
+        "names; action='rows' returns rows with optional columns projection, where "
+        "equality filter ({\"列名\": 值}) and limit/offset paging; action='aggregate' "
+        "groups by a column and aggregates (count/sum/avg/min/max). Use for 报表分析 / "
+        "数据统计 / 查表格. Read-only."
+    ),
+    "excel_export": (
+        "Write JSON row data to an .xlsx file. rows is list[dict] (header = union of "
+        "keys) or list[list] (first row = header). Requires HITL approval (medium risk). "
+        "Use for 导出报表 / 生成 Excel / 数据落盘."
+    ),
+    "pdf_merge": (
+        "Merge multiple PDF files into one (order preserved). Requires HITL approval "
+        "(medium risk). Use for 合并 PDF / 拼接文档."
+    ),
+    "pdf_split": (
+        "Split a PDF: omit pages to split every page into its own file; pass "
+        "pages='1-3,5' to extract those pages into a single output file. Requires HITL "
+        "approval (medium risk). Use for 拆分 PDF / 抽取页码."
+    ),
+    "word_generate": (
+        "Generate a Word (.docx) document from a Markdown subset: # headings, - / 1. "
+        "lists, | a | b | tables, ``` code blocks. Requires HITL approval (medium risk). "
+        "Use for 生成报告 / 写方案 / 输出 Word 文档."
+    ),
+    # V7 大文件查看与搜索（klogg 式只读，2026-08-10）
+    "log_read_lines": (
+        "View large text files (logs / dumps, GB-sized, NO 100MB limit) by line range: "
+        "start_line (0-based) + max_lines (≤2000, stops early). Pass tail_lines=N to get "
+        "the last N lines without scanning the whole file. Read-only, never modifies the "
+        "file. ALWAYS use this instead of read_file when the file is > 100MB or read_file "
+        "returns file_too_large. 看大文件 / 看日志尾部."
+    ),
+    "log_search": (
+        "Search a large text file (logs / dumps, GB-sized, NO 100MB limit) for a literal "
+        "or regex pattern. Streaming scan stops as soon as max_results (≤1000) hits are "
+        "collected; optional context_lines (≤20) returns before/after context per hit. "
+        "Read-only, never modifies the file. ALWAYS use this instead of grep when the "
+        "target file is > 100MB or grep returns file_too_large. 搜大文件 / 搜日志 ERROR."
+    ),
 }
 
 
@@ -237,6 +315,7 @@ class BuiltinToolRegistry:
             # V1.5 接力真实 Rust 实现；当前 V1.5 之前 Rust 端 mod.rs 仅占位注释
             # V3 Python 常用工具（low risk）
             "datetime_now": builtin_datetime_now,
+            "date_parse": builtin_date_parse,
             "uuid4": builtin_uuid4,
             "http_get": builtin_http_get,
             "csv_parse": builtin_csv_parse,
@@ -251,6 +330,17 @@ class BuiltinToolRegistry:
             "symbol_search": builtin_symbol_search,
             "file_symbols": builtin_file_symbols,
             "biznav_features": builtin_biznav_features,
+            # V5 文件转换工具（markitdown）
+            "file_to_markdown": builtin_file_to_markdown,
+            # V6 文档处理工具族（Excel / PDF / Word）
+            "excel_query": builtin_excel_query,
+            "excel_export": builtin_excel_export,
+            "pdf_merge": builtin_pdf_merge,
+            "pdf_split": builtin_pdf_split,
+            "word_generate": builtin_word_generate,
+            # V7 大文件查看与搜索（klogg 式只读）
+            "log_read_lines": builtin_log_read_lines,
+            "log_search": builtin_log_search,
         }
 
     def get(self, name: str) -> Callable[..., Any] | None:
@@ -271,13 +361,17 @@ class BuiltinToolRegistry:
 
     def generate_tool_descriptions(self) -> str:
         """生成注入 LLM system prompt 的工具描述片段。"""
-        lines = ["You have access to the following built-in tools (run inside the agent, <1ms latency):"]
+        lines = [
+            "You have access to the following built-in tools (run inside the agent, <1ms latency):"
+        ]
         for name in BUILTIN_TOOL_NAMES:
             desc = TOOL_DESCRIPTIONS.get(name, "")
             risk = TOOL_RISK_LEVEL.get(name, "read")
             lines.append(f"- builtin_{name}: {desc} [risk={risk}]")
         lines.append("")
-        lines.append("To invoke a builtin tool, set call['server']='builtin' and call['name']=tool_name.")
+        lines.append(
+            "To invoke a builtin tool, set call['server']='builtin' and call['name']=tool_name."
+        )
         lines.append("Built-in tools take priority over MCP tools for the same task.")
         return "\n".join(lines)
 

@@ -115,6 +115,46 @@ fn load_assets(path: &PathBuf) -> AppResult<Vec<Value>> {
     }
 }
 
+/// Phase 7 补齐：按资产 id 解析数据库连接配置（含 keyring 密码解析）。
+///
+/// 供 data_run_sql / data_sync_schema 注入 Python `/data/*` 请求体。
+/// 安全红线：凭证只在内存传递，不落盘不打日志（CLAUDE.md §5）。
+pub fn resolve_connection_config(state: &State<'_, AppState>, asset_id: &str) -> AppResult<Value> {
+    let assets = load_assets(&systems_path(state))?;
+    let asset = assets
+        .iter()
+        .find(|a| a.get("id").and_then(|v| v.as_str()) == Some(asset_id))
+        .ok_or_else(|| AppError::Config(format!("数据源不存在: {}", asset_id)))?;
+    let meta = asset.get("meta").cloned().unwrap_or(Value::Object(Default::default()));
+
+    let get_str = |key: &str| -> String {
+        meta.get(key).and_then(|v| v.as_str()).unwrap_or("").to_string()
+    };
+
+    // password 可能是 __KEYRING_REF:xxx 引用 → 从系统 keyring 解析
+    let mut password = get_str("password");
+    if let Some(ref_id) = password.strip_prefix("__KEYRING_REF:") {
+        password = crate::credentials::Vault::default()
+            .get(ref_id)?
+            .unwrap_or_default();
+    }
+
+    let db_type = get_str("db_type");
+    let default_port = crate::commands::dataexpert::default_port_for(&db_type);
+    let port: u32 = get_str("port").parse().unwrap_or(default_port);
+
+    Ok(serde_json::json!({
+        "type": db_type,
+        "host": get_str("host"),
+        "port": port,
+        "database": get_str("database"),
+        "user": get_str("username"),
+        "username": get_str("username"),
+        "password": password,
+        "path": get_str("path"),
+    }))
+}
+
 fn save_assets(path: &PathBuf, assets: &[Value]) -> AppResult<()> {
     // 确保目录存在
     if let Some(parent) = path.parent() {

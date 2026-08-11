@@ -1,7 +1,8 @@
 """AgentStreamEvent — discriminated union over the wire."""
+
 from __future__ import annotations
 
-from typing import Annotated, Literal, Union
+from typing import Annotated, Literal
 
 from pydantic import Field
 
@@ -52,9 +53,13 @@ class ErrorEvent(ChatMessage):
 
 
 AgentStreamEvent = Annotated[
-    Union[
-        MessageEvent, ToolCallEvent, ToolResultEvent, TraceEvent,
-        ApprovalEvent, LogEvent, DoneEvent, ErrorEvent,
-    ],
+    MessageEvent
+    | ToolCallEvent
+    | ToolResultEvent
+    | TraceEvent
+    | ApprovalEvent
+    | LogEvent
+    | DoneEvent
+    | ErrorEvent,
     Field(discriminator="kind"),
 ]

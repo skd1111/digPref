@@ -7,7 +7,7 @@
  */
 import { useRef, useCallback } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { useDataStore } from '@/store/dataStore';
+import { useDataStore, cellFor } from '@/store/dataStore';
 
 const ROW_HEIGHT = 28;
 const HEADER_HEIGHT = 30;
@@ -15,9 +15,11 @@ const HEADER_HEIGHT = 30;
 export function DataGrid(): JSX.Element {
   const result = useDataStore((s) => s.result);
   const running = useDataStore((s) => s.running);
+  const streaming = useDataStore((s) => s.streaming);
   const parentRef = useRef<HTMLDivElement>(null);
 
-  const rowCount = result?.rows.length ?? 0;
+  // 行数只进元数据（列存形态下行数据不进 rows 数组）
+  const rowCount = result?.rowCount ?? 0;
 
   const virtualizer = useVirtualizer({
     count: rowCount,
@@ -63,8 +65,8 @@ export function DataGrid(): JSX.Element {
         }
       />
 
-      {running ? (
-        <Centered text="执行中…" />
+      {running || streaming ? (
+        <Centered text={streaming ? '结果集传输中（Arrow 流）…' : '执行中…'} />
       ) : !result ? (
         <Centered text="执行查询后在此展示结果" />
       ) : (
@@ -106,7 +108,6 @@ export function DataGrid(): JSX.Element {
               <table className="w-full border-collapse" style={{ position: 'absolute', top: 0, left: 0, width: '100%' }}>
                 <tbody>
                   {virtualizer.getVirtualItems().map((virtualRow: { index: number; size: number; start: number }) => {
-                    const row = result.rows[virtualRow.index];
                     return (
                       <tr
                         key={virtualRow.index}
@@ -121,7 +122,9 @@ export function DataGrid(): JSX.Element {
                           display: 'table-row',
                         }}
                       >
-                        {row.map((cell, ci) => renderCell(cell, ci))}
+                        {result.columns.map((_, ci) =>
+                          renderCell(cellFor(result, virtualRow.index, ci), ci),
+                        )}
                       </tr>
                     );
                   })}

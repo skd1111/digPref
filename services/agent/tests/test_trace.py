@@ -7,10 +7,10 @@
     - collector：中文思维链构建 / 文件操作提取与挂载
     - api：/trace 三端点
 """
+
 from __future__ import annotations
 
 import pytest
-
 from agent.trace import storage
 from agent.trace.collector import (
     TraceCollector,
@@ -26,8 +26,8 @@ from agent.trace.diff import (
 )
 from agent.trace.models import FileOperation, ThinkingStep
 
-
 # ---- diff ------------------------------------------------------------------
+
 
 class TestDiff:
     def test_unified_diff_basic(self):
@@ -64,18 +64,30 @@ class TestDiff:
 
 # ---- models ----------------------------------------------------------------
 
+
 class TestModels:
     def test_file_operation_roundtrip(self):
-        op = FileOperation(type="edit", path="/a.py", diff="+x", preview="+x",
-                           lines_added=1, lines_removed=0, start_line=1, end_line=9)
+        op = FileOperation(
+            type="edit",
+            path="/a.py",
+            diff="+x",
+            preview="+x",
+            lines_added=1,
+            lines_removed=0,
+            start_line=1,
+            end_line=9,
+        )
         back = FileOperation.from_dict(op.to_dict())
         assert back.type == "edit" and back.path == "/a.py"
         assert back.lines_added == 1 and back.end_line == 9
 
     def test_thinking_step_roundtrip(self):
         step = ThinkingStep(
-            session_id="s1", node_name="planner", step_index=2,
-            thinking="【思考】分析平账差异", decision="执行模式：TOOL_ONLY",
+            session_id="s1",
+            node_name="planner",
+            step_index=2,
+            thinking="【思考】分析平账差异",
+            decision="执行模式：TOOL_ONLY",
             tool_calls=[{"name": "read_file"}],
             file_operations=[FileOperation(type="read", path="/x.py")],
         )
@@ -88,11 +100,13 @@ class TestModels:
 
 # ---- storage ---------------------------------------------------------------
 
+
 class TestStorage:
     @pytest.mark.asyncio
     async def test_insert_and_list(self):
-        step = ThinkingStep(session_id="sess-a", node_name="intent",
-                            step_index=0, thinking="【思考】识别意图")
+        step = ThinkingStep(
+            session_id="sess-a", node_name="intent", step_index=0, thinking="【思考】识别意图"
+        )
         await storage.insert_step(step)
         rows = await storage.list_steps("sess-a")
         assert len(rows) == 1
@@ -123,13 +137,14 @@ class TestStorage:
 
 # ---- collector -------------------------------------------------------------
 
+
 class TestCollector:
     def test_build_thinking_planner_chinese(self):
         delta = {
             "plan_explanation": "需要查询订单表核对借贷差额",
             "plan": [{"server": "db", "name": "db.query"}],
         }
-        thinking, decision = build_thinking("planner", delta)
+        thinking, _decision = build_thinking("planner", delta)
         assert thinking is not None
         assert "【思考】" in thinking and "【行动】" in thinking
         assert "查询订单表" in thinking
@@ -141,8 +156,12 @@ class TestCollector:
 
     def test_build_thinking_tool_observation(self):
         delta = {
-            "pending_tool_call": {"server": "builtin", "name": "read_file",
-                                  "args": {"path": "/a.py"}, "risk_level": "read"},
+            "pending_tool_call": {
+                "server": "builtin",
+                "name": "read_file",
+                "args": {"path": "/a.py"},
+                "risk_level": "read",
+            },
             "tool_result": {"ok": True, "content": "hello"},
         }
         thinking, _ = build_thinking("tool_runner", delta)
@@ -154,8 +173,9 @@ class TestCollector:
         assert thinking is None and decision is None
 
     def test_extract_tool_calls(self):
-        delta = {"pending_tool_call": {"name": "grep", "server": "builtin",
-                                       "args": {"pattern": "x"}}}
+        delta = {
+            "pending_tool_call": {"name": "grep", "server": "builtin", "args": {"pattern": "x"}}
+        }
         calls = extract_tool_calls(delta)
         assert len(calls) == 1 and calls[0]["name"] == "grep"
 
@@ -172,15 +192,19 @@ class TestCollector:
 
     def test_extract_file_op_edit(self):
         op = extract_file_operation(
-            "edit_file", {"path": "/tmp/e.py"}, {"ok": True},
-            before="x = 1\n", after="x = 2\n",
+            "edit_file",
+            {"path": "/tmp/e.py"},
+            {"ok": True},
+            before="x = 1\n",
+            after="x = 2\n",
         )
         assert op.type == "edit"
         assert op.lines_added == 1 and op.lines_removed == 1
 
     def test_extract_file_op_read_line_range(self):
         op = extract_file_operation(
-            "read_file", {"path": "/tmp/r.py"},
+            "read_file",
+            {"path": "/tmp/r.py"},
             {"ok": True, "meta": {"start_line": 10, "line_count": 5}},
         )
         assert op.type == "read" and op.start_line == 10 and op.end_line == 15
@@ -193,7 +217,8 @@ class TestCollector:
     async def test_record_node_step_persists(self):
         c = TraceCollector()
         step = await c.record_node_step(
-            "run-1", "planner",
+            "run-1",
+            "planner",
             {"plan_explanation": "核对借贷方金额", "plan": [{"name": "db.query"}]},
             latency_ms=42,
         )
@@ -214,10 +239,17 @@ class TestCollector:
     @pytest.mark.asyncio
     async def test_attach_file_operation_to_last_step(self):
         c = TraceCollector()
-        await c.record_node_step("run-3", "tool_runner", {
-            "pending_tool_call": {"name": "edit_file", "server": "builtin",
-                                  "args": {"path": "/f.py"}},
-        })
+        await c.record_node_step(
+            "run-3",
+            "tool_runner",
+            {
+                "pending_tool_call": {
+                    "name": "edit_file",
+                    "server": "builtin",
+                    "args": {"path": "/f.py"},
+                },
+            },
+        )
         op = FileOperation(type="edit", path="/f.py", diff="+x", lines_added=1)
         ok = await c.attach_file_operation("run-3", op)
         assert ok
@@ -236,13 +268,13 @@ class TestCollector:
 
 # ---- api -------------------------------------------------------------------
 
+
 class TestApi:
     @pytest.mark.asyncio
     async def test_session_endpoint(self):
+        from agent.trace import api as trace_api
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
-
-        from agent.trace import api as trace_api
 
         c = TraceCollector()
         await c.record_node_step("run-api", "intent", {"intent": "query"})
@@ -258,16 +290,18 @@ class TestApi:
 
     @pytest.mark.asyncio
     async def test_step_and_file_diff_endpoints(self):
+        from agent.trace import api as trace_api
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
-        from agent.trace import api as trace_api
-
         step = ThinkingStep(
-            session_id="run-api2", node_name="tool_runner", step_index=0,
+            session_id="run-api2",
+            node_name="tool_runner",
+            step_index=0,
             file_operations=[
-                FileOperation(type="edit", path="/a.py", diff="+new", preview="+new",
-                              lines_added=1),
+                FileOperation(
+                    type="edit", path="/a.py", diff="+new", preview="+new", lines_added=1
+                ),
             ],
         )
         await storage.insert_step(step)

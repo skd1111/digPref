@@ -2,10 +2,10 @@
 
 仅保留最小接口定义以满足其他模块 import 依赖。
 """
+
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 logger = logging.getLogger(__name__)
 

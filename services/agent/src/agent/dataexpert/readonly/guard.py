@@ -6,17 +6,26 @@
   - 所有 SQL 执行前强制注入 LIMIT（默认 10000）
   - 多表 JOIN / 无 WHERE 全表扫描 → is_heavy=True（触发 HITL）
 """
+
 from __future__ import annotations
 
 import re
 
 from agent.config import settings
 
-
 # 写操作关键字（全小写匹配）
 _WRITE_TOKENS = (
-    "update", "delete", "drop", "truncate", "insert", "alter",
-    "grant", "revoke", "create", "replace", "merge",
+    "update",
+    "delete",
+    "drop",
+    "truncate",
+    "insert",
+    "alter",
+    "grant",
+    "revoke",
+    "create",
+    "replace",
+    "merge",
 )
 
 # 预编译正则：匹配独立的写操作关键字（词边界）
@@ -33,6 +42,15 @@ _JOIN_RE = re.compile(r"\bJOIN\b", re.IGNORECASE)
 
 # WHERE 检测
 _WHERE_RE = re.compile(r"\bWHERE\b", re.IGNORECASE)
+
+# 数据外泄型子句（SELECT 体内导出到服务器文件）
+_INTO_FILE_RE = re.compile(r"\bINTO\s+(OUTFILE|DUMPFILE)\b", re.IGNORECASE)
+
+# CTE 收尾写操作（部分方言支持 WITH … INSERT/UPDATE/DELETE）
+_CTE_WRITE_RE = re.compile(r"\)\s*(INSERT|UPDATE|DELETE|REPLACE|MERGE)\b", re.IGNORECASE)
+
+# 首关键字提取
+_FIRST_KW_RE = re.compile(r"\s*(\w+)")
 
 
 class WriteBlockedError(Exception):
@@ -66,6 +84,66 @@ def enforce_readonly(sql: str) -> None:
     match = _WRITE_RE.search(cleaned)
     if match:
         raise WriteBlockedError(sql, match.group(1).lower())
+
+
+def _split_statements(sql: str) -> list[str]:
+    """按 ; 拆语句，忽略单/双引号字符串字面量内的分号。"""
+    stmts: list[str] = []
+    buf: list[str] = []
+    quote: str | None = None
+    for ch in sql:
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = None
+        elif ch in ("'", '"'):
+            quote = ch
+            buf.append(ch)
+        elif ch == ";":
+            stmts.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    stmts.append("".join(buf))
+    return [s.strip() for s in stmts if s.strip()]
+
+
+def enforce_select_only(sql: str) -> None:
+    """SELECT 白名单：非 dev 环境仅允许单条 SELECT / WITH…SELECT。
+
+    缺口 10（用户红线）：除开发环境外只允许执行 SELECT 语句。
+      - 多语句（; 拼接）一律拒；字符串字面量内的 ; 不误判
+      - 首关键字必须 SELECT 或 WITH；WITH 收尾不得是写操作
+      - SELECT 体内拦 INTO OUTFILE / INTO DUMPFILE（数据外泄）
+      - env=="dev" 且 data_allow_non_select_in_dev=true 时跳过白名单，
+        降级走黑名单 enforce_readonly（DROP 等仍拦，fail-safe）
+
+    Args:
+        sql: 待检测的 SQL 文本。
+
+    Raises:
+        WriteBlockedError: 非 SELECT 语句（调用方记 DATA_WRITE_BLOCKED 审计）。
+    """
+    if settings.env == "dev" and settings.data_allow_non_select_in_dev:
+        # 豁免：降级黑名单第二层
+        enforce_readonly(sql)
+        return
+    cleaned = _strip_comments(sql)
+    stmts = _split_statements(cleaned)
+    if len(stmts) != 1:
+        raise WriteBlockedError(sql, "multiple-statements")
+    stmt = stmts[0]
+    first = _FIRST_KW_RE.match(stmt)
+    kw = first.group(1).upper() if first else ""
+    if kw == "WITH":
+        if _CTE_WRITE_RE.search(stmt):
+            raise WriteBlockedError(sql, "with-write")
+        if not re.search(r"\bSELECT\b", stmt, re.IGNORECASE):
+            raise WriteBlockedError(sql, "with-no-select")
+    elif kw != "SELECT":
+        raise WriteBlockedError(sql, kw.lower() or "empty")
+    if _INTO_FILE_RE.search(stmt):
+        raise WriteBlockedError(sql, "into-outfile")
 
 
 def inject_limit(sql: str, cap: int | None = None) -> str:

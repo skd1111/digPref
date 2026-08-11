@@ -1,4 +1,5 @@
 """Per-host method allow-list (e.g. some hosts allow GET only)."""
+
 from __future__ import annotations
 
 from mcp_server_rest.config import Settings

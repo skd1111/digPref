@@ -36,6 +36,18 @@ dependencies = [
     "pypdf>=4.0",
     "python-docx>=1.1",
     "pyyaml>=6.0",
+    # Phase 7 数据专家：SQL 结果 DataFrame（从 db-all 提升为主依赖，sql/run 真实执行必需）
+    "pandas>=2.0",
+    # SSH 会话（agent.ssh.client 运行时 import，未声明会被 uv sync 清理）
+    "asyncssh>=2.14",
+    # 会话导出 .eas 密钥存取（sessions/export.py 运行时 import，同上）
+    "keyring>=25",
+    # datetime_now 内置工具农历转换（builtin/extra.py 运行时延迟导入）
+    "zhdate>=0.1",
+    # file_to_markdown 内置工具：文件转 Markdown（builtin/markdown_convert.py 延迟导入）
+    # extras 按办公格式按需：docx/pdf/pptx/xls/xlsx；html/csv/json/epub 在基础包内；
+    # 不用 [all]（含 azure / pydub / youtube 等重依赖）
+    "markitdown[docx,pdf,pptx,xls,xlsx]>=0.1",
 ]
 
 [project.optional-dependencies]
@@ -56,6 +68,15 @@ db-all = [
     "clickhouse-connect>=0.7",
     "pandas>=2.0",
 ]
+# Phase 7: 数据专家全量能力（WS/Arrow 流 + 导出 + 沙箱 AST 校验）
+data-full = [
+    "pyarrow>=16.0",
+    "polars>=1.0",
+    "openpyxl>=3.1",
+    "weasyprint>=62",
+    "jinja2>=3.1",
+    "RestrictedPython>=7.0",
+]
 
 [project.scripts]
 eaide-agent = "agent.main:run"
@@ -75,4 +96,6 @@ dev = [
     "mypy>=2.3.0",
     "types-psutil>=5.9",
     "reportlab>=4.0",
+    # Phase 7 测试：Parquet 落盘/WS Arrow 流用例必需
+    "pyarrow>=16.0",
 ]

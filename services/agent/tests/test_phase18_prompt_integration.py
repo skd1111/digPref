@@ -1,7 +1,8 @@
 """Phase 18 提示词融合：策略分阶段（Code→验证→Work→确认）+ 结构化执行报告。"""
+
 from __future__ import annotations
 
-from agent.dual.policy import ExecutionPolicy, build_policy, decomposition_stages
+from agent.dual.policy import build_policy, decomposition_stages
 from agent.dual.report import build_dual_report
 
 
@@ -47,6 +48,7 @@ def test_decomposition_stages_empty():
 
 # ---- 结构化执行报告 ----
 
+
 def _base_state(**over) -> dict:
     st = {
         "routing": None,
@@ -75,8 +77,12 @@ def test_report_coding_repair_success():
 
 
 def test_report_coding_repair_exhausted():
-    st = _base_state(routing="coding", repair_attempt=3, needs_human_intervention=True,
-                     error_feedback=[{"attempt": 3, "error": "语法错误", "files": ["a.py"]}])
+    st = _base_state(
+        routing="coding",
+        repair_attempt=3,
+        needs_human_intervention=True,
+        error_feedback=[{"attempt": 3, "error": "语法错误", "files": ["a.py"]}],
+    )
     report = build_dual_report(st)
     assert report is not None
     assert "人工" in report or "未通过" in report

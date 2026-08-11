@@ -3,11 +3,11 @@
 ToolResult 是统一返回类型，跨 builtin / MCP 工具共用。
 RiskLevel 复用 safety/policy.py 5 级分类。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
-
 
 # 风险等级 —— 复用 safety/policy.py 的 5 级分类
 # (read / low / medium / high / critical)
@@ -42,6 +42,7 @@ BUILTIN_TOOL_NAMES: tuple[str, ...] = (
     "shell",
     # V3 Python 常用工具（2026-08-03）
     "datetime_now",
+    "date_parse",
     "uuid4",
     "http_get",
     "csv_parse",
@@ -56,21 +57,34 @@ BUILTIN_TOOL_NAMES: tuple[str, ...] = (
     "symbol_search",
     "file_symbols",
     "biznav_features",
+    # V5 文件转换工具（2026-08-10：markitdown 文件转 Markdown）
+    "file_to_markdown",
+    # V6 文档处理工具族（2026-08-10：Excel / PDF / Word 结构化读写）
+    "excel_query",
+    "excel_export",
+    "pdf_merge",
+    "pdf_split",
+    "word_generate",
+    # V7 大文件查看与搜索（2026-08-10：klogg 式只读，突破 100MB 限制）
+    "log_read_lines",
+    "log_search",
 )
 
 
 # V1 Rust 工具名清单（dispatcher 据此分流到 Tauri Command 远端调用）
-RUST_TOOL_NAMES: frozenset[str] = frozenset({
-    "stat_file",
-    "mkdir",
-    "delete_file",
-    "move_file",
-    "find",
-    "glob",
-    "hash",
-    "base64",
-    "shell",
-})
+RUST_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "stat_file",
+        "mkdir",
+        "delete_file",
+        "move_file",
+        "find",
+        "glob",
+        "hash",
+        "base64",
+        "shell",
+    }
+)
 
 
 def is_rust_tool(name: str) -> bool:
@@ -87,6 +101,7 @@ def is_rust_tool(name: str) -> bool:
 
 # ---- 异常 ----------------------------------------------------------------------
 
+
 class PathSecurityError(ValueError):
     """路径命中安全黑名单（Windows 保留名 / UNC / null byte）。"""
 
@@ -96,6 +111,7 @@ class PathOutOfBoundsError(PermissionError):
 
 
 # ---- ToolResult ---------------------------------------------------------------
+
 
 @dataclass
 class ToolResult:
@@ -110,6 +126,7 @@ class ToolResult:
         needs_hitl: 是否触发 HITL（dispatcher 写操作时设置）。
         risk_level: 风险等级（供 audit / downstream policy）。
     """
+
     ok: bool = False
     content: Any = None
     error: str | None = None
@@ -131,7 +148,7 @@ class ToolResult:
         }
 
     @classmethod
-    def from_exception(cls, exc: Exception, *, risk_level: RiskLevel = "read") -> "ToolResult":
+    def from_exception(cls, exc: Exception, *, risk_level: RiskLevel = "read") -> ToolResult:
         """从异常构造失败结果。"""
         return cls(
             ok=False,
@@ -142,6 +159,7 @@ class ToolResult:
 
 # ---- BuiltinTool Protocol -----------------------------------------------------
 
+
 @runtime_checkable
 class BuiltinTool(Protocol):
     """所有内置工具的统一接口（V0 用于 type hint / 测试，V1 真实继承）。
@@ -149,6 +167,7 @@ class BuiltinTool(Protocol):
     V0 5 工具是模块级函数而不是类，Protocol 主要给 dispatcher 调用时
     提示返回签名。
     """
+
     name: str
 
     async def __call__(self, args: dict) -> ToolResult: ...

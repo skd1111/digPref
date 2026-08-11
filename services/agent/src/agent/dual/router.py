@@ -9,6 +9,7 @@
 路由结果与模式默认不一致时生成偏离声明（responder 引用 + 审计留痕）。
 红线：路由只决定"策略先验"，不改变 HITL 风险闸门行为。
 """
+
 from __future__ import annotations
 
 import logging
@@ -20,15 +21,54 @@ logger = logging.getLogger(__name__)
 
 # ---- 关键词表（对齐 Code/Work 双模式系统提示词的路由规则；黄金集回归驱动扩充）----
 CODING_KEYWORDS: list[str] = [
-    "写代码", "修改代码", "改代码", "重构", "修复", "修一下", "修 bug", "修bug",
-    "bug", "报错", "分析报错", "单元测试", "补测试", "编写测试", "运行测试",
-    "写个函数", "实现一个", "脚本", "编译", "lint", "处理依赖", "创建项目",
-    "修改配置", "提交代码", "diff", "解释代码", "添加功能",
+    "写代码",
+    "修改代码",
+    "改代码",
+    "重构",
+    "修复",
+    "修一下",
+    "修 bug",
+    "修bug",
+    "bug",
+    "报错",
+    "分析报错",
+    "单元测试",
+    "补测试",
+    "编写测试",
+    "运行测试",
+    "写个函数",
+    "实现一个",
+    "脚本",
+    "编译",
+    "lint",
+    "处理依赖",
+    "创建项目",
+    "修改配置",
+    "提交代码",
+    "diff",
+    "解释代码",
+    "添加功能",
 ]
 WORK_KEYWORDS: list[str] = [
-    "查询", "报表", "审批", "部署", "通知", "工单", "生产库", "对账",
-    "数据库里跑", "跑一下报表", "导出报表", "月度", "日报", "周报",
-    "整理", "汇总", "邮件", "日程", "总结",
+    "查询",
+    "报表",
+    "审批",
+    "部署",
+    "通知",
+    "工单",
+    "生产库",
+    "对账",
+    "数据库里跑",
+    "跑一下报表",
+    "导出报表",
+    "月度",
+    "日报",
+    "周报",
+    "整理",
+    "汇总",
+    "邮件",
+    "日程",
+    "总结",
 ]
 
 _WORK_MODE_NAMES: dict[str, str] = {
@@ -88,7 +128,7 @@ class ModeRouter:
             ):
                 if token in text:
                     return canonical
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("mode_router LLM classify failed, fallback to prior: %s", exc)
         return self.prior_route(prompt, work_mode)
 
@@ -131,19 +171,45 @@ async def mode_router_node(state: AgentState, llm: Any | None) -> dict:
             },
             run_id=state.get("run_id"),
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("audit MODE_ROUTED failed: %s", exc)
 
-    # Code/Work 双模式执行纪律：精简版注入工具循环 system prompt
+    # Code/Work 双模式执行纪律：精简版注入工具循环 system prompt；
+    # 推理性能模式（inference_mode="performance"）下注入完整版全文。
     from agent.dual.prompt_loader import dual_rules_for
+
+    performance = str(state.get("inference_mode", "normal")) == "performance"
+
+    # OpenAI 原生工具调用探测（2026-08-07）：每次运行的首节点探测一次，
+    # 结果写入 state 后本次运行内固定不变；不可用/不支持 → 提示词协议。
+    tool_calling_mode = "prompt"
+    native_backend = None
+    if hasattr(llm, "resolve_native_backend"):
+        try:
+            resolved = await llm.resolve_native_backend()
+        except Exception:  # 探测故障绝不影响主链路
+            resolved = None
+        if resolved:
+            native_backend, _ = resolved
+            tool_calling_mode = "native"
 
     return {
         "routing": routing,
         "routing_overridden": overridden,
         "routing_declaration": declaration,
-        "dual_rules_addon": dual_rules_for(routing),
-        "trace": [record_trace(
-            "mode_router", "ok",
-            routing=routing, work_mode=work_mode, overridden=overridden,
-        )],
+        "dual_rules_addon": dual_rules_for(routing, performance=performance),
+        "tool_calling_mode": tool_calling_mode,
+        "native_backend": native_backend,
+        "trace": [
+            record_trace(
+                "mode_router",
+                "ok",
+                routing=routing,
+                work_mode=work_mode,
+                overridden=overridden,
+                performance=performance,
+                tool_calling_mode=tool_calling_mode,
+                native_backend=native_backend,
+            )
+        ],
     }

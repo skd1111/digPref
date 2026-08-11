@@ -14,6 +14,7 @@ CLAUDE.md §phase-14 红线：
   - 仅做几何/色彩矫正，**不做**超分（超分走 enhance.py）
   - 数据不出域（OpenCV 端侧推理）
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -24,7 +25,6 @@ from pathlib import Path
 from agent.image_processing.models import (
     BackendUnavailableError,
     CorrectionBackend,
-    CorrectionType,
     CorrectRequest,
     CorrectResponse,
     check_file_size,
@@ -43,6 +43,7 @@ class MockCorrectionBackend:
             check_file_size(request.input_path)
             if not is_supported_format(request.input_path):
                 from agent.image_processing.models import UnsupportedFormatError
+
                 raise UnsupportedFormatError(
                     fmt=Path(request.input_path).suffix.lstrip("."),
                     supported=frozenset({"png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff"}),
@@ -90,6 +91,7 @@ class MockCorrectionBackend:
 
 class OpenCVCorrectionBackend:
     """V1 OpenCV 矫正后端（占位）。"""
+
     name: str = "opencv"
 
     def __init__(self) -> None:

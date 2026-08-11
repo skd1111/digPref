@@ -23,6 +23,7 @@ Returns:
       ]
     }
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -39,6 +40,7 @@ class SchemaError(Exception):
 
 # ---- Public entry point ----------------------------------------------------
 
+
 async def run(args: dict) -> dict:
     started = time.monotonic()
     connection = args["connection"]
@@ -54,7 +56,7 @@ async def run(args: dict) -> dict:
         )
     except asyncio.TimeoutError as exc:
         raise SchemaError(f"schema introspection exceeded {timeout_sec}s timeout") from exc
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise SchemaError(f"schema failed: {exc}") from exc
 
     return {
@@ -67,6 +69,7 @@ async def run(args: dict) -> dict:
 
 
 # ---- Per-dialect implementation -------------------------------------------
+
 
 async def _introspect(dsn: str, dialect: str) -> list[dict]:
     if dialect in {"postgres", "redshift"}:
@@ -92,6 +95,7 @@ ORDER BY table_schema, table_name;
 
 async def _pg(dsn: str) -> list[dict]:
     import asyncpg
+
     conn = await asyncpg.connect(dsn)
     try:
         tables = await conn.fetch(_PG_QUERY)
@@ -105,22 +109,25 @@ async def _pg(dsn: str) -> list[dict]:
                 WHERE table_schema = $1 AND table_name = $2
                 ORDER BY ordinal_position
                 """,
-                schema, name,
+                schema,
+                name,
             )
-            out.append({
-                "schema": schema,
-                "name": name,
-                "kind": t["table_type"],
-                "columns": [
-                    {
-                        "name": c["column_name"],
-                        "type": c["data_type"],
-                        "nullable": c["is_nullable"].upper() == "YES",
-                        "default": c["column_default"],
-                    }
-                    for c in cols
-                ],
-            })
+            out.append(
+                {
+                    "schema": schema,
+                    "name": name,
+                    "kind": t["table_type"],
+                    "columns": [
+                        {
+                            "name": c["column_name"],
+                            "type": c["data_type"],
+                            "nullable": c["is_nullable"].upper() == "YES",
+                            "default": c["column_default"],
+                        }
+                        for c in cols
+                    ],
+                }
+            )
         return out
     finally:
         await conn.close()
@@ -142,12 +149,16 @@ ORDER BY ORDINAL_POSITION;
 
 
 async def _my(dsn: str) -> list[dict]:
-    import aiomysql
     from urllib.parse import urlparse
+
+    import aiomysql
+
     u = urlparse(dsn if "://" in dsn else f"mysql://{dsn}")
     conn = await aiomysql.connect(
-        host=u.hostname or "127.0.0.1", port=u.port or 3306,
-        user=u.username or "", password=u.password or "",
+        host=u.hostname or "127.0.0.1",
+        port=u.port or 3306,
+        user=u.username or "",
+        password=u.password or "",
         db=(u.path or "/").lstrip("/"),
     )
     try:
@@ -158,19 +169,22 @@ async def _my(dsn: str) -> list[dict]:
             for schema, name, kind in tables:
                 await cur.execute(_MY_COL_QUERY, (schema, name))
                 cols = await cur.fetchall()
-                out.append({
-                    "schema": schema,
-                    "name": name,
-                    "kind": kind,
-                    "columns": [
-                        {
-                            "name": c[0], "type": c[1],
-                            "nullable": c[2].upper() == "YES",
-                            "default": c[3],
-                        }
-                        for c in cols
-                    ],
-                })
+                out.append(
+                    {
+                        "schema": schema,
+                        "name": name,
+                        "kind": kind,
+                        "columns": [
+                            {
+                                "name": c[0],
+                                "type": c[1],
+                                "nullable": c[2].upper() == "YES",
+                                "default": c[3],
+                            }
+                            for c in cols
+                        ],
+                    }
+                )
             return out
     finally:
         conn.close()
@@ -178,6 +192,7 @@ async def _my(dsn: str) -> list[dict]:
 
 async def _sq(dsn: str) -> list[dict]:
     import aiosqlite
+
     path = dsn.split(":///", 1)[-1].split("?", 1)[0]
     db = await aiosqlite.connect(path)
     try:
@@ -194,22 +209,24 @@ async def _sq(dsn: str) -> list[dict]:
             # SQLite quirk: PRIMARY KEY columns don't have notnull=1 unless
             # they were also declared NOT NULL. Reconcile by treating pk>0
             # as implicitly NOT NULL (per SQL standard).
-            out.append({
-                "schema": "main",
-                "name": name,
-                "kind": kind.upper(),
-                "columns": [
-                    {
-                        "name": c[1],
-                        "type": c[2],
-                        # c[3]=notnull flag, c[5]=pk ordinal (0 if not PK)
-                        "nullable": not (bool(c[3]) or int(c[5] or 0) > 0),
-                        "default": c[4],
-                        "primary_key": int(c[5] or 0) > 0,
-                    }
-                    for c in cols
-                ],
-            })
+            out.append(
+                {
+                    "schema": "main",
+                    "name": name,
+                    "kind": kind.upper(),
+                    "columns": [
+                        {
+                            "name": c[1],
+                            "type": c[2],
+                            # c[3]=notnull flag, c[5]=pk ordinal (0 if not PK)
+                            "nullable": not (bool(c[3]) or int(c[5] or 0) > 0),
+                            "default": c[4],
+                            "primary_key": int(c[5] or 0) > 0,
+                        }
+                        for c in cols
+                    ],
+                }
+            )
         return out
     finally:
         await db.close()

@@ -4,7 +4,7 @@
  * 关键设计（spec §2.3 / §5.4）：
  *   - 单向：biznavStore → chatStore。**反向不通**，杜绝 React #300。
  *   - 监听 biznavStore.selectedFeatureId / drawerOpen + uiStore.mode
- *   - mode !== 'operator' → 清 chatStore.selectedFeatureContext
+ *   - Phase 2H：运营并入开发模式，mode !== 'full' → 清 chatStore.selectedFeatureContext
  *   - drawerOpen && selectedId → 写 chatStore.selectedFeatureContext
  *   - 不渲染任何 DOM（return null）
  *
@@ -24,7 +24,7 @@ export function BiznavChatBridge(): null {
 
   useEffect(() => {
     // mode 切换 / drawer 关闭 → 清空
-    if (mode !== 'operator' || !drawerOpen || !selectedId) {
+    if (mode !== 'full' || !drawerOpen || !selectedId) {
       setFeatureContext(null);
       return;
     }

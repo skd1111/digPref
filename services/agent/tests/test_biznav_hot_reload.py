@@ -9,13 +9,13 @@
 不覆盖（V1.3 阶段）：
 - watchfiles 异步 watcher 实际触发（依赖文件系统事件，CI 不稳定，留 V1.5 e2e 测试）
 """
+
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
 
 import pytest
-
 from agent.biznav.events import (
     EVT_YAML_RELOADED,
     consume_biznav_events,

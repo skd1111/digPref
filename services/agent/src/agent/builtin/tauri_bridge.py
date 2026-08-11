@@ -19,6 +19,7 @@ V2 增量（2026-07-31）：
     algorithm / mode / require_hitl 等），返回 ToolResult dict
     （ok / content / error / hint / meta / needs_hitl / risk_level）。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -26,47 +27,51 @@ from typing import Any
 
 from agent.builtin._tauri_runtime import (
     get_tauri_app_handle,
-    is_tauri_runtime_available,
 )
 from agent.builtin.models import ToolResult
 
-
 # V1.5 已实现的 Rust 工具名（历史集合，用于兼容判断）
-_V1_5_IMPLEMENTED_RUST_TOOLS: frozenset[str] = frozenset({
-    "stat_file",
-    "mkdir",
-    "find",
-    "glob",
-    "hash",
-    "base64",
-})
+_V1_5_IMPLEMENTED_RUST_TOOLS: frozenset[str] = frozenset(
+    {
+        "stat_file",
+        "mkdir",
+        "find",
+        "glob",
+        "hash",
+        "base64",
+    }
+)
 
 # V2 已实现的 Rust 工具名（9/9 全部真实实现；与 Rust 端 is_v2_implemented 镜像）
-_V2_IMPLEMENTED_RUST_TOOLS: frozenset[str] = frozenset({
-    "stat_file",
-    "mkdir",
-    "delete_file",
-    "move_file",
-    "find",
-    "glob",
-    "hash",
-    "base64",
-    "shell",
-})
+_V2_IMPLEMENTED_RUST_TOOLS: frozenset[str] = frozenset(
+    {
+        "stat_file",
+        "mkdir",
+        "delete_file",
+        "move_file",
+        "find",
+        "glob",
+        "hash",
+        "base64",
+        "shell",
+    }
+)
 
 # V3：Rust 工具 Python 原生兜底（运行时不可用时 dispatcher 直接本地执行）。
 # 3 个高危（V2）+ 5 个只读（V3，stat/find/glob/hash/base64）+ 1 个写入（mkdir）。
-_V2_PYTHON_FALLBACK_TOOLS: frozenset[str] = frozenset({
-    "delete_file",
-    "move_file",
-    "shell",
-    "stat_file",
-    "find",
-    "glob",
-    "hash",
-    "base64",
-    "mkdir",
-})
+_V2_PYTHON_FALLBACK_TOOLS: frozenset[str] = frozenset(
+    {
+        "delete_file",
+        "move_file",
+        "shell",
+        "stat_file",
+        "find",
+        "glob",
+        "hash",
+        "base64",
+        "mkdir",
+    }
+)
 
 # 默认 IPC 超时（秒）与重试次数
 DEFAULT_IPC_TIMEOUT_SEC: float = 30.0
@@ -208,7 +213,7 @@ async def invoke_rust_tool_sync(
     timeout = timeout_sec if timeout_sec is not None else DEFAULT_IPC_TIMEOUT_SEC
 
     last_error: Exception | None = None
-    for attempt in range(IPC_MAX_RETRIES + 1):
+    for _attempt in range(IPC_MAX_RETRIES + 1):
         try:
             payload = await asyncio.wait_for(
                 runtime.invoke(command, command_args),
@@ -219,7 +224,7 @@ async def invoke_rust_tool_sync(
             return _result_from_dict(payload, risk_level)
         except asyncio.TimeoutError as exc:
             last_error = exc
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             last_error = exc
             # 非超时错误不重试
             break

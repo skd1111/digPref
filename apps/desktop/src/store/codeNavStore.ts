@@ -39,6 +39,73 @@ async function readCurrentFileContext(filePath: string): Promise<string> {
   }
 }
 
+// ---------- AI 解释流式辅助 ----------
+
+/** 前端兜底剥离 think 推理内容（后端已剥离，这里双保险） */
+function stripThinkText(text: string): string {
+  if (!text) return text;
+  let cleaned = text
+    .replace(/<think>[\s\S]*?<\/think>/g, '')
+    .replace(/```think[\s\S]*?```/g, '');
+  const idx = cleaned.lastIndexOf('<think');
+  if (idx !== -1) cleaned = cleaned.slice(0, idx);
+  return cleaned.trim();
+}
+
+interface ExplainStreamBody {
+  symbol: string;
+  current_file: string;
+  line?: number;
+  context?: string;
+  selection_start_line?: number | null;
+  selection_end_line?: number | null;
+  selection_text?: string | null;
+}
+
+interface ExplainStreamResult {
+  symbol: string;
+  text: string;
+  source: 'llm' | 'mock';
+  confidence: number;
+  backend?: string | null;
+}
+
+/**
+ * 调流式解释：订阅 agent://codenav_explain_delta 增量事件实时累积，
+ * Tauri invoke 返回最终结果。onDelta 每次收到增量时回调（已剥离 think）。
+ */
+async function streamExplain(
+  body: ExplainStreamBody,
+  onDelta: (acc: string) => void,
+): Promise<ExplainStreamResult> {
+  const { listen, EVT } = await import('@/ipc/events');
+  const { ipc } = await import('@/ipc/invoke');
+  let acc = '';
+  let done = false;
+  const unsubP = listen<{ symbol?: string; delta?: string }>(
+    EVT.CODENAV_EXPLAIN_DELTA,
+    (e) => {
+      const { symbol: evtSymbol, delta } = e.payload;
+      if (done || !delta || (evtSymbol && evtSymbol !== body.symbol)) return;
+      acc += delta;
+      onDelta(stripThinkText(acc));
+    },
+  );
+  try {
+    const result = await ipc.codeNavExplainStream(body);
+    // 事件与 invoke 返回存在轻微竞态：收尾时用最终结果补齐一次
+    const finalText = stripThinkText(result.text || acc);
+    onDelta(finalText);
+    return { ...result, text: finalText };
+  } finally {
+    // 给 in-flight 事件留一点落盘时间再退订
+    await new Promise((r) => setTimeout(r, 80));
+    done = true;
+    const unsub = await unsubP.catch(() => null);
+    unsub?.();
+  }
+}
+
 // ---------- AI 解释 mock ----------
 
 const AI_EXPLANATION_TEMPLATES: Record<SymbolKind, string[]> = {
@@ -265,29 +332,50 @@ export const useCodeNavStore = create<CodeNavState>((set, get) => ({
       status: 'running',
     });
     try {
-      // 真实后端调用（POST /codenav/explain）—— LLM 真返回语义解释
-      const { ipc } = await import('@/ipc/invoke');
-      const result = await ipc.codeNavExplain({
-        symbol: sym.name,
-        current_file: sym.file_path,
-        line: sym.start_line,
-        context: sym.snippet ?? '',
-      });
+      // 流式调用（POST /codenav/explain/stream）—— 增量实时写入控制台
+      const result = await streamExplain(
+        {
+          symbol: sym.name,
+          current_file: sym.file_path,
+          line: sym.start_line,
+          context: sym.snippet ?? '',
+        },
+        (acc) => {
+          useTraceStore.getState().updateConsole(consoleId, {
+            text: `⏳ 解释中… · ${acc.length} 字`,
+            fullText: acc,
+            status: 'running',
+          });
+        },
+      );
       const latency = Date.now() - t0;
+      const finalText = result.text.trim();
       set({
         isExplaining: false,
         aiExplanation: {
           symbol_id: symbolId,
-          text: result.text || `（${sym.name}）暂无解释`,
+          text: finalText || `（${sym.name}）暂无解释`,
           confidence: result.confidence ?? 0.5,
           latency_ms: latency,
           created_at: Date.now(),
         },
       });
+      // 空正文（推理被截断等）→ 标记失败，不伪装成功
+      if (!finalText) {
+        useTraceStore.getState().updateConsole(consoleId, {
+          text: '✗ 模型未返回解释内容（推理可能被截断），请重试或更换 backend',
+          fullText: '',
+          source: result.source,
+          status: 'err',
+          latencyMs: latency,
+          backend: result.backend ?? null,
+        });
+        return;
+      }
       // 原地更新 running 那条（视觉上从 ⏳ ▶ 变 ✓ 文本 + 耗时）
       useTraceStore.getState().updateConsole(consoleId, {
-        text: result.source === 'mock' ? `（mock）${result.text}` : result.text,
-        fullText: result.text,
+        text: result.source === 'mock' ? `（mock）${finalText}` : finalText,
+        fullText: finalText,
         source: result.source,
         status: 'ok',
         latencyMs: latency,
@@ -341,35 +429,56 @@ export const useCodeNavStore = create<CodeNavState>((set, get) => ({
       status: 'running',
     });
     try {
-      const { ipc } = await import('@/ipc/invoke');
       const context = await readCurrentFileContext(ctx.current_file);
-      const result = await ipc.codeNavExplain({
-        symbol: ctx.symbol,
-        current_file: ctx.current_file,
-        line: ctx.line,
-        context,
-        selection_start_line: ctx.selection_start_line ?? null,
-        selection_end_line: ctx.selection_end_line ?? null,
-        selection_text: ctx.selection_text ?? null,
-      });
+      const result = await streamExplain(
+        {
+          symbol: ctx.symbol,
+          current_file: ctx.current_file,
+          line: ctx.line,
+          context,
+          selection_start_line: ctx.selection_start_line ?? null,
+          selection_end_line: ctx.selection_end_line ?? null,
+          selection_text: ctx.selection_text ?? null,
+        },
+        (acc) => {
+          useTraceStore.getState().updateConsole(consoleId, {
+            text: `⏳ 解释中… · ${acc.length} 字`,
+            fullText: acc,
+            status: 'running',
+          });
+        },
+      );
       const latency = Date.now() - t0;
+      const finalText = result.text.trim();
       set({
         isExplaining: false,
         aiExplanation: {
           symbol_id: `ctx-${ctx.symbol}-${ctx.line}`,
-          text: result.text,
+          text: finalText || '（模型未返回解释内容）',
           confidence: result.confidence,
           latency_ms: latency,
           created_at: Date.now(),
         },
       });
+      // 空正文（推理被截断等）→ 标记失败，不伪装成功
+      if (!finalText) {
+        useTraceStore.getState().updateConsole(consoleId, {
+          text: '✗ 模型未返回解释内容（推理可能被截断），请重试或更换 backend',
+          fullText: '',
+          source: result.source,
+          status: 'err',
+          latencyMs: latency,
+          backend: result.backend ?? null,
+        });
+        return;
+      }
       // 原地更新 running 那条 —— 视觉上从 ⏳ ▶ 变 ✓ 文本 + 耗时（流式体验）
       const okText = ctx.selection_label
         ? `✓ ${ctx.symbol}（${ctx.selection_label}）`
         : `✓ ${ctx.symbol}`;
       useTraceStore.getState().updateConsole(consoleId, {
-        text: result.source === 'mock' ? `（mock）${result.text}` : okText,
-        fullText: result.text,
+        text: result.source === 'mock' ? `（mock）${finalText}` : okText,
+        fullText: finalText,
         source: result.source,
         status: 'ok',
         latencyMs: latency,

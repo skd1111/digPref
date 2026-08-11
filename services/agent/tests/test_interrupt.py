@@ -7,12 +7,12 @@
 时序纪律：所有起了后台轮询任务的用例都 await 到任务自然结束
 （找到决策即返回 / 超时即返回），不留悬挂 task 跨测试污染事件循环。
 """
+
 from __future__ import annotations
 
 import asyncio
 
 import pytest
-
 from agent.graph.interrupt import (
     _LOCAL_DECISIONS,
     check_decision,

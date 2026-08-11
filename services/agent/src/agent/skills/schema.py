@@ -1,4 +1,5 @@
 """Skill YAML JSON Schema 校验 + DSN 形态字符串检测。"""
+
 from __future__ import annotations
 
 import re
@@ -49,6 +50,10 @@ SKILL_JSON_SCHEMA: dict = {
                 },
             },
         },
+        # 专家团预设（可选，旧 YAML 缺省不写也合法）
+        "required_expert_team_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 50},
+        "materials": {"type": "array", "items": {"type": "string"}, "maxItems": 50},
+        "deliverables": {"type": "array", "items": {"type": "string"}, "maxItems": 50},
     },
 }
 

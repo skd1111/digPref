@@ -1,4 +1,5 @@
 """熔断器测试。"""
+
 import time
 
 from agent.llm.circuit_breaker import (

@@ -1,10 +1,9 @@
 """Phase 2B V0 · SSH 会话事件 emit 机制（仿照 builtin.events / image_processing.events）。"""
+
 from __future__ import annotations
 
 import asyncio
 from collections import deque
-from typing import Any
-
 
 _ssh_events: deque[tuple[str, dict]] = deque()
 _ssh_lock = asyncio.Lock()

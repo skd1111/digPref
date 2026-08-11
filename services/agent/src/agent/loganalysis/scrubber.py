@@ -12,13 +12,13 @@ CLAUDE.md §6 安全红线（合规）：
 - 脱敏在 LLM 调用前完成（永远不让原始 PII 进 LLM）
 - 原始 PII 永远不写任何缓存（log_analysis_cache 只存脱敏后的 payload）
 """
+
 from __future__ import annotations
 
 import re
-from typing import Iterable
+from collections.abc import Iterable
 
 from agent.loganalysis.models import ErrorBlock
-
 
 # ---- 正则模式 -------------------------------------------------------------
 
@@ -124,5 +124,6 @@ def scrub_error_blocks(blocks: Iterable[ErrorBlock]) -> list[ErrorBlock]:
 def _stack_fingerprint(stack: list[str]) -> str:
     """简单的 stack 指纹（脱敏后内容稳定即可，用 zlib + adler32）。"""
     import zlib
+
     blob = "\n".join(stack).encode("utf-8", errors="replace")
-    return f"{zlib.adler32(blob) & 0xffffffff:08x}"
+    return f"{zlib.adler32(blob) & 0xFFFFFFFF:08x}"

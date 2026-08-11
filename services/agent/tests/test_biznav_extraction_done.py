@@ -8,13 +8,12 @@
 策略：直接调 FastAPI TestClient 触发 /biznav/extract；后台任务用 asyncio.run 拉出
 emit 的事件。
 """
+
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 
 import pytest
-
 from agent.biznav.events import (
     EVT_EXTRACTION_DONE,
     consume_biznav_events,
@@ -32,12 +31,11 @@ def _clean_biznav_events():
 @pytest.mark.asyncio
 async def test_extraction_done_event_emitted_on_success(tmp_path, monkeypatch):
     """提取任务成功 → emit success=True。"""
+    from agent.biznav import api as biznav_api
+    from agent.biznav import extractor as biznav_extractor
+    from agent.biznav.extractor import ExtractionResult
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-
-    from agent.biznav import api as biznav_api
-    from agent.biznav.extractor import ExtractionResult
-    from agent.biznav import extractor as biznav_extractor
 
     # 准备一个空项目目录（_run 要 root_path.exists() 为真）
     project_root = tmp_path / "demo_project"
@@ -50,8 +48,11 @@ async def test_extraction_done_event_emitted_on_success(tmp_path, monkeypatch):
 
         async def extract_all(self):
             return ExtractionResult(
-                total_files=12, processed_files=12, features_generated=3,
-                job_id=0, errors=[],
+                total_files=12,
+                processed_files=12,
+                features_generated=3,
+                job_id=0,
+                errors=[],
             )
 
     # patch 真实模块（api.py inline `from .extractor import FeatureExtractor`）
@@ -77,7 +78,7 @@ async def test_extraction_done_event_emitted_on_success(tmp_path, monkeypatch):
     assert len(events) >= 1
     done_events = [e for e in events if e[0] == EVT_EXTRACTION_DONE]
     assert len(done_events) == 1
-    kind, payload = done_events[0]
+    _kind, payload = done_events[0]
     assert payload["success"] is True
     assert payload["job_id"] == job_id
     assert payload["project_name"] == "demo"
@@ -88,11 +89,10 @@ async def test_extraction_done_event_emitted_on_success(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_extraction_done_event_emitted_on_failure(tmp_path, monkeypatch):
     """提取任务抛错 → emit success=False + error 字段。"""
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
     from agent.biznav import api as biznav_api
     from agent.biznav import extractor as biznav_extractor
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
 
     project_root = tmp_path / "demo_project"
     project_root.mkdir()
@@ -124,6 +124,6 @@ async def test_extraction_done_event_emitted_on_failure(tmp_path, monkeypatch):
 
     done_events = [e for e in events if e[0] == EVT_EXTRACTION_DONE]
     assert len(done_events) == 1
-    kind, payload = done_events[0]
+    _kind, payload = done_events[0]
     assert payload["success"] is False
     assert "simulated LLM crash" in payload["error"]

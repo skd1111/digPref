@@ -1,7 +1,8 @@
 """Tests for graph/state.py — AgentState + helpers."""
+
 from __future__ import annotations
 
-from agent.graph.state import empty_state, next_step, advance, record_trace
+from agent.graph.state import advance, empty_state, next_step, record_trace
 
 
 class TestEmptyState:

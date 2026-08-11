@@ -13,6 +13,7 @@
 
 架构决策（2026-07-31）：不引入 Redis / PostgreSQL —— SQLite WAL 单文件即可。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -20,7 +21,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import aiosqlite
 
@@ -43,9 +44,7 @@ class StateVersionConflict(RuntimeError):
     """乐观锁冲突：expected_version 与库中当前版本不一致。"""
 
     def __init__(self, task_id: str, expected: int, actual: int | None) -> None:
-        super().__init__(
-            f"state_version 冲突 task={task_id} expected={expected} actual={actual}"
-        )
+        super().__init__(f"state_version 冲突 task={task_id} expected={expected} actual={actual}")
         self.task_id = task_id
         self.expected = expected
         self.actual = actual
@@ -81,7 +80,7 @@ class StateRepo:
         *,
         task_id: str,
         parent_run_id: str,
-        parent_task_id: Optional[str],
+        parent_task_id: str | None,
         correlation_id: str,
         idempotency_token: str,
         depth: int,
@@ -112,10 +111,20 @@ class StateRepo:
                               0, 0, 0, ?, NULL, NULL, ?, ?)
                     """,
                     (
-                        task_id, parent_run_id, parent_task_id, correlation_id,
-                        idempotency_token, depth, task_type, priority, status,
-                        strategy, 1 if local_only else 0,
-                        _dumps(spec), now, now,
+                        task_id,
+                        parent_run_id,
+                        parent_task_id,
+                        correlation_id,
+                        idempotency_token,
+                        depth,
+                        task_type,
+                        priority,
+                        status,
+                        strategy,
+                        1 if local_only else 0,
+                        _dumps(spec),
+                        now,
+                        now,
                     ),
                 )
                 await db.commit()
@@ -125,18 +134,16 @@ class StateRepo:
         assert row is not None
         return row
 
-    async def get_task(self, task_id: str) -> Optional[dict[str, Any]]:
+    async def get_task(self, task_id: str) -> dict[str, Any] | None:
         db = await self._connect()
         try:
-            cur = await db.execute(
-                "SELECT * FROM sub_agent_tasks WHERE task_id = ?", (task_id,)
-            )
+            cur = await db.execute("SELECT * FROM sub_agent_tasks WHERE task_id = ?", (task_id,))
             row = await cur.fetchone()
             return dict(row) if row else None
         finally:
             await db.close()
 
-    async def find_by_idempotency(self, token: str) -> Optional[dict[str, Any]]:
+    async def find_by_idempotency(self, token: str) -> dict[str, Any] | None:
         db = await self._connect()
         try:
             cur = await db.execute(
@@ -179,7 +186,9 @@ class StateRepo:
 
                 new_version = actual + 1
                 sets = [
-                    "status = ?", "state_version = ?", "updated_at = ?",
+                    "status = ?",
+                    "state_version = ?",
+                    "updated_at = ?",
                 ]
                 params: list[Any] = [status, new_version, _now_iso()]
                 for column, value in (
@@ -229,8 +238,7 @@ class StateRepo:
         db = await self._connect()
         try:
             cur = await db.execute(
-                f"SELECT * FROM sub_agent_tasks {where} "
-                "ORDER BY created_at DESC LIMIT ?",
+                f"SELECT * FROM sub_agent_tasks {where} ORDER BY created_at DESC LIMIT ?",
                 (*params, limit),
             )
             return [dict(r) for r in await cur.fetchall()]
@@ -260,8 +268,7 @@ class StateRepo:
                         byte_size, preview, uri, created_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (artifact_id, task_id, kind, content_hash,
-                     byte_size, preview, uri, _now_iso()),
+                    (artifact_id, task_id, kind, content_hash, byte_size, preview, uri, _now_iso()),
                 )
                 await db.commit()
             finally:
@@ -301,8 +308,15 @@ class StateRepo:
                         enqueued_at, handled_at
                     ) VALUES (?, ?, ?, ?, ?, ?, 'open', NULL, NULL, ?, NULL)
                     """,
-                    (task_id, correlation_id, idempotency_token,
-                     _dumps(payload or {}), last_error, attempts, _now_iso()),
+                    (
+                        task_id,
+                        correlation_id,
+                        idempotency_token,
+                        _dumps(payload or {}),
+                        last_error,
+                        attempts,
+                        _now_iso(),
+                    ),
                 )
                 await db.commit()
             finally:
@@ -315,8 +329,7 @@ class StateRepo:
         try:
             if state:
                 cur = await db.execute(
-                    "SELECT * FROM sub_agent_dlq WHERE state = ? "
-                    "ORDER BY enqueued_at DESC LIMIT ?",
+                    "SELECT * FROM sub_agent_dlq WHERE state = ? ORDER BY enqueued_at DESC LIMIT ?",
                     (state, limit),
                 )
             else:
@@ -372,8 +385,14 @@ class StateRepo:
                         task_id, correlation_id, metric, value, labels_json, ts
                     ) VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    (task_id, correlation_id, metric, float(value),
-                     _dumps(labels or {}), _now_iso()),
+                    (
+                        task_id,
+                        correlation_id,
+                        metric,
+                        float(value),
+                        _dumps(labels or {}),
+                        _now_iso(),
+                    ),
                 )
                 await db.commit()
             finally:
@@ -409,9 +428,7 @@ class StateRepo:
             by_status = {r["status"]: int(r["n"]) for r in await cur.fetchall()}
             cur = await db.execute("SELECT COUNT(*) AS n FROM sub_agent_tasks")
             total = int((await cur.fetchone())["n"])
-            cur = await db.execute(
-                "SELECT state, COUNT(*) AS n FROM sub_agent_dlq GROUP BY state"
-            )
+            cur = await db.execute("SELECT state, COUNT(*) AS n FROM sub_agent_dlq GROUP BY state")
             dlq = {r["state"]: int(r["n"]) for r in await cur.fetchall()}
             cur = await db.execute("SELECT COUNT(*) AS n FROM sub_agent_artifacts")
             artifacts = int((await cur.fetchone())["n"])

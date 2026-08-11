@@ -12,31 +12,39 @@
     5. 任务类别无策略 → 落回 conservative
     6. 应用策略
 """
+
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 import yaml
 from pydantic import ValidationError
 
 from agent.llm.dspark.config import (
     DEFAULT_POLICIES,
-    DSparkConfig,
     SPECULATIVE_OFF,
+    DSparkConfig,
     SpeculativePolicy,
     policy_for_mode,
 )
-
 
 logger = logging.getLogger(__name__)
 
 
 # 必须在 import 时由 router 注入（避免循环）；V0 用默认值
 _LOCAL_ONLY_TASKS: frozenset[str] = frozenset(
-    {"intent", "repair", "skill_router", "data_summary", "biznav_extract",
-     "local_intent", "vision_understand", "log_level_classify"}
+    {
+        "intent",
+        "repair",
+        "skill_router",
+        "data_summary",
+        "biznav_extract",
+        "local_intent",
+        "vision_understand",
+        "log_level_classify",
+    }
 )
 
 

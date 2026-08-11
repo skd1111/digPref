@@ -104,7 +104,7 @@ class VitePreviewManager:
             )
         else:
             cmd = _resolve_vite_command(project_path)
-            args = [cmd, "--config", config_path, "--port", str(port), "--strictPort"]
+            args = [*cmd, "--config", config_path, "--port", str(port), "--strictPort"]
             proc = await asyncio.create_subprocess_exec(
                 *args,
                 cwd=project_path,
@@ -287,28 +287,32 @@ class VitePreviewManager:
                 return
 
 
-def _resolve_vite_command(project_path: str | Path) -> str:
-    """解析 Vite 可执行路径。
+def _resolve_vite_command(project_path: str | Path) -> list[str]:
+    """解析 Vite 可执行命令（参数列表）。
 
     优先项目内 node_modules（vite bin 脚本 / .bin 可执行），
     其次全局 PATH 上的 vite。找不到抛 ViteUnavailableError。
+
+    返回 argv 列表而非单个字符串 —— create_subprocess_exec 把含空格
+    的复合字符串当成单个可执行文件名，Windows 上必然失败。
     """
     root = Path(project_path)
     local_bin_js = root / "node_modules" / "vite" / "bin" / "vite.js"
     if local_bin_js.is_file():
         node = shutil.which("node")
         if node:
-            return f"{node} {local_bin_js.as_posix()}"
+            return [node, local_bin_js.as_posix()]
     for candidate in (
         root / "node_modules" / ".bin" / "vite",
         root / "node_modules" / ".bin" / "vite.cmd",
     ):
         if candidate.exists():
-            return str(candidate)
-    if shutil.which("vite"):
-        return "vite"
+            return [str(candidate)]
+    global_vite = shutil.which("vite")
+    if global_vite:
+        return [global_vite]
     if sys.platform == "win32" and (root / "node_modules" / ".bin" / "vite.exe").exists():
-        return str(root / "node_modules" / ".bin" / "vite.exe")
+        return [str(root / "node_modules" / ".bin" / "vite.exe")]
     raise ViteUnavailableError(
         "未找到 Vite：项目 node_modules 缺失或未安装 vite。"
         "请先运行依赖安装（POST /preview/install）或安装 Node.js ≥ 18。"

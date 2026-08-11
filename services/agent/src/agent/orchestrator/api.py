@@ -26,6 +26,7 @@ V1.5（新增）：
     `/queue/stats` / `/cancel_all` / `/tree/stats` 都必须在 `/{sub_agent_id}` 通配符
     之前，否则会被吞掉。
 """
+
 from __future__ import annotations
 
 import json
@@ -59,7 +60,7 @@ async def spawn_sub_agent(spec: SubAgentSpec) -> dict:
             status_code=400,
             detail=f"派生树硬上限触发：{e.reason} 当前={e.current} 上限={e.limit}",
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.exception("[orchestrator] spawn crashed: %s", e)
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
     return report.model_dump(mode="json")
@@ -72,37 +73,43 @@ async def list_sub_agents() -> dict:
     items: list[dict[str, Any]] = []
     try:
         rows = await orch.repo.list_tasks(limit=200)
-    except Exception:  # noqa: BLE001
+    except Exception:
         rows = []
     for r in rows:
-        items.append({
-            "task_id": r.get("task_id"),
-            "sub_agent_id": r.get("task_id"),
-            "parent_run_id": r.get("parent_run_id"),
-            "parent_sub_agent_id": r.get("parent_task_id"),
-            "status": r.get("status"),
-            "task_type": r.get("task_type"),
-            "started_at": r.get("created_at"),
-            "finished_at": r.get("updated_at"),
-            "latency_ms": r.get("latency_ms", 0),
-            "confidence": 0.0,
-            "backend": r.get("backend"),
-            "strategy": r.get("strategy"),
-        })
+        items.append(
+            {
+                "task_id": r.get("task_id"),
+                "sub_agent_id": r.get("task_id"),
+                "parent_run_id": r.get("parent_run_id"),
+                "parent_sub_agent_id": r.get("parent_task_id"),
+                "status": r.get("status"),
+                "task_type": r.get("task_type"),
+                "started_at": r.get("created_at"),
+                "finished_at": r.get("updated_at"),
+                "latency_ms": r.get("latency_ms", 0),
+                "confidence": 0.0,
+                "backend": r.get("backend"),
+                "strategy": r.get("strategy"),
+            }
+        )
     for r in orch.list_reports():
         if any(it.get("sub_agent_id") == r.sub_agent_id for it in items):
             continue
-        items.append({
-            "sub_agent_id": r.sub_agent_id,
-            "parent_run_id": r.parent_run_id,
-            "parent_sub_agent_id": r.parent_sub_agent_id,
-            "status": r.status.value,
-            "task_type": (r.state_delta.fields_added.get("task_type") if r.state_delta else None),
-            "started_at": r.started_at.isoformat() if r.started_at else None,
-            "finished_at": r.finished_at.isoformat() if r.finished_at else None,
-            "latency_ms": r.latency_ms,
-            "confidence": r.confidence,
-        })
+        items.append(
+            {
+                "sub_agent_id": r.sub_agent_id,
+                "parent_run_id": r.parent_run_id,
+                "parent_sub_agent_id": r.parent_sub_agent_id,
+                "status": r.status.value,
+                "task_type": (
+                    r.state_delta.fields_added.get("task_type") if r.state_delta else None
+                ),
+                "started_at": r.started_at.isoformat() if r.started_at else None,
+                "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+                "latency_ms": r.latency_ms,
+                "confidence": r.confidence,
+            }
+        )
     return {
         "total_nodes": orch.total_nodes,
         "items": items,
@@ -159,7 +166,7 @@ async def run_until_drained(timeout: float = 60.0) -> dict:
     orch = get_orchestrator()
     try:
         reports = await orch.run_until_drained(timeout=timeout)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.exception("[orchestrator] run_until_drained crashed: %s", e)
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
     return {
@@ -183,7 +190,7 @@ async def list_dlq(state: str = "open", limit: int = 50) -> dict:
     orch = get_orchestrator()
     try:
         rows = await orch.repo.list_dlq(state=state, limit=limit)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
     return {"state": state, "count": len(rows), "items": rows}
 
@@ -200,10 +207,13 @@ async def requeue_dlq(task_id: str, note: str | None = None) -> dict:
         if spec_dict:
             spec = SubAgentSpec.model_validate(json.loads(spec_dict))
             await orch.dispatch(spec)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         raise HTTPException(status_code=500, detail=f"requeue dispatch 失败: {e}")
     ok = await orch.repo.mark_dlq(
-        task_id=task_id, state="requeued", note=note, handled_by="api",
+        task_id=task_id,
+        state="requeued",
+        note=note,
+        handled_by="api",
     )
     if not ok:
         raise HTTPException(status_code=404, detail=f"DLQ 不存在 task_id={task_id}")
@@ -214,7 +224,10 @@ async def requeue_dlq(task_id: str, note: str | None = None) -> dict:
 async def close_dlq(task_id: str, note: str | None = None) -> dict:
     orch = get_orchestrator()
     ok = await orch.repo.mark_dlq(
-        task_id=task_id, state="closed", note=note, handled_by="api",
+        task_id=task_id,
+        state="closed",
+        note=note,
+        handled_by="api",
     )
     if not ok:
         raise HTTPException(status_code=404, detail=f"DLQ 不存在 task_id={task_id}")

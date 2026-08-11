@@ -1,10 +1,10 @@
 """Phase 18：chat 请求透传 workMode / autonomy 到状态机初始状态。"""
+
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from agent.api.chat import ChatRequest
+from pydantic import ValidationError
 
 
 def test_chat_request_accepts_phase18_fields():

@@ -15,6 +15,7 @@ CLAUDE.md §2 红线：
 2. local_small 不可用 → 调 llm.classify_intent（走 Ollama 候选）
 3. 都不可用 → fallback 到关键词分类（与原 intent 一致）
 """
+
 from __future__ import annotations
 
 import logging
@@ -32,16 +33,54 @@ CANDIDATE_INTENTS: list[str] = ["query", "mutate", "orchestrate", "chitchat"]
 # ---- 关键词分类（降级路径）-----------------------------------------------
 
 _KEYWORDS: dict[str, list[str]] = {
-    "query": ["查", "看", "列表", "统计", "搜索", "检索", "多少", "select", "show", "list", "count", "get"],
-    "mutate": ["改", "更新", "创建", "删除", "插入", "修改", "写入", "update", "delete", "insert", "create", "drop"],
-    "orchestrate": ["部署", "重启", "回滚", "发布", "上线", "构建", "打包", "deploy", "restart", "rollback", "build"],
+    "query": [
+        "查",
+        "看",
+        "列表",
+        "统计",
+        "搜索",
+        "检索",
+        "多少",
+        "select",
+        "show",
+        "list",
+        "count",
+        "get",
+    ],
+    "mutate": [
+        "改",
+        "更新",
+        "创建",
+        "删除",
+        "插入",
+        "修改",
+        "写入",
+        "update",
+        "delete",
+        "insert",
+        "create",
+        "drop",
+    ],
+    "orchestrate": [
+        "部署",
+        "重启",
+        "回滚",
+        "发布",
+        "上线",
+        "构建",
+        "打包",
+        "deploy",
+        "restart",
+        "rollback",
+        "build",
+    ],
 }
 
 
 def _fallback_classify(text: str) -> str:
     """最简关键词分类（无 LLM 时的兜底）。"""
     text_lower = text.lower()
-    scores: dict[str, int] = {intent: 0 for intent in CANDIDATE_INTENTS}
+    scores: dict[str, int] = dict.fromkeys(CANDIDATE_INTENTS, 0)
     for intent, keywords in _KEYWORDS.items():
         for kw in keywords:
             if kw.lower() in text_lower:
@@ -104,9 +143,12 @@ async def local_intent_node(state: AgentState, llm) -> dict:
 
     return {
         "intent": intent,
-        "trace": [record_trace(
-            "local_intent", "ok",
-            intent=intent,
-            backend=backend,
-        )],
+        "trace": [
+            record_trace(
+                "local_intent",
+                "ok",
+                intent=intent,
+                backend=backend,
+            )
+        ],
     }

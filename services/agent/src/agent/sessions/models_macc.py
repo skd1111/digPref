@@ -7,15 +7,16 @@
 - L2 表示层：GistToken（占位，V1 不实装真正编码器）
 - 路由：CompressionContext / CompressionStrategy / CompressionResult
 """
+
 from __future__ import annotations
 
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Literal, Optional
-
+from typing import Any, Literal
 
 # ---- L3 语义记忆 ----------------------------------------------------------
+
 
 @dataclass
 class SemanticRule:
@@ -48,7 +49,7 @@ class SemanticRule:
         rule_text: str,
         confidence: float = 0.0,
         source_event_ids: list[str] | None = None,
-    ) -> "SemanticRule":
+    ) -> SemanticRule:
         return cls(
             id=str(uuid.uuid4()),
             session_id=session_id,
@@ -111,7 +112,7 @@ class EventNode:
         result: str = "",
         status: EventStatus = "ok",
         metadata: dict | None = None,
-    ) -> "EventNode":
+    ) -> EventNode:
         return cls(
             id=str(uuid.uuid4()),
             session_id=session_id,
@@ -150,6 +151,7 @@ class EventEdge:
 
 # ---- L3 工作记忆 ----------------------------------------------------------
 
+
 @dataclass
 class WorkingMemoryAnchor:
     """关键状态变量锚点 —— 即便窗口滑动也不丢失（设计 §2.1）。
@@ -166,7 +168,9 @@ class WorkingMemoryAnchor:
 # 架构师约定的关键状态变量锚点表（CLAUDE.md §6 备忘）
 DEFAULT_ANCHORS: tuple[WorkingMemoryAnchor, ...] = (
     WorkingMemoryAnchor(node_name="hitl_gate", vars=["approval_id", "pending_decision"]),
-    WorkingMemoryAnchor(node_name="tool_runner", vars=["last_tool_name", "last_tool_status", "affected_rows"]),
+    WorkingMemoryAnchor(
+        node_name="tool_runner", vars=["last_tool_name", "last_tool_status", "affected_rows"]
+    ),
     WorkingMemoryAnchor(node_name="repair", vars=["retry_count", "error_message"]),
     WorkingMemoryAnchor(node_name="intent", vars=["intent", "active_skill_id"]),
 )
@@ -200,7 +204,7 @@ class CompressionContext:
     token_count: int = 0
     message_count: int = 0
     task_complexity: Literal["simple", "medium", "complex", "reasoning"] = "medium"
-    memory_entropy: float = 0.0         # 0-1（信息重复度）
+    memory_entropy: float = 0.0  # 0-1（信息重复度）
     has_multimodal: bool = False
     has_code: bool = False
     has_logs: bool = False
@@ -211,12 +215,12 @@ class CompressionContext:
 
 # 压缩策略枚举（设计 §5.1）
 CompressionStrategy = Literal[
-    "NONE",            # 原文全量（短对话）
-    "WORKING_ONLY",    # 仅 L3 工作记忆滑动窗口
-    "MEMORY",          # L3 全三层（工作 + 情景 + 语义）
-    "GIST",            # L2 Gist Token 压缩
-    "HYBRID",          # 混合（默认）
-    "KV_CACHE",        # L1 KV Cache 压缩（由 DSpark 实际执行）
+    "NONE",  # 原文全量（短对话）
+    "WORKING_ONLY",  # 仅 L3 工作记忆滑动窗口
+    "MEMORY",  # L3 全三层（工作 + 情景 + 语义）
+    "GIST",  # L2 Gist Token 压缩
+    "HYBRID",  # 混合（默认）
+    "KV_CACHE",  # L1 KV Cache 压缩（由 DSpark 实际执行）
 ]
 
 
@@ -227,13 +231,13 @@ class CompressionResult:
     strategy: CompressionStrategy
     before_tokens: int
     after_tokens: int
-    compression_ratio: float             # after / before
+    compression_ratio: float  # after / before
     layers_used: list[str] = field(default_factory=list)  # ["L1", "L2", "L3"]
     working_memory: list[Any] = field(default_factory=list)  # WorkingMemorySlice（待 V1.5）
     event_graph_nodes: list[EventNode] = field(default_factory=list)
     semantic_rules: list[SemanticRule] = field(default_factory=list)
     gist_tokens: list[GistToken] = field(default_factory=list)
-    formatted_prompt: str = ""          # 拼好的 Prompt 片段
+    formatted_prompt: str = ""  # 拼好的 Prompt 片段
     elapsed_ms: int = 0
     backend: str = "router"
 

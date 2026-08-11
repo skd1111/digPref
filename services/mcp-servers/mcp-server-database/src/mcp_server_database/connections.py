@@ -1,4 +1,5 @@
 """Connection pool — keyed by logical name (configured via env/secret vault)."""
+
 from __future__ import annotations
 
 from mcp_server_database.config import Settings

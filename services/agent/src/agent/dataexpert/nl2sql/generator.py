@@ -9,11 +9,14 @@
 注意：nl2sql 本身只看裁剪后的 3-5 表结构 + 业务字典（不含原始数据行），
 可走 LMRouter 正常路由（云端大模型）。
 """
+
 from __future__ import annotations
 
 from typing import Any
 
 from agent.dataexpert.models import TableSchema
+from agent.llm.json_discipline import extract_sql
+from agent.llm.prompts import load_prompt, render_prompt
 
 
 # Few-shot 案例
@@ -42,47 +45,40 @@ def build_prompt(
     Returns:
         完整的 prompt 文本。
     """
-    parts: list[str] = []
-
-    # 系统指令
-    parts.append(
-        "你是一个金融数据分析 SQL 专家。根据用户的自然语言问题，"
-        "生成只读 SELECT SQL（禁止任何写操作）。\n"
-        "规则：\n"
-        "  1. 只生成 SELECT 语句，禁止 UPDATE/DELETE/DROP/INSERT/ALTER 等写操作\n"
-        "  2. 使用提供的表结构和字段，不要编造不存在的表或字段\n"
-        "  3. 业务术语必须使用字典中的编码值（如 '成功' → status='SUC'）\n"
-        "  4. 只输出 SQL，不要解释\n"
+    return render_prompt(
+        load_prompt("nl2sql/generate"),
+        QUESTION=question,
+        TABLES=_format_tables(tables),
+        DICTIONARY=dictionary_context,
+        FEW_SHOT=_format_few_shot(few_shot),
     )
 
-    # 表结构（裁剪后的 3-5 表）
-    if tables:
-        parts.append("【可用表结构】：")
-        for tbl in tables:
-            parts.append(f"\n-- {tbl.name}（{tbl.comment}）")
-            parts.append(f"CREATE TABLE {tbl.name} (")
-            col_lines = []
-            for col in tbl.columns:
-                comment = f"  -- {col.comment}" if col.comment else ""
-                col_lines.append(f"  {col.name} {col.dtype}{comment}")
-            parts.append(",\n".join(col_lines))
-            parts.append(");")
 
-    # 业务字典
-    if dictionary_context:
-        parts.append(f"\n{dictionary_context}")
+def _format_tables(tables: list[TableSchema]) -> str:
+    """表结构文本（裁剪后的 3-5 张表）。"""
+    if not tables:
+        return ""
+    parts: list[str] = ["【可用表结构】："]
+    for tbl in tables:
+        parts.append(f"\n-- {tbl.name}（{tbl.comment}）")
+        parts.append(f"CREATE TABLE {tbl.name} (")
+        col_lines = []
+        for col in tbl.columns:
+            comment = f"  -- {col.comment}" if col.comment else ""
+            col_lines.append(f"  {col.name} {col.dtype}{comment}")
+        parts.append(",\n".join(col_lines))
+        parts.append(");")
+    return "\n".join(parts)
 
-    # Few-shot 案例
-    if few_shot:
-        parts.append("\n【参考案例】：")
-        for case in few_shot[:3]:  # 最多 3 个 few-shot
-            parts.append(f"-- 问题：{case.question}")
-            parts.append(f"{case.sql}\n")
 
-    # 用户问题
-    parts.append(f"\n【用户问题】：{question}")
-    parts.append("\n【SQL】：")
-
+def _format_few_shot(few_shot: list[SqlCase] | None) -> str:
+    """Few-shot 案例文本（最多 3 个）。"""
+    if not few_shot:
+        return ""
+    parts: list[str] = ["【参考案例】："]
+    for case in few_shot[:3]:
+        parts.append(f"-- 问题：{case.question}")
+        parts.append(f"{case.sql}\n")
     return "\n".join(parts)
 
 
@@ -119,6 +115,7 @@ async def to_sql(
             max_tokens=1024,
             temperature=0.0,
         )
-        return result.strip()
+        sql = extract_sql(result)
+        return sql or f"-- LLM 调用失败\n-- 问题：{question}\nSELECT 1;"
     except Exception:
         return f"-- LLM 调用失败\n-- 问题：{question}\nSELECT 1;"

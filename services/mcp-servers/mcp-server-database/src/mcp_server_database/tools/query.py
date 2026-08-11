@@ -21,6 +21,7 @@ Returns a dict shaped like:
       "duration_ms": 87,
     }
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -33,6 +34,13 @@ from mcp_server_database.connections import Connections
 from mcp_server_database.limit.byte_size import from_args as truncate_from_args
 from mcp_server_database.limit.byte_size import truncate_rows
 from mcp_server_database.limit.row_limit import from_args as row_limit_from_args
+from mcp_server_database.safety.dangerous_ops import (
+    DestructiveOpError,
+    assert_no_destructive,
+)
+from mcp_server_database.safety.dangerous_ops import (
+    is_write_call as is_write_sql,
+)
 from mcp_server_database.safety.dialect_allowlist import dialect_from_connection
 from mcp_server_database.safety.readonly_enforce import (
     ReadOnlyViolationError,
@@ -43,11 +51,6 @@ from mcp_server_database.safety.sqlglot_validator import (
     UnsafeSqlError,
     assert_safe_sql,
 )
-from mcp_server_database.safety.dangerous_ops import (
-    DestructiveOpError,
-    assert_no_destructive,
-    is_write_call as is_write_sql,
-)
 
 
 class QueryError(Exception):
@@ -55,6 +58,7 @@ class QueryError(Exception):
 
 
 # ---- Public entry point ----------------------------------------------------
+
 
 async def run(args: dict) -> dict:
     started = time.monotonic()
@@ -66,6 +70,7 @@ async def run(args: dict) -> dict:
 
 
 # ---- Implementation --------------------------------------------------------
+
 
 async def _run(args: dict, started: float) -> dict:
     # ---- 1. resolve connection + dialect ----
@@ -136,6 +141,7 @@ async def _run(args: dict, started: float) -> dict:
 
 # ---- Driver dispatch -------------------------------------------------------
 
+
 async def _execute(
     dsn: str, dialect: str, sql: str, params: list, row_cap: int
 ) -> tuple[list[str], list[list[Any]]]:
@@ -150,9 +156,10 @@ async def _execute(
 
 async def _pg(dsn: str, sql: str, params: list, row_cap: int):
     import asyncpg
+
     try:
         conn = await asyncpg.connect(dsn)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise _Retryable(f"postgres connect failed: {exc}") from exc
     try:
         columns: list[str] = []
@@ -174,22 +181,26 @@ async def _pg(dsn: str, sql: str, params: list, row_cap: int):
 
 async def _my(dsn: str, sql: str, params: list, row_cap: int):
     import aiomysql
+
     parsed = _parse_mysql_dsn(dsn)
     try:
         conn = await aiomysql.connect(
-            host=parsed["host"], port=parsed.get("port", 3306),
-            user=parsed["user"], password=parsed["password"],
-            db=parsed["database"], autocommit=True,
+            host=parsed["host"],
+            port=parsed.get("port", 3306),
+            user=parsed["user"],
+            password=parsed["password"],
+            db=parsed["database"],
+            autocommit=True,
             connect_timeout=max(1, _timeout_left()),
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise _Retryable(f"mysql connect failed: {exc}") from exc
     try:
         async with conn.cursor() as cur:
             await cur.execute(sql, params or ())
             rows = await cur.fetchmany(row_cap)
             cols = [d[0] for d in cur.description] if cur.description else []
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise _Retryable(f"mysql error: {exc}") from exc
     finally:
         await conn.close()
@@ -198,6 +209,7 @@ async def _my(dsn: str, sql: str, params: list, row_cap: int):
 
 async def _sq(dsn: str, sql: str, params: list, row_cap: int):
     import aiosqlite
+
     # 支持多种 SQLite DSN 格式：
     #   sqlite:///path/to/db      → path/to/db
     #   file:path/to/db           → path/to/db
@@ -207,7 +219,7 @@ async def _sq(dsn: str, sql: str, params: list, row_cap: int):
     if ":///" in raw:
         raw = raw.split(":///", 1)[-1]
     elif raw.startswith("file:"):
-        raw = raw[len("file:"):]
+        raw = raw[len("file:") :]
         if raw.startswith("///"):
             raw = raw[3:]
         elif raw.startswith("//"):
@@ -215,14 +227,14 @@ async def _sq(dsn: str, sql: str, params: list, row_cap: int):
     path = raw.split("?", 1)[0]
     try:
         db = await aiosqlite.connect(path)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise _Retryable(f"sqlite connect failed: {exc}") from exc
     try:
         db.row_factory = aiosqlite.Row
         async with db.execute(sql, params or ()) as cur:
             rows = await cur.fetchmany(row_cap)
             cols = [d[0] for d in cur.description] if cur.description else []
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise _Retryable(f"sqlite error: {exc}") from exc
     finally:
         await db.close()
@@ -230,6 +242,7 @@ async def _sq(dsn: str, sql: str, params: list, row_cap: int):
 
 
 # ---- Helpers ---------------------------------------------------------------
+
 
 def _normalise_row(row: list[Any]) -> list[Any]:
     """Make rows JSON-serialisable. Coerce datetimes / decimals / bytes."""
@@ -248,12 +261,13 @@ def _normalise_value(v: Any) -> Any:
     # Decimal, UUID, IP-address, etc.
     try:
         return str(v)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return repr(v)
 
 
 def _parse_mysql_dsn(dsn: str) -> dict:
-    from urllib.parse import urlparse, parse_qsl
+    from urllib.parse import urlparse
+
     u = urlparse(dsn if "://" in dsn else f"mysql://{dsn}")
     return {
         "host": u.hostname or "127.0.0.1",

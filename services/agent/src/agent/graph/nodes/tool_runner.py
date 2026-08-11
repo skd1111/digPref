@@ -10,21 +10,25 @@ Phase 1B V0 dispatch (CLAUDE.md §1 + builtin dispatcher):
     - call['server'] == 'builtin' → ToolDispatcher.dispatch()
     - 否则 → 按原 MCP 路径走 mcp.invoke()
 """
+
 from __future__ import annotations
 
 import asyncio
-import traceback
 
 from agent.config import settings
 from agent.graph.state import AgentState, advance, next_step, record_trace
 from agent.mcp.client import McpClient
 
-
 # Transient errors that warrant a retry inside tool_runner before giving up
 # to the repair node. Connection / timeout / 5xx style errors.
 _TRANSIENT_TOKENS = (
-    "timeout", "timed out", "connection reset",
-    "connection refused", "broken pipe", "5xx", "internal server",
+    "timeout",
+    "timed out",
+    "connection reset",
+    "connection refused",
+    "broken pipe",
+    "5xx",
+    "internal server",
 )
 
 
@@ -42,6 +46,7 @@ async def tool_runner_node(state: AgentState, mcp: McpClient) -> dict:
     # Phase 1B V0: builtin 工具先走 ToolDispatcher,不走 MCP
     if call.get("server") == "builtin":
         from agent.builtin.dispatcher import dispatcher as _builtin_dispatcher
+
         result = await _builtin_dispatcher().dispatch(call, dict(state))
         if result is not None:
             # V2 HITL 前置闸门：等待审批时不推进步骤索引，
@@ -55,7 +60,15 @@ async def tool_runner_node(state: AgentState, mcp: McpClient) -> dict:
             "pending_tool_call": call,
             "tool_result": None,
             "tool_error": "builtin_dispatcher_returned_none",
-            "trace": [record_trace("tool_runner", "fail", reason="dispatcher_none", server="builtin", name=call.get("name"))],
+            "trace": [
+                record_trace(
+                    "tool_runner",
+                    "fail",
+                    reason="dispatcher_none",
+                    server="builtin",
+                    name=call.get("name"),
+                )
+            ],
         }
 
     call_id = f"call_{state.get('current_step_index', 0)}"
@@ -78,19 +91,22 @@ async def tool_runner_node(state: AgentState, mcp: McpClient) -> dict:
                 "tool_result": result,
                 "tool_error": None,
                 "truncated_any": truncated,  # MUST set so responder can warn user
-                "trace": [record_trace(
-                    "tool_runner", "ok",
-                    call_id=call_id,
-                    server=call.get("server"),
-                    name=call.get("name"),
-                    attempt=attempt,
-                    truncated=truncated,
-                )],
+                "trace": [
+                    record_trace(
+                        "tool_runner",
+                        "ok",
+                        call_id=call_id,
+                        server=call.get("server"),
+                        name=call.get("name"),
+                        attempt=attempt,
+                        truncated=truncated,
+                    )
+                ],
                 **advance(state),
             }
         except asyncio.TimeoutError as exc:
             last_err = f"timeout after {timeout_sec}s: {exc}"
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             last_err = f"{type(exc).__name__}: {exc}"
 
         if attempt == 1 and _is_transient(last_err or ""):
@@ -102,13 +118,16 @@ async def tool_runner_node(state: AgentState, mcp: McpClient) -> dict:
         "pending_tool_call": call,
         "tool_result": None,
         "tool_error": last_err or "unknown error",
-        "trace": [record_trace(
-            "tool_runner", "fail",
-            call_id=call_id,
-            server=call.get("server"),
-            name=call.get("name"),
-            error=last_err,
-        )],
+        "trace": [
+            record_trace(
+                "tool_runner",
+                "fail",
+                call_id=call_id,
+                server=call.get("server"),
+                name=call.get("name"),
+                error=last_err,
+            )
+        ],
     }
 
 

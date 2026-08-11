@@ -4,6 +4,7 @@ design §4.3：
   - 多 Sheet、表头合并、条件格式（负数标红）、自动列宽
   - 中文无乱码（openpyxl 原生 UTF-8）
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -36,7 +37,7 @@ def export_excel(
     """
     try:
         from openpyxl import Workbook
-        from openpyxl.styles import Font, PatternFill, Alignment, numbers
+        from openpyxl.styles import Alignment, Font, PatternFill
         from openpyxl.utils import get_column_letter
     except ImportError:
         # openpyxl 未安装时降级为 CSV
@@ -89,20 +90,27 @@ def export_excel(
     md5 = hashlib.md5(file_bytes).hexdigest()
 
     # 水印元数据
-    meta = embed_watermark_metadata({
-        "path": output_path,
-        "md5": md5,
-        "row_count": len(masked_rows),
-        "format": "excel",
-    }, operator)
+    meta = embed_watermark_metadata(
+        {
+            "path": output_path,
+            "md5": md5,
+            "row_count": len(masked_rows),
+            "format": "excel",
+        },
+        operator,
+    )
 
     return meta
 
 
 def _fallback_csv(
-    columns: list[str], rows: list[list[Any]],
-    title: str, operator: str, output_path: str | None,
+    columns: list[str],
+    rows: list[list[Any]],
+    title: str,
+    operator: str,
+    output_path: str | None,
 ) -> dict[str, Any]:
     """openpyxl 不可用时降级为 CSV。"""
     from agent.dataexpert.export.csv import export_csv
+
     return export_csv(columns, rows, title=title, operator=operator, output_path=output_path)

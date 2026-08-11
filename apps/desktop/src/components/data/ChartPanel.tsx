@@ -17,7 +17,7 @@ import {
   TitleComponent,
 } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
-import { useDataStore, type ChartType } from '@/store/dataStore';
+import { useDataStore, cellFor, type ChartType, type QueryResult } from '@/store/dataStore';
 import { PanelHeader } from './DataGrid';
 
 // 注册 ECharts 组件（按需引入，减小 bundle）
@@ -53,8 +53,8 @@ export function ChartPanel(): JSX.Element {
   const recommended = result?.recommendedChart;
 
   const option = useMemo(() => {
-    if (!result || result.rows.length === 0) return null;
-    return buildOption(chartType, result.columns, result.rows, result.chartXIndex, result.chartYIndex);
+    if (!result || result.rowCount === 0) return null;
+    return buildOption(chartType, result, result.chartXIndex, result.chartYIndex);
   }, [result, chartType]);
 
   return (
@@ -110,13 +110,19 @@ export function ChartPanel(): JSX.Element {
 
 function buildOption(
   type: ChartType,
-  columns: string[],
-  rows: Array<Array<string | number>>,
+  result: QueryResult,
   xIdx: number,
   yIdx: number,
 ): Record<string, unknown> {
-  const xData = rows.map((r) => String(r[xIdx] ?? ''));
-  const yData = rows.map((r) => Number(r[yIdx]) || 0);
+  const { columns, rowCount } = result;
+  // 图表最多取前 5000 行（可视化不需要全量，防卡顿）
+  const n = Math.min(rowCount, 5000);
+  const xData: string[] = [];
+  const yData: number[] = [];
+  for (let i = 0; i < n; i += 1) {
+    xData.push(String(cellFor(result, i, xIdx) ?? ''));
+    yData.push(Number(cellFor(result, i, yIdx)) || 0);
+  }
   const yName = columns[yIdx] || '';
   const xName = columns[xIdx] || '';
 
@@ -149,7 +155,7 @@ function buildOption(
   }
 
   if (type === 'scatter') {
-    const scatterData = rows.map((r) => [Number(r[xIdx]) || 0, Number(r[yIdx]) || 0]);
+    const scatterData = xData.map((x, i) => [Number(x) || 0, yData[i]]);
     return {
       ...base,
       xAxis: { type: 'value', name: xName, nameTextStyle: { color: '#616161' }, axisLabel: { color: '#6e6e6e' }, splitLine: { lineStyle: { color: '#2a2a2a' } } },

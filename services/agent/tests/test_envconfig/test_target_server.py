@@ -1,21 +1,16 @@
 """TargetServer 单测 —— SSH 联动相关字段。"""
+
 from __future__ import annotations
 
 import pytest
-from pydantic import SecretStr, ValidationError
-
 from agent.envconfig import (
-    ApiGateway,
-    DatabaseConnection,
     EnvConfig,
     Environment,
-    McpServerEntry,
     TargetServer,
-    export_configs,
-    import_configs,
     restore_secrets,
     scrub,
 )
+from pydantic import SecretStr, ValidationError
 
 
 class TestTargetServer:
@@ -73,7 +68,10 @@ class TestTargetServerScrub:
         )
         dumped = scrub(cfg)
         # 占位符已写入；明文不在
-        assert dumped["target_servers"][0]["password"] == "__KEYRING_REF:target_servers.web.prod.01.password__"
+        assert (
+            dumped["target_servers"][0]["password"]
+            == "__KEYRING_REF:target_servers.web.prod.01.password__"
+        )
         assert "real-ssh-pwd" not in str(dumped)
 
     def test_scrub_keeps_none_password(self):

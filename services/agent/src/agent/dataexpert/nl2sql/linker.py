@@ -13,6 +13,7 @@ V1 升级：
   - 降级策略：embedding 不可用时退回关键字评分（V0 逻辑）
   - few-shot 动态选取：从 analysis_tasks 按相似度选 top-3 历史 SQL
 """
+
 from __future__ import annotations
 
 import logging
@@ -199,15 +200,18 @@ def _to_schemas(scored: list[tuple[float, dict]]) -> list[TableSchema]:
             )
             for c in tbl.get("columns", [])
         ]
-        result.append(TableSchema(
-            name=tbl.get("name", ""),
-            comment=tbl.get("comment", ""),
-            columns=columns,
-        ))
+        result.append(
+            TableSchema(
+                name=tbl.get("name", ""),
+                comment=tbl.get("comment", ""),
+                columns=columns,
+            )
+        )
     return result
 
 
 # ---- Few-shot 动态选取 -------------------------------------------------------
+
 
 async def select_few_shot(
     question: str,
@@ -248,8 +252,7 @@ async def select_few_shot(
                 t_embs = await _get_embeddings_batch(task_texts, llm_router)
                 if t_embs:
                     scored = [
-                        (_cosine_similarity(q_emb, t_embs[i]), valid[i])
-                        for i in range(len(valid))
+                        (_cosine_similarity(q_emb, t_embs[i]), valid[i]) for i in range(len(valid))
                     ]
                     scored.sort(key=lambda x: x[0], reverse=True)
                     return [

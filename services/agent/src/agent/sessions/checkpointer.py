@@ -17,10 +17,10 @@ CLAUDE.md §2 红线：
     - checkpoint 摘要 / 清理老旧 checkpoint
     - 时间旅行（从历史 checkpoint 派生分支）
 """
+
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
@@ -41,7 +41,7 @@ class SessionCheckpointer:
         # 自动 record_checkpoint 引用
     """
 
-    def __init__(self, storage: SessionStorage, saver: Optional[BaseCheckpointSaver] = None):
+    def __init__(self, storage: SessionStorage, saver: BaseCheckpointSaver | None = None):
         self._storage = storage
         # V0 默认 MemorySaver；V1 替换 SqliteSaver
         self._saver: BaseCheckpointSaver = saver or MemorySaver()
@@ -74,10 +74,13 @@ class SessionCheckpointer:
             )
             logger.info(
                 "[session.checkpointer] saved ref session=%s thread=%s cp=%s label=%s",
-                session_id, thread_id, checkpoint_id, label,
+                session_id,
+                thread_id,
+                checkpoint_id,
+                label,
             )
             return cp.id
-        except Exception as e:  # noqa: BLE001 —— best-effort
+        except Exception as e:
             logger.warning("[session.checkpointer] save_reference failed: %s", e)
             return -1
 

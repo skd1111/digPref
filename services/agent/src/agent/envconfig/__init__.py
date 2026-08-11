@@ -7,8 +7,15 @@
     - 加载时调用 restore() 校验占位符并回填（由调用方从 OS Keychain 拿到值后注入）
     - 真正的密钥永远不进任何 JSON / YAML 文件
 """
+
 from __future__ import annotations
 
+from .export import (
+    ExportResult,
+    ImportResult,
+    export_configs,
+    import_configs,
+)
 from .models import (
     ApiGateway,
     DatabaseConnection,
@@ -28,8 +35,8 @@ from .scrub import (
     scrub,
 )
 from .storage import (
-    Environments,
     EnvIndexEntry,
+    Environments,
     config_dir,
     data_dir,
     delete_env,
@@ -43,25 +50,19 @@ from .storage import (
     save_env,
     set_active_env,
 )
-from .export import (
-    ExportResult,
-    ImportResult,
-    export_configs,
-    import_configs,
-)
 
 __all__ = [
+    "PLACEHOLDER_PREFIX",
+    "PLACEHOLDER_SUFFIX",
     "ApiGateway",
     "DatabaseConnection",
     "EnvConfig",
     "EnvIndexEntry",
-    "Environments",
     "Environment",
+    "Environments",
     "ExportResult",
     "ImportResult",
     "McpServerEntry",
-    "PLACEHOLDER_PREFIX",
-    "PLACEHOLDER_SUFFIX",
     "PlaceholderMissing",
     "TargetServer",
     "config_dir",

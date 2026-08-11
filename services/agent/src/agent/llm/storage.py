@@ -10,6 +10,7 @@
 router.db 路径来自 settings.llm_router_db_path（相对路径 → 测试 chdir 隔离）。
 Schema 单一真源：读取同目录 schema.sql，不内联 SQL。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -17,7 +18,6 @@ import json
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
 
 import aiosqlite
 
@@ -59,15 +59,15 @@ async def _connect():
 async def upsert_backend(backend: LLMBackend) -> list[str]:
     """新增或更新一个后端（按 name 主键 upsert）。
 
-    同类型只允许 1 个启用：当保存的 backend 为 enabled=1 时，在同一事务内
-    把同类型其它已启用后端全部置为停用，返回被停用的后端名列表。
+    同驻留只允许 1 个启用：当保存的 backend 为 enabled=1 时，在同一事务内
+    把同数据驻留（local / private / cloud）其它已启用后端全部置为停用，
+    返回被停用的后端名列表。
     """
     row = backend.to_row()
     disabled: list[str] = []
-    async with _LOCK:
-        async with _connect() as db:
-            await db.execute(
-                """
+    async with _LOCK, _connect() as db:
+        await db.execute(
+            """
                 INSERT INTO llm_backends
                     (name, type, base_url, api_key_ref, model_name, capabilities,
                      max_context, cost_per_1k_tokens, timeout_seconds,
@@ -85,40 +85,51 @@ async def upsert_backend(backend: LLMBackend) -> list[str]:
                     data_residency=excluded.data_residency,
                     enabled=excluded.enabled
                 """,
-                (
-                    row["name"],
-                    row["type"],
-                    row["base_url"],
-                    row["api_key_ref"],
-                    row["model_name"],
-                    json.dumps(row["capabilities"], ensure_ascii=False),
-                    row["max_context"],
-                    row["cost_per_1k_tokens"],
-                    row["timeout_seconds"],
-                    row["data_residency"],
-                    1 if row["enabled"] else 0,
-                ),
+            (
+                row["name"],
+                row["type"],
+                row["base_url"],
+                row["api_key_ref"],
+                row["model_name"],
+                json.dumps(row["capabilities"], ensure_ascii=False),
+                row["max_context"],
+                row["cost_per_1k_tokens"],
+                row["timeout_seconds"],
+                row["data_residency"],
+                1 if row["enabled"] else 0,
+            ),
+        )
+        if row["enabled"]:
+            cur = await db.execute(
+                "SELECT name FROM llm_backends WHERE data_residency=? AND name<>? AND enabled=1",
+                (row["data_residency"], row["name"]),
             )
-            if row["enabled"]:
-                cur = await db.execute(
-                    "SELECT name FROM llm_backends WHERE type=? AND name<>? AND enabled=1",
-                    (row["type"], row["name"]),
+            rows = await cur.fetchall()
+            disabled = [r[0] for r in rows]
+            if disabled:
+                await db.execute(
+                    "UPDATE llm_backends SET enabled=0 "
+                    "WHERE data_residency=? AND name<>? AND enabled=1",
+                    (row["data_residency"], row["name"]),
                 )
-                rows = await cur.fetchall()
-                disabled = [r[0] for r in rows]
-                if disabled:
-                    await db.execute(
-                        "UPDATE llm_backends SET enabled=0 "
-                        "WHERE type=? AND name<>? AND enabled=1",
-                        (row["type"], row["name"]),
-                    )
-            await db.commit()
+        await db.commit()
     return disabled
 
 
 def _row_to_backend(row: tuple) -> LLMBackend:
-    (name, type_, base_url, api_key_ref, model_name, caps, max_ctx,
-     cost, timeout, residency, enabled) = row
+    (
+        name,
+        type_,
+        base_url,
+        api_key_ref,
+        model_name,
+        caps,
+        max_ctx,
+        cost,
+        timeout,
+        residency,
+        enabled,
+    ) = row
     try:
         capabilities = json.loads(caps) if caps else []
     except (json.JSONDecodeError, TypeError):
@@ -155,26 +166,24 @@ async def list_backends(*, enabled_only: bool = False) -> list[LLMBackend]:
     return [_row_to_backend(r) for r in rows]
 
 
-async def get_backend(name: str) -> Optional[LLMBackend]:
+async def get_backend(name: str) -> LLMBackend | None:
     async with _connect() as db:
-        cur = await db.execute(
-            f"SELECT {_SELECT_COLS} FROM llm_backends WHERE name=?", (name,)
-        )
+        cur = await db.execute(f"SELECT {_SELECT_COLS} FROM llm_backends WHERE name=?", (name,))
         row = await cur.fetchone()
     return _row_to_backend(row) if row else None
 
 
 async def delete_backend(name: str) -> bool:
-    async with _LOCK:
-        async with _connect() as db:
-            cur = await db.execute("DELETE FROM llm_backends WHERE name=?", (name,))
-            await db.commit()
-            return cur.rowcount > 0
+    async with _LOCK, _connect() as db:
+        cur = await db.execute("DELETE FROM llm_backends WHERE name=?", (name,))
+        await db.commit()
+        return cur.rowcount > 0
 
 
 # ---- feature → backend 绑定（Phase 2F） -------------------------------------
 
-async def get_feature_backend(feature: str) -> Optional[str]:
+
+async def get_feature_backend(feature: str) -> str | None:
     """读某功能绑定的 backend 名（如 'codenav' → 'deepseek-cloud'）。"""
     async with _connect() as db:
         cur = await db.execute(
@@ -184,28 +193,28 @@ async def get_feature_backend(feature: str) -> Optional[str]:
     return row[0] if row and row[0] else None
 
 
-async def set_feature_backend(feature: str, backend_name: Optional[str]) -> None:
+async def set_feature_backend(feature: str, backend_name: str | None) -> None:
     """绑定 / 解绑。
 
     backend_name=None → 解绑（删除行）；否则 upsert。
     """
     import time as _t
-    async with _LOCK:
-        async with _connect() as db:
-            if backend_name is None or backend_name == "":
-                await db.execute("DELETE FROM feature_backend WHERE feature=?", (feature,))
-            else:
-                await db.execute(
-                    """
+
+    async with _LOCK, _connect() as db:
+        if backend_name is None or backend_name == "":
+            await db.execute("DELETE FROM feature_backend WHERE feature=?", (feature,))
+        else:
+            await db.execute(
+                """
                     INSERT INTO feature_backend (feature, backend_name, updated_at)
                     VALUES (?, ?, ?)
                     ON CONFLICT(feature) DO UPDATE SET
                       backend_name=excluded.backend_name,
                       updated_at=excluded.updated_at
                     """,
-                    (feature, backend_name, int(_t.time())),
-                )
-            await db.commit()
+                (feature, backend_name, int(_t.time())),
+            )
+        await db.commit()
 
 
 # ---- 决策日志 + 成本聚合 ---------------------------------------------------
@@ -214,9 +223,9 @@ async def set_feature_backend(feature: str, backend_name: Optional[str]) -> None
 async def record_decision(
     decision: RoutingDecision,
     *,
-    task_category: Optional[str] = None,
+    task_category: str | None = None,
     est_tokens: int = 0,
-    now: Optional[int] = None,
+    now: int | None = None,
 ) -> None:
     """写一条路由决策 + 增量更新 cost_daily。
 
@@ -224,14 +233,11 @@ async def record_decision(
     task_category: 覆盖 decision.task_category（用于成本聚合的分组键）。
     """
     ts = int(now if now is not None else time.time())
-    cat = task_category or (
-        decision.task_category.value if decision.task_category else "unknown"
-    )
+    cat = task_category or (decision.task_category.value if decision.task_category else "unknown")
     date_str = time.strftime("%Y-%m-%d", time.gmtime(ts))
-    async with _LOCK:
-        async with _connect() as db:
-            await db.execute(
-                """
+    async with _LOCK, _connect() as db:
+        await db.execute(
+            """
                 INSERT INTO routing_decisions
                     (request_id, user_id, task_category, sensitivity,
                      primary_backend, actual_backend, fallback_used, cache_hit,
@@ -239,27 +245,27 @@ async def record_decision(
                      trace_json, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (
-                    decision.request_id,
-                    decision.user_id,
-                    cat,
-                    decision.sensitivity.value if decision.sensitivity else None,
-                    decision.primary_backend,
-                    decision.actual_backend,
-                    1 if decision.fallback_used else 0,
-                    1 if decision.cache_hit else 0,
-                    decision.estimated_cost,
-                    decision.actual_cost,
-                    decision.latency_ms,
-                    decision.quality_score,
-                    json.dumps(decision.trace_dict(), ensure_ascii=False),
-                    ts,
-                ),
-            )
-            # 缓存命中不计成本/tokens（cache_hit → actual_cost=0）
-            backend = decision.actual_backend or decision.primary_backend or "unknown"
-            await db.execute(
-                """
+            (
+                decision.request_id,
+                decision.user_id,
+                cat,
+                decision.sensitivity.value if decision.sensitivity else None,
+                decision.primary_backend,
+                decision.actual_backend,
+                1 if decision.fallback_used else 0,
+                1 if decision.cache_hit else 0,
+                decision.estimated_cost,
+                decision.actual_cost,
+                decision.latency_ms,
+                decision.quality_score,
+                json.dumps(decision.trace_dict(), ensure_ascii=False),
+                ts,
+            ),
+        )
+        # 缓存命中不计成本/tokens（cache_hit → actual_cost=0）
+        backend = decision.actual_backend or decision.primary_backend or "unknown"
+        await db.execute(
+            """
                 INSERT INTO cost_daily
                     (date, user_id, backend, task_category,
                      total_tokens, total_cost, call_count)
@@ -269,16 +275,16 @@ async def record_decision(
                     total_cost   = total_cost + excluded.total_cost,
                     call_count   = call_count + 1
                 """,
-                (
-                    date_str,
-                    decision.user_id,
-                    backend,
-                    cat,
-                    0 if decision.cache_hit else est_tokens,
-                    decision.actual_cost,
-                ),
-            )
-            await db.commit()
+            (
+                date_str,
+                decision.user_id,
+                backend,
+                cat,
+                0 if decision.cache_hit else est_tokens,
+                decision.actual_cost,
+            ),
+        )
+        await db.commit()
 
 
 async def recent_decisions(limit: int = 50) -> list[dict]:
@@ -318,7 +324,7 @@ async def recent_decisions(limit: int = 50) -> list[dict]:
     return out
 
 
-async def cost_summary(date: Optional[str] = None) -> list[dict]:
+async def cost_summary(date: str | None = None) -> list[dict]:
     """成本统计。date 为空则返回全部；否则过滤某日。"""
     async with _connect() as db:
         if date:
@@ -362,7 +368,9 @@ DEFAULT_WEIGHTS = {
 async def get_router_weights() -> dict:
     """读 router_weights 单行（id=1）；不存在则返回默认值。"""
     async with _connect() as db:
-        cur = await db.execute("SELECT capability, cost, latency, compliance, availability FROM router_weights WHERE id=1")
+        cur = await db.execute(
+            "SELECT capability, cost, latency, compliance, availability FROM router_weights WHERE id=1"
+        )
         row = await cur.fetchone()
     if not row:
         return dict(DEFAULT_WEIGHTS)
@@ -381,6 +389,7 @@ async def set_router_weights(weights: dict) -> None:
     校验由调用方（engine_api WeightsBody）完成；这里只落库。
     """
     import time as _t
+
     async with _LOCK:
         async with _connect() as db:
             await db.execute(

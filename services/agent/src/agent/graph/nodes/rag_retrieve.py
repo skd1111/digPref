@@ -12,6 +12,7 @@ CLAUDE.md §2 红线：
 - 不引入写操作 → 不需 HITL
 - 不写 audit.sqlite（V1 留作 V2 扩展点）
 """
+
 from __future__ import annotations
 
 import logging
@@ -24,8 +25,21 @@ logger = logging.getLogger(__name__)
 # ---- 触发关键词 ---------------------------------------------------------
 
 _RAG_TRIGGER_KEYWORDS: tuple[str, ...] = (
-    "文档", "知识库", "参考", "规范", "说明", "是什么", "怎么用", "如何",
-    "doc", "knowledge", "reference", "spec", "guide", "how to", "what is",
+    "文档",
+    "知识库",
+    "参考",
+    "规范",
+    "说明",
+    "是什么",
+    "怎么用",
+    "如何",
+    "doc",
+    "knowledge",
+    "reference",
+    "spec",
+    "guide",
+    "how to",
+    "what is",
 )
 
 
@@ -63,23 +77,32 @@ async def rag_retrieve_node(state: AgentState, retriever=None) -> dict:
         return {
             "rag_context": None,
             "system_prompt_addon": "",
-            "trace": [record_trace(
-                "rag_retrieve", "skipped", reason="no trigger keywords",
-            )],
+            "trace": [
+                record_trace(
+                    "rag_retrieve",
+                    "skipped",
+                    reason="no trigger keywords",
+                )
+            ],
         }
 
     if retriever is None:
         try:
             from agent.knowledge.retriever import get_default_retriever
+
             retriever = get_default_retriever()
         except Exception as e:
             logger.debug("default retriever unavailable: %s", e)
             return {
                 "rag_context": None,
                 "system_prompt_addon": "",
-                "trace": [record_trace(
-                    "rag_retrieve", "skipped", reason="no retriever",
-                )],
+                "trace": [
+                    record_trace(
+                        "rag_retrieve",
+                        "skipped",
+                        reason="no retriever",
+                    )
+                ],
             }
 
     try:
@@ -89,28 +112,40 @@ async def rag_retrieve_node(state: AgentState, retriever=None) -> dict:
         return {
             "rag_context": None,
             "system_prompt_addon": "",
-            "trace": [record_trace(
-                "rag_retrieve", "fail", error=str(e),
-            )],
+            "trace": [
+                record_trace(
+                    "rag_retrieve",
+                    "fail",
+                    error=str(e),
+                )
+            ],
         }
 
     if not ctx.results:
         return {
             "rag_context": None,
             "system_prompt_addon": "",
-            "trace": [record_trace(
-                "rag_retrieve", "ok", results_count=0,
-                elapsed_ms=ctx.elapsed_ms, backend=ctx.backend,
-            )],
+            "trace": [
+                record_trace(
+                    "rag_retrieve",
+                    "ok",
+                    results_count=0,
+                    elapsed_ms=ctx.elapsed_ms,
+                    backend=ctx.backend,
+                )
+            ],
         }
 
     return {
         "rag_context": ctx,
         "system_prompt_addon": ctx.formatted_prompt,
-        "trace": [record_trace(
-            "rag_retrieve", "ok",
-            results_count=len(ctx.results),
-            elapsed_ms=ctx.elapsed_ms,
-            backend=ctx.backend,
-        )],
+        "trace": [
+            record_trace(
+                "rag_retrieve",
+                "ok",
+                results_count=len(ctx.results),
+                elapsed_ms=ctx.elapsed_ms,
+                backend=ctx.backend,
+            )
+        ],
     }

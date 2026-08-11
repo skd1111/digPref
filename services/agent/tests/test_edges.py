@@ -1,4 +1,5 @@
 """Tests for graph/edges.py — conditional routing."""
+
 from __future__ import annotations
 
 from agent.graph.edges import (
@@ -9,8 +10,8 @@ from agent.graph.edges import (
 )
 from agent.graph.state import empty_state
 
-
 # ---- route_after_planner --------------------------------------------------
+
 
 class TestRouteAfterPlanner:
     def test_with_plan_goes_to_tool(self):
@@ -26,6 +27,7 @@ class TestRouteAfterPlanner:
 
 # ---- route_after_tool -----------------------------------------------------
 
+
 class TestRouteAfterTool:
     def test_error_goes_to_repair(self):
         s = empty_state("x")
@@ -39,6 +41,7 @@ class TestRouteAfterTool:
 
 
 # ---- route_after_repair ---------------------------------------------------
+
 
 class TestRouteAfterRepair:
     def test_error_still_present_gives_up(self):
@@ -54,6 +57,7 @@ class TestRouteAfterRepair:
 
 # ---- route_after_hitl -----------------------------------------------------
 
+
 class TestRouteAfterHitl:
     def test_reject_goes_to_responder(self):
         s = empty_state("x")
@@ -68,7 +72,7 @@ class TestRouteAfterHitl:
             {"server": "db", "name": "db.execute"},
             {"server": "db", "name": "db.query"},
         ]
-        s["current_step_index"] = 1   # advance already happened
+        s["current_step_index"] = 1  # advance already happened
         assert route_after_hitl(s) == "tool_runner"
 
     def test_approve_last_step_goes_to_responder(self):

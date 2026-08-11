@@ -20,6 +20,7 @@ function finding(id: string, start: number, end: number): DocFinding {
     rule_ref: null,
     evidence_text: "",
     positions: [{ page_no: 1, block_id: "p1b1", start, end }],
+    kb_refs: [],
   };
 }
 

@@ -8,44 +8,45 @@
 - router.py LLM 路由兜底（mock / classify 走 detect_level 正则）
 - BLOB 编解码一致性（与 logviewer/storage.rs 对齐）
 """
+
 from __future__ import annotations
 
 import time
 import zlib
 
 import pytest
-
+from agent.loganalysis import extractor, scrubber
 from agent.loganalysis.models import (
-    AnalysisCacheEntry,
-    ErrorBlock,
     LEVEL_DEBUG,
     LEVEL_ERROR,
     LEVEL_INFO,
     LEVEL_WARN,
+    AnalysisCacheEntry,
+    ErrorBlock,
     RootCauseRequest,
 )
-from agent.loganalysis import extractor, scrubber
 from agent.loganalysis.storage import (
     LogAnalysisStorage,
     decode_u64_le,
     encode_u64_le,
-    reset_default_storage,
 )
-
 
 # ---- models ---------------------------------------------------------------
 
 
 def test_models_constants():
     from agent.loganalysis.models import ALL_LEVELS
+
     assert "ERROR" in ALL_LEVELS
     assert "INFO" in ALL_LEVELS
 
 
 def test_error_block_new():
     b = ErrorBlock(
-        start_line=10, end_line=20,
-        header="ERROR foo", stack_trace=["ERROR foo", "  at bar()"],
+        start_line=10,
+        end_line=20,
+        header="ERROR foo",
+        stack_trace=["ERROR foo", "  at bar()"],
         level=LEVEL_ERROR,
     )
     assert b.start_line == 10
@@ -56,8 +57,12 @@ def test_error_block_new():
 
 def test_analysis_cache_entry_new_and_expiry():
     e = AnalysisCacheEntry.new(
-        cache_key="abc", file_path="/x.log", file_fingerprint="123:456",
-        analysis_type="log_root_cause", payload_json="{}", ttl_sec=60,
+        cache_key="abc",
+        file_path="/x.log",
+        file_fingerprint="123:456",
+        analysis_type="log_root_cause",
+        payload_json="{}",
+        ttl_sec=60,
     )
     assert e.is_expired() is False
     # 直接改 expires_at
@@ -150,7 +155,8 @@ def test_scrub_lines():
 
 def test_scrub_error_block_returns_new_block():
     b = ErrorBlock(
-        start_line=1, end_line=2,
+        start_line=1,
+        end_line=2,
         header="ERROR at 13812345678",
         stack_trace=["ERROR at 13812345678", "  at com.example.X"],
     )
@@ -164,12 +170,14 @@ def test_scrub_error_block_returns_new_block():
 
 def test_scrub_error_blocks_recomputes_fingerprint():
     b = ErrorBlock(
-        start_line=1, end_line=1, header="ERROR x",
+        start_line=1,
+        end_line=1,
+        header="ERROR x",
         stack_trace=["ERROR x"],
     )
     blocks = scrubber.scrub_error_blocks([b])
     # fingerprint 应被重算
-    expected = f"{zlib.adler32(b'ERROR x') & 0xffffffff:08x}"
+    expected = f"{zlib.adler32(b'ERROR x') & 0xFFFFFFFF:08x}"
     # 注：scrub 后内容相同（无 PII）→ fingerprint 同
     assert blocks[0].fingerprint == expected
 
@@ -179,7 +187,10 @@ def test_scrub_error_blocks_recomputes_fingerprint():
 
 def test_detect_level_error():
     assert extractor.detect_level("2026-07-29 ERROR something failed") == LEVEL_ERROR
-    assert extractor.detect_level("[FATAL] crash") == "FATAL" or extractor.detect_level("[FATAL] crash") == "ERROR"
+    assert (
+        extractor.detect_level("[FATAL] crash") == "FATAL"
+        or extractor.detect_level("[FATAL] crash") == "ERROR"
+    )
     # 实际：FATAL 优先
     assert extractor.detect_level("FATAL System out of memory") == "FATAL"
 
@@ -293,7 +304,10 @@ def test_storage_ensure_schema(storage):
 
 def test_search_cache_crud(storage):
     storage.upsert_search_cache(
-        "/x.log", "ERROR", "literal", "fp1",
+        "/x.log",
+        "ERROR",
+        "literal",
+        "fp1",
         matched_lines=[10, 20, 30],
     )
     # 命中
@@ -310,7 +324,12 @@ def test_search_cache_crud(storage):
 
 def test_search_cache_expiry(storage):
     storage.upsert_search_cache(
-        "/x.log", "ERROR", "literal", "fp1", [1], ttl_sec=1,
+        "/x.log",
+        "ERROR",
+        "literal",
+        "fp1",
+        [1],
+        ttl_sec=1,
     )
     assert storage.get_search_cache("/x.log", "ERROR", "literal", "fp1") is not None
     # 强制过期
@@ -382,8 +401,11 @@ def test_analysis_cache_crud(storage):
 
     # 过期
     e2 = AnalysisCacheEntry.new(
-        cache_key="k2", file_path="/y.log", file_fingerprint="fp2",
-        analysis_type="log_level_classify", payload_json="{}",
+        cache_key="k2",
+        file_path="/y.log",
+        file_fingerprint="fp2",
+        analysis_type="log_level_classify",
+        payload_json="{}",
         ttl_sec=1,
     )
     storage.upsert_analysis_cache(e2)
@@ -397,8 +419,11 @@ def test_get_stats(storage):
     storage.upsert_search_cache("/x.log", "ERROR", "literal", "fp1", [1])
     storage.create_tail_session("s1", "/x.log")
     e = AnalysisCacheEntry.new(
-        cache_key="k1", file_path="/x.log", file_fingerprint="fp1",
-        analysis_type="log_root_cause", payload_json="{}",
+        cache_key="k1",
+        file_path="/x.log",
+        file_fingerprint="fp1",
+        analysis_type="log_root_cause",
+        payload_json="{}",
     )
     storage.upsert_analysis_cache(e)
 
@@ -414,6 +439,7 @@ def test_get_stats(storage):
 
 class _FakeLLMRouter:
     """模拟 LMRouter（不需要真 LLM）。"""
+
     def __init__(self, fail: bool = False):
         self.fail = fail
         self.calls: list[str] = []
@@ -434,15 +460,28 @@ class _FakeLLMRouter:
             raise RuntimeError("LLM unavailable")
         return {
             "choices": [
-                {"message": {"role": "assistant", "content": "private: 错误模式是连接超时，根因是 Redis 不可达。"}}
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "private: 错误模式是连接超时，根因是 Redis 不可达。",
+                    }
+                }
             ],
             "usage": {"total_tokens": 100},
         }
 
+    async def extract_chat(self, messages: list[dict]) -> str:
+        """真实客户端形态：返回自由文本（BUGFIX #root-cause 后走此接口）。"""
+        if self.fail:
+            raise RuntimeError("LLM unavailable")
+        return "private: 错误模式是连接超时，根因是 Redis 不可达。"
+
     async def classify_log_levels(self, lines: list[str]) -> list[dict]:
         if self.fail:
             raise RuntimeError("LLM unavailable")
-        return [{"level": "ERROR" if "ERROR" in l else "INFO", "confidence": 0.9} for l in lines]
+        return [
+            {"level": "ERROR" if "ERROR" in line else "INFO", "confidence": 0.9} for line in lines
+        ]
 
 
 @pytest.mark.asyncio
@@ -451,7 +490,13 @@ async def test_analyze_root_cause_private_llm():
     from agent.loganalysis import router as llm_router
 
     blocks = [
-        ErrorBlock(1, 5, "ERROR connection refused", ["ERROR connection refused", "  at java.X"], LEVEL_ERROR),
+        ErrorBlock(
+            1,
+            5,
+            "ERROR connection refused",
+            ["ERROR connection refused", "  at java.X"],
+            LEVEL_ERROR,
+        ),
         ErrorBlock(10, 15, "ERROR timeout", ["ERROR timeout", "  at java.Y"], LEVEL_ERROR),
     ]
     req = RootCauseRequest(file_path="/x.log", error_blocks=blocks, max_tokens=3000)
@@ -473,7 +518,9 @@ async def test_analyze_root_cause_fallback_to_mock():
     ]
     req = RootCauseRequest(file_path="/x.log", error_blocks=blocks)
     resp = await llm_router.analyze_root_cause(
-        req, llm=_FakeLLMRouter(fail=True), scrubbed_blocks=blocks,
+        req,
+        llm=_FakeLLMRouter(fail=True),
+        scrubbed_blocks=blocks,
     )
     assert resp.backend == "mock"
     assert "Mock 摘要" in resp.summary
@@ -489,23 +536,33 @@ async def test_analyze_root_cause_cache_hit():
     llm = _FakeLLMRouter()
     # 构造一个"过期"的 cache_lookup（payload 是 RootCauseResponse dict）
     import json
-    payload = json.dumps({
-        "summary": "[cached] hello",
-        "error_count": 1,
-        "blocks_analyzed": 1,
-        "tokens_used": 0,
-        "model_used": "cached",
-        "elapsed_ms": 0,
-        "backend": "cache",
-        "blocks": [],
-    })
+
+    payload = json.dumps(
+        {
+            "summary": "[cached] hello",
+            "error_count": 1,
+            "blocks_analyzed": 1,
+            "tokens_used": 0,
+            "model_used": "cached",
+            "elapsed_ms": 0,
+            "backend": "cache",
+            "blocks": [],
+        }
+    )
     cache_entry = AnalysisCacheEntry(
-        cache_key="k", file_path="/x.log", file_fingerprint="fp",
-        analysis_type="log_root_cause", payload_json=payload,
-        created_at=int(time.time()), expires_at=int(time.time()) + 600,
+        cache_key="k",
+        file_path="/x.log",
+        file_fingerprint="fp",
+        analysis_type="log_root_cause",
+        payload_json=payload,
+        created_at=int(time.time()),
+        expires_at=int(time.time()) + 600,
     )
     resp = await llm_router.analyze_root_cause(
-        req, llm=llm, scrubbed_blocks=blocks, cache_lookup=cache_entry,
+        req,
+        llm=llm,
+        scrubbed_blocks=blocks,
+        cache_lookup=cache_entry,
     )
     assert resp.backend == "cache"
     assert "[cached]" in resp.summary
@@ -525,10 +582,38 @@ async def test_analyze_root_cause_token_truncation():
         blocks.append(ErrorBlock(i * 100, i * 100 + 80, f"ERROR #{i}", stack, LEVEL_ERROR))
     req = RootCauseRequest(file_path="/x.log", error_blocks=blocks, max_tokens=2000)
     resp = await llm_router.analyze_root_cause(
-        req, llm=_FakeLLMRouter(), scrubbed_blocks=blocks,
+        req,
+        llm=_FakeLLMRouter(),
+        scrubbed_blocks=blocks,
     )
     # 只分析前 N 块（受 max_tokens 约束）
     assert resp.blocks_analyzed < 20
+
+
+class _FakeExtractLLM:
+    """真实客户端形态：extract_chat 返回自由文本。"""
+
+    def pick(self, kind: str):
+        return self
+
+    async def extract_chat(self, messages: list[dict]) -> str:
+        return "主要错误模式是连接超时，根因是 Redis 不可达。"
+
+
+@pytest.mark.asyncio
+async def test_analyze_root_cause_uses_extract_chat():
+    """根因分析走原始文本调用，不再把自由文本当 JSON 解析（spec §4.6 第 9 项）。"""
+    from agent.loganalysis import router as llm_router
+
+    blocks = [ErrorBlock(1, 2, "ERROR timeout", ["ERROR timeout"], LEVEL_ERROR)]
+    req = RootCauseRequest(file_path="/x.log", error_blocks=blocks)
+    resp = await llm_router.analyze_root_cause(
+        req,
+        llm=_FakeExtractLLM(),
+        scrubbed_blocks=blocks,
+    )
+    assert resp.backend == "private"
+    assert "Redis" in resp.summary
 
 
 @pytest.mark.asyncio
@@ -554,11 +639,14 @@ async def test_classify_log_levels_fallback_to_mock():
 
     # 先 patch local_small 和 ollama 不可用
     lines = ["INFO a", "ERROR b", "WARN c"]
+
     # _FakeLLMRouter 模拟无 classify_log_levels
     class _NoClassifyLLM:
         async def classify_log_levels(self, lines):
             raise RuntimeError("nope")
+
         pass
+
     resp = await llm_router.classify_log_levels(lines, llm=_NoClassifyLLM())
     # 兜底走 detect_level
     assert resp.backend == "mock"
@@ -595,6 +683,7 @@ def test_extract_then_scrub():
 def test_get_default_storage(monkeypatch, tmp_path):
     """单例默认 db 路径含 'log_analysis.db'。"""
     from agent.loganalysis import storage as storage_mod
+
     storage_mod.reset_default_storage()
     s = storage_mod.get_default_storage()
     # 默认路径以 log_analysis.db 结尾（settings.log_analysis_db_path 或 ~/.eaide/log_analysis.db）

@@ -7,10 +7,8 @@
 
 V0：硬编码金融常见字典。V1：从 data_sources.schema_cache 字段注释自动提取。
 """
+
 from __future__ import annotations
-
-import re
-
 
 # 金融业务字典（source_id → {自然语言 → SQL 条件片段}）
 _DEFAULT_DICTIONARY: dict[str, dict[str, str]] = {

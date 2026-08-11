@@ -8,12 +8,11 @@ V1 接力时由 api.py 在每个处理前后 emit；stream.py::_drain_image_even
   - image_processing_done
   - image_processing_error
 """
+
 from __future__ import annotations
 
 import asyncio
 from collections import deque
-from typing import Any
-
 
 # 进程内事件队列
 _img_events: deque[tuple[str, dict]] = deque()

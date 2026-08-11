@@ -1,4 +1,5 @@
 """Phase 18 工具链探测：配置路径 → PATH → 常见目录 → unavailable。"""
+
 from __future__ import annotations
 
 from agent.coding.toolchain import (
@@ -25,9 +26,7 @@ def test_user_configured_path_wins(monkeypatch, tmp_path):
 
 def test_user_configured_path_missing_falls_through(monkeypatch, tmp_path):
     monkeypatch.setenv("PATH", "")
-    got = resolve_toolchain(
-        "python", configured={"python": str(tmp_path / "nope.exe")}
-    )
+    got = resolve_toolchain("python", configured={"python": str(tmp_path / "nope.exe")})
     assert got.source != "configured"
 
 
@@ -85,7 +84,5 @@ def test_config_roundtrip(tmp_path, monkeypatch):
 def test_config_missing_returns_empty(tmp_path, monkeypatch):
     from agent.config import settings
 
-    monkeypatch.setattr(
-        settings, "toolchain_config_path", str(tmp_path / "absent.json")
-    )
+    monkeypatch.setattr(settings, "toolchain_config_path", str(tmp_path / "absent.json"))
     assert load_toolchain_config() == {}

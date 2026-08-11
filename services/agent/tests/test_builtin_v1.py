@@ -9,25 +9,22 @@
   - 风险等级 / HITL 评估
   - dispatcher 集成（Python 工具走 to_thread + Rust 工具占位）
 """
+
 from __future__ import annotations
 
-import asyncio
-import json
-import os
-import sys
-import time
 from pathlib import Path
 
 import pytest
 
-
 # ---- lightweight 5 工具 ---------------------------------------------------------
+
 
 class TestCalculator:
     """builtin_calculator —— AST 安全算术。"""
 
     def test_basic_arithmetic(self):
         from agent.builtin.lightweight import builtin_calculator
+
         for expr, expected in [
             ("1+1", 2),
             ("2*3", 6),
@@ -44,46 +41,54 @@ class TestCalculator:
 
     def test_nested_expression(self):
         from agent.builtin.lightweight import builtin_calculator
+
         r = builtin_calculator("(2+3)*4-10")
         assert r.ok
         assert r.content["value"] == 10
 
     def test_reject_function_call(self):
         from agent.builtin.lightweight import builtin_calculator
+
         r = builtin_calculator("__import__('os').system('echo pwned')")
         assert not r.ok
         assert "calc_error" in r.error or "unsupported" in r.error
 
     def test_reject_variable(self):
         from agent.builtin.lightweight import builtin_calculator
+
         r = builtin_calculator("x=5")
         assert not r.ok
 
     def test_reject_string_literal(self):
         from agent.builtin.lightweight import builtin_calculator
+
         r = builtin_calculator("'hello'")
         assert not r.ok
 
     def test_empty_expression(self):
         from agent.builtin.lightweight import builtin_calculator
+
         r = builtin_calculator("")
         assert not r.ok
         assert "empty" in r.error
 
     def test_division_by_zero(self):
         from agent.builtin.lightweight import builtin_calculator
+
         r = builtin_calculator("1/0")
         assert not r.ok
         assert "division_by_zero" in r.error
 
     def test_invalid_syntax(self):
         from agent.builtin.lightweight import builtin_calculator
+
         r = builtin_calculator("1++")
         assert not r.ok
         assert "syntax_error" in r.error
 
     def test_input_too_long(self):
         from agent.builtin.lightweight import builtin_calculator
+
         r = builtin_calculator("1+" * 70000)  # > 64KB
         assert not r.ok
         assert "too long" in r.error
@@ -94,18 +99,21 @@ class TestJsonParse:
 
     def test_parse_object(self):
         from agent.builtin.lightweight import builtin_json_parse
+
         r = builtin_json_parse('{"a": 1, "b": [2, 3]}')
         assert r.ok
         assert r.content == {"a": 1, "b": [2, 3]}
 
     def test_parse_array(self):
         from agent.builtin.lightweight import builtin_json_parse
+
         r = builtin_json_parse('[1, 2, "three", null, true]')
         assert r.ok
         assert r.content == [1, 2, "three", None, True]
 
     def test_parse_with_position_error(self):
         from agent.builtin.lightweight import builtin_json_parse
+
         r = builtin_json_parse('{"a": 1, "b": }')  # 语法错误
         assert not r.ok
         assert "json_decode_error" in r.error
@@ -115,6 +123,7 @@ class TestJsonParse:
 
     def test_reject_non_string(self):
         from agent.builtin.lightweight import builtin_json_parse
+
         r = builtin_json_parse(123)
         assert not r.ok
         assert "must be str" in r.error
@@ -122,6 +131,7 @@ class TestJsonParse:
     def test_reject_duplicate_keys_strict(self):
         """strict=True 时重复键抛错。"""
         from agent.builtin.lightweight import builtin_json_parse
+
         r = builtin_json_parse('{"a": 1, "a": 2}', strict=True)
         # Python 的 json.JSONDecoder(strict=True) 在 raw_decode 中允许重复键（不抛错）
         # 我们的 strict 参数控制 json.JSONDecoder(strict=strict)，因此重复键可能正常
@@ -130,6 +140,7 @@ class TestJsonParse:
 
     def test_input_too_long(self):
         from agent.builtin.lightweight import builtin_json_parse
+
         r = builtin_json_parse("[" + "1," * 70000)  # > 64KB
         assert not r.ok
 
@@ -139,12 +150,14 @@ class TestJsonFormat:
 
     def test_basic_format(self):
         from agent.builtin.lightweight import builtin_json_format
+
         r = builtin_json_format({"b": 2, "a": 1}, indent=2, sort_keys=True)
         assert r.ok
         assert r.content == '{\n  "a": 1,\n  "b": 2\n}'
 
     def test_chinese_unicode_preserved(self):
         from agent.builtin.lightweight import builtin_json_format
+
         r = builtin_json_format({"name": "张三"}, ensure_ascii=False)
         assert r.ok
         assert "张三" in r.content
@@ -152,12 +165,14 @@ class TestJsonFormat:
 
     def test_chinese_escaped(self):
         from agent.builtin.lightweight import builtin_json_format
+
         r = builtin_json_format({"name": "张三"}, ensure_ascii=True)
         assert r.ok
         assert "\\u" in r.content
 
     def test_reject_unsupported_type(self):
         from agent.builtin.lightweight import builtin_json_format
+
         # default=str 让 lambda 转 "<function ...>"（默认行为）
         # 用户禁用 default=str 才能看到 TypeError；这里只验证不崩
         r = builtin_json_format({"f": lambda x: x})
@@ -167,17 +182,20 @@ class TestJsonFormat:
 
     def test_reject_invalid_indent(self):
         from agent.builtin.lightweight import builtin_json_format
+
         r = builtin_json_format({}, indent=100)
         assert not r.ok
 
     def test_no_nan_infinity(self):
         from agent.builtin.lightweight import builtin_json_format
+
         r = builtin_json_format({"x": float("nan")})
         assert not r.ok  # allow_nan=False
 
     def test_path_object_serialized(self):
         """datetime / Path 等常见类型走 default=str。"""
         from agent.builtin.lightweight import builtin_json_format
+
         # Windows 下 Path("/tmp/test") 的 .__str__() 转 "\\tmp\\test" —— 用绝对 Windows 路径测
         r = builtin_json_format({"p": Path("C:/Users/test")})
         assert r.ok
@@ -189,6 +207,7 @@ class TestRegexMatch:
 
     def test_basic_match(self):
         from agent.builtin.lightweight import builtin_regex_match
+
         r = builtin_regex_match(r"\d+", "abc 123 def 456")
         assert r.ok
         assert len(r.content) == 2
@@ -197,18 +216,21 @@ class TestRegexMatch:
 
     def test_capture_groups(self):
         from agent.builtin.lightweight import builtin_regex_match
+
         r = builtin_regex_match(r"(\w+)@(\w+)", "user@host")
         assert r.ok
         assert r.content[0]["groups"] == ["user", "host"]
 
     def test_named_groups(self):
         from agent.builtin.lightweight import builtin_regex_match
+
         r = builtin_regex_match(r"(?P<user>\w+)", "alice")
         assert r.ok
         assert r.content[0]["named_groups"] == {"user": "alice"}
 
     def test_no_match(self):
         from agent.builtin.lightweight import builtin_regex_match
+
         r = builtin_regex_match(r"\d+", "no digits here")
         assert r.ok
         assert r.content == []
@@ -216,6 +238,7 @@ class TestRegexMatch:
 
     def test_truncate_max_matches(self):
         from agent.builtin.lightweight import builtin_regex_match
+
         r = builtin_regex_match(r".", "x" * 100, max_matches=10)
         assert r.ok
         assert len(r.content) == 10
@@ -223,19 +246,23 @@ class TestRegexMatch:
 
     def test_pattern_too_long(self):
         from agent.builtin.lightweight import builtin_regex_match
+
         r = builtin_regex_match(r"a" * 2000, "x")
         assert not r.ok
         assert "too long" in r.error
 
     def test_invalid_regex(self):
         from agent.builtin.lightweight import builtin_regex_match
+
         r = builtin_regex_match(r"(unclosed", "x")
         assert not r.ok
         assert "regex_compile_error" in r.error
 
     def test_case_insensitive(self):
-        from agent.builtin.lightweight import builtin_regex_match
         import re
+
+        from agent.builtin.lightweight import builtin_regex_match
+
         r = builtin_regex_match(r"HELLO", "hello world", flags=re.IGNORECASE)
         assert r.ok
         assert len(r.content) == 1
@@ -246,6 +273,7 @@ class TestUrlParse:
 
     def test_basic_url(self):
         from agent.builtin.lightweight import builtin_url_parse
+
         r = builtin_url_parse("https://user:pass@example.com:8080/path?a=1&b=2#frag")
         assert r.ok
         assert r.content["scheme"] == "https"
@@ -260,6 +288,7 @@ class TestUrlParse:
 
     def test_ipv4_host(self):
         from agent.builtin.lightweight import builtin_url_parse
+
         r = builtin_url_parse("http://192.168.1.1:8080/path")
         assert r.ok
         assert r.content["hostname"] == "192.168.1.1"
@@ -267,40 +296,56 @@ class TestUrlParse:
 
     def test_query_multi_value(self):
         from agent.builtin.lightweight import builtin_url_parse
+
         r = builtin_url_parse("https://x.com/?tag=a&tag=b&tag=c")
         assert r.ok
         assert r.content["query_dict"]["tag"] == ["a", "b", "c"]
 
     def test_no_query(self):
         from agent.builtin.lightweight import builtin_url_parse
+
         r = builtin_url_parse("https://x.com/path")
         assert r.ok
         assert r.content["query_dict"] == {}
 
     def test_non_string_url(self):
         from agent.builtin.lightweight import builtin_url_parse
+
         r = builtin_url_parse(123)
         assert not r.ok
 
 
 # ---- registry / models ---------------------------------------------------------
 
+
 class TestRegistryV1:
     """V1 registry 扩展。"""
 
     def test_builtin_tool_names_has_lightweight(self):
         from agent.builtin.models import BUILTIN_TOOL_NAMES
+
         for name in ("calculator", "json_parse", "json_format", "regex_match", "url_parse"):
             assert name in BUILTIN_TOOL_NAMES, f"{name} not in BUILTIN_TOOL_NAMES"
 
     def test_builtin_tool_names_has_rust(self):
         from agent.builtin.models import BUILTIN_TOOL_NAMES
-        for name in ("stat_file", "mkdir", "delete_file", "move_file", "find",
-                     "glob", "hash", "base64", "shell"):
+
+        for name in (
+            "stat_file",
+            "mkdir",
+            "delete_file",
+            "move_file",
+            "find",
+            "glob",
+            "hash",
+            "base64",
+            "shell",
+        ):
             assert name in BUILTIN_TOOL_NAMES, f"{name} not in BUILTIN_TOOL_NAMES"
 
     def test_rust_tool_names_frozenset(self):
         from agent.builtin.models import RUST_TOOL_NAMES, is_rust_tool
+
         assert isinstance(RUST_TOOL_NAMES, frozenset)
         assert len(RUST_TOOL_NAMES) == 9
         for name in RUST_TOOL_NAMES:
@@ -308,17 +353,20 @@ class TestRegistryV1:
 
     def test_is_rust_tool_false(self):
         from agent.builtin.models import is_rust_tool
+
         assert not is_rust_tool("read_file")
         assert not is_rust_tool("calculator")
         assert not is_rust_tool("unknown_tool")
 
     def test_lightweight_risk_level_low(self):
         from agent.builtin.registry import TOOL_RISK_LEVEL
+
         for name in ("calculator", "json_parse", "json_format", "regex_match", "url_parse"):
             assert TOOL_RISK_LEVEL[name] == "low", f"{name} should be low risk"
 
     def test_rust_risk_level_map(self):
         from agent.builtin.registry import TOOL_RISK_LEVEL
+
         assert TOOL_RISK_LEVEL["stat_file"] == "read"
         assert TOOL_RISK_LEVEL["mkdir"] == "medium"
         assert TOOL_RISK_LEVEL["delete_file"] == "high"
@@ -327,6 +375,7 @@ class TestRegistryV1:
 
     def test_registry_lists_all(self):
         from agent.builtin.registry import BuiltinToolRegistry
+
         reg = BuiltinToolRegistry()
         names = reg.list_names()
         assert "read_file" in names
@@ -338,6 +387,7 @@ class TestRegistryV1:
 
     def test_registry_descriptions_include_lightweight(self):
         from agent.builtin.registry import BuiltinToolRegistry
+
         reg = BuiltinToolRegistry()
         desc = reg.generate_tool_descriptions()
         assert "builtin_calculator" in desc
@@ -346,17 +396,19 @@ class TestRegistryV1:
 
 # ---- events SSE emit ------------------------------------------------------------
 
+
 class TestBuiltinEvents:
     """V1 SSE 三处同步 3 事件 emit。"""
 
     @pytest.mark.asyncio
     async def test_emit_started(self):
         from agent.builtin.events import (
-            emit_tool_started,
-            consume_builtin_events,
-            flush_builtin_events,
             EVT_BUILTIN_TOOL_STARTED,
+            consume_builtin_events,
+            emit_tool_started,
+            flush_builtin_events,
         )
+
         await flush_builtin_events()
         await emit_tool_started(
             tool_name="read_file",
@@ -378,11 +430,12 @@ class TestBuiltinEvents:
     @pytest.mark.asyncio
     async def test_emit_done(self):
         from agent.builtin.events import (
-            emit_tool_done,
-            consume_builtin_events,
-            flush_builtin_events,
             EVT_BUILTIN_TOOL_DONE,
+            consume_builtin_events,
+            emit_tool_done,
+            flush_builtin_events,
         )
+
         await flush_builtin_events()
         await emit_tool_done(
             tool_name="read_file",
@@ -405,11 +458,12 @@ class TestBuiltinEvents:
     @pytest.mark.asyncio
     async def test_emit_denied(self):
         from agent.builtin.events import (
-            emit_tool_denied,
-            consume_builtin_events,
-            flush_builtin_events,
             EVT_BUILTIN_TOOL_DENIED,
+            consume_builtin_events,
+            emit_tool_denied,
+            flush_builtin_events,
         )
+
         await flush_builtin_events()
         await emit_tool_denied(
             tool_name="delete_file",
@@ -427,10 +481,11 @@ class TestBuiltinEvents:
     @pytest.mark.asyncio
     async def test_flush(self):
         from agent.builtin.events import (
-            emit_tool_started,
             consume_builtin_events,
+            emit_tool_started,
             flush_builtin_events,
         )
+
         await flush_builtin_events()
         await emit_tool_started(
             tool_name="x", args={}, risk_level="read", needs_hitl=False, call_id="1"
@@ -445,6 +500,7 @@ class TestBuiltinEvents:
 
 
 # ---- dispatcher V1 集成 ---------------------------------------------------------
+
 
 class TestDispatcherV1:
     """V1 dispatcher 集成：Python 工具走 to_thread；Rust 工具占位 not_implemented。"""
@@ -469,9 +525,9 @@ class TestDispatcherV1:
     @pytest.mark.asyncio
     async def test_shell_waits_for_hitl(self):
         """shell（V2 已实现，critical）→ 未审批时走 HITL 前置闸门。"""
+        from agent.builtin._tauri_runtime import clear_tauri_runtime
         from agent.builtin.dispatcher import dispatcher
         from agent.builtin.registry import reset_default_registry
-        from agent.builtin._tauri_runtime import clear_tauri_runtime
 
         clear_tauri_runtime()
         reset_default_registry()
@@ -501,6 +557,7 @@ class TestDispatcherV1:
     async def test_non_builtin_server_returns_none(self):
         """非 builtin server 返 None（让上游走 MCP）。"""
         from agent.builtin.dispatcher import dispatcher
+
         result = await dispatcher().dispatch(
             {"server": "mcp", "name": "some_tool", "args": {}},
             {},
@@ -526,8 +583,8 @@ class TestDispatcherV1:
         assert result["tool_result"]["ok"] is True
 
         # 检查 tool_calls 表行
-        import asyncio
         import aiosqlite
+
         async with aiosqlite.connect(str(db_path)) as db:
             cur = await db.execute(
                 "SELECT call_id, tool_name, risk_level, ok, elapsed_ms, run_id "
@@ -547,11 +604,11 @@ class TestDispatcherV1:
     async def test_dispatch_emits_sse_events(self):
         """dispatcher 调用 builtin.events emit 3 事件。"""
         from agent.builtin.dispatcher import dispatcher
-        from agent.builtin.registry import reset_default_registry
         from agent.builtin.events import (
             consume_builtin_events,
             flush_builtin_events,
         )
+        from agent.builtin.registry import reset_default_registry
 
         reset_default_registry()
         await flush_builtin_events()
@@ -577,10 +634,14 @@ class TestDispatcherV1:
         monkeypatch.setattr(settings, "audit_db_path", str(tmp_path / "a.sqlite"))
         # calculator 是 low 风险（无 HITL）；改用 write_file 测 medium
         result = await dispatcher().dispatch(
-            {"server": "builtin", "name": "write_file", "args": {
-                "path": str(tmp_path / "f.txt"),
-                "content": "hello",
-            }},
+            {
+                "server": "builtin",
+                "name": "write_file",
+                "args": {
+                    "path": str(tmp_path / "f.txt"),
+                    "content": "hello",
+                },
+            },
             {"run_id": "test-hitl"},
         )
         # write_file 的风险等级由 registry TOOL_RISK_LEVEL["write_file"]="medium"
@@ -591,17 +652,20 @@ class TestDispatcherV1:
 
 # ---- _LOCAL_ONLY_TASKS V1 注入 -------------------------------------------------
 
+
 class TestLocalOnlyTasksV1:
     """V1 _LOCAL_ONLY_TASKS 注入 builtin_tool_summary / builtin_search_summarize。"""
 
     def test_local_only_tasks_has_builtin_summary(self):
         from agent.llm.router import _LOCAL_ONLY_TASKS
+
         assert "builtin_tool_summary" in _LOCAL_ONLY_TASKS
         assert "builtin_search_summarize" in _LOCAL_ONLY_TASKS
 
     def test_all_local_only_tasks_count(self):
         """16 个本地任务：原有 14 + decompose + tool_orchestrate（编排决策接触用户内容）。"""
         from agent.llm.router import _LOCAL_ONLY_TASKS
+
         # 2026-07-29 末态：8 个；Phase 1B V1 (2026-07-30) 新增 2 → 10；
         # Phase 14 V0 (2026-07-31) 新增 image_processing_summary → 11；
         # Phase 2B V0 (2026-07-31) 新增 ssh_command_summary → 12；
@@ -612,11 +676,13 @@ class TestLocalOnlyTasksV1:
 
 # ---- stream.py SSE 三处同步 ----------------------------------------------------
 
+
 class TestStreamBuiltinDrain:
     """graph/stream.py::_drain_builtin_events() 正确路由 3 新事件到 SSE 通道。"""
 
     def test_channel_by_kind_has_builtin(self):
         from agent.graph.stream import _CHANNEL_BY_KIND
+
         assert _CHANNEL_BY_KIND["builtin_tool_started"] == "agent://builtin_tool_started"
         assert _CHANNEL_BY_KIND["builtin_tool_done"] == "agent://builtin_tool_done"
         assert _CHANNEL_BY_KIND["builtin_tool_denied"] == "agent://builtin_tool_denied"

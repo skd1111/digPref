@@ -1,4 +1,5 @@
 """Phase 18 AgentState 字段默认值契约。"""
+
 from __future__ import annotations
 
 from agent.graph.state import empty_state

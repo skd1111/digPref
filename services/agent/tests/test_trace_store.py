@@ -1,13 +1,10 @@
 """Tests for observability/trace_store.py — SQLite trace persistence."""
+
 from __future__ import annotations
 
-import asyncio
-import json
 import sqlite3
-from pathlib import Path
 
 import pytest
-
 from agent.observability import trace_store
 from agent.observability.trace_store import query_run, record
 
@@ -20,10 +17,17 @@ class TestTraceStore:
 
         run_id = "run_test_001"
         await record("intent", "ok", run_id=run_id, duration_ms=12, summary="intent=query")
-        await record("planner", "ok", run_id=run_id, duration_ms=87,
-                     summary="3 steps", rationale="fetch user data")
-        await record("tool_runner", "ok", run_id=run_id, duration_ms=250,
-                     tool_name="db.query", attempts=1)
+        await record(
+            "planner",
+            "ok",
+            run_id=run_id,
+            duration_ms=87,
+            summary="3 steps",
+            rationale="fetch user data",
+        )
+        await record(
+            "tool_runner", "ok", run_id=run_id, duration_ms=250, tool_name="db.query", attempts=1
+        )
         await record("responder", "ok", run_id=run_id, duration_ms=400)
 
         rows = await query_run(run_id)
@@ -36,8 +40,7 @@ class TestTraceStore:
     async def test_failed_step_records_error(self, tmp_path, monkeypatch):
         monkeypatch.setenv("EAIDE_AUDIT_DB_PATH", str(tmp_path / "audit.sqlite"))
         run_id = "run_test_002"
-        await record("tool_runner", "fail", run_id=run_id,
-                     error="RuntimeError: connection refused")
+        await record("tool_runner", "fail", run_id=run_id, error="RuntimeError: connection refused")
         rows = await query_run(run_id)
         assert rows[0]["status"] == "fail"
         assert "connection refused" in rows[0]["error"]
@@ -46,8 +49,14 @@ class TestTraceStore:
     async def test_hitl_step_records_approval_id_and_decision(self, tmp_path, monkeypatch):
         monkeypatch.setenv("EAIDE_AUDIT_DB_PATH", str(tmp_path / "audit.sqlite"))
         run_id = "run_test_003"
-        await record("hitl_gate", "ok", run_id=run_id,
-                     approval_id="appr_abc", decision="approve", duration_ms=2000)
+        await record(
+            "hitl_gate",
+            "ok",
+            run_id=run_id,
+            approval_id="appr_abc",
+            decision="approve",
+            duration_ms=2000,
+        )
         rows = await query_run(run_id)
         assert rows[0]["approval_id"] == "appr_abc"
         assert rows[0]["decision"] == "approve"
@@ -114,9 +123,15 @@ class TestLangSmithExport:
         import httpx
 
         class _MockAsyncClient:
-            def __init__(self, *a, **kw): pass
-            async def __aenter__(self): return self
-            async def __aexit__(self, *a): return None
+            def __init__(self, *a, **kw):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return None
+
             async def post(self, url, **kw):
                 posted.append((url, kw.get("json")))
                 return httpx.Response(200)
@@ -124,12 +139,16 @@ class TestLangSmithExport:
         monkeypatch.setattr(httpx, "AsyncClient", _MockAsyncClient)
         # The _export_to_langsmith is referenced via `import httpx` inside the function,
         # so we patch the module-level symbol.
-        import httpx as _httpx_mod
         # Direct test of the export function
-        await trace_store._export_to_langsmith({
-            "run_id": "r1", "node": "intent", "status": "ok",
-            "ts": "2026-07-01T00:00:00", "duration_ms": 10,
-        })
+        await trace_store._export_to_langsmith(
+            {
+                "run_id": "r1",
+                "node": "intent",
+                "status": "ok",
+                "ts": "2026-07-01T00:00:00",
+                "duration_ms": 10,
+            }
+        )
         assert posted, "expected LangSmith POST"
         assert posted[0][0].endswith("/runs")
         assert posted[0][1]["name"] == "intent"

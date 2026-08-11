@@ -5,13 +5,13 @@
   整体黄金集准确率目标 ≥ 90%，当前 V1 集合全部断言。
 - 混合拆解 framework 标签序列 100% 与期望一致（V1 集合）。
 """
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
 import pytest
-
 from agent.dual.policy import tag_plan_with_policy
 from agent.dual.router import ModeRouter
 

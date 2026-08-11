@@ -10,6 +10,7 @@ description = "Enterprise Local AI IDE Agent — control layer + MCP servers"
 requires-python = ">=3.10,<3.13"
 dependencies = [
     "keyring>=25.7.0",
+    "python-docx>=1.2.0",
     "tree-sitter>=0.26.0",
     "tree-sitter-java>=0.23.5",
     "tree-sitter-python>=0.25.0",
@@ -48,18 +49,85 @@ extend-exclude = ["**/migrations/**", "**/.venv/**"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "ASYNC", "RUF"]
-ignore = ["E501", "B008"]  # line-length handled by formatter; FastAPI Depends is fine
+# line-length handled by formatter; FastAPI Depends is fine;
+# RUF001/002/003: 中文领域项目，全角标点（，。：（））与中文注释为有意使用，全局豁免；
+# 其余为风格偏好类规则：ASYNC2xx（内网工具服务允许异步函数内同步 IO/time.sleep）、
+# SIM1xx/C4xx（表达式简化偏好，不强制）、B905/B904（zip strict 与 raise-from 不强制）
+ignore = [
+    "E501",
+    "B008",
+    "B904",
+    "B905",
+    "RUF001",
+    "RUF002",
+    "RUF003",
+    "ASYNC210",
+    "ASYNC221",
+    "ASYNC230",
+    "ASYNC240",
+    "ASYNC251",
+    "SIM102",
+    "SIM103",
+    "SIM105",
+    "SIM108",
+    "SIM110",
+    "SIM117",
+    "SIM118",
+    "C408",
+    "C416",
+]
 
 [tool.ruff.lint.per-file-ignores]
-"**/tests/**/*.py" = ["S101", "N802", "N803"]
-# 文档审核是中文领域模块，全角标点（，。：（））为有意使用
-"services/agent/src/agent/doc_review/**/*.py" = ["RUF001", "RUF002", "RUF003"]
-"services/agent/tests/test_doc_review_*.py" = ["RUF001", "RUF002", "RUF003"]
+"**/tests/**/*.py" = ["S101", "N802", "N803", "E402"]
+# 入口模块需在业务 import 前执行驱动加载 / LLM 配置迁移，非顶部 import 为有意为之
+"services/agent/src/agent/main.py" = ["E402"]
+# planner 中 asyncio 延迟 import 紧跟 TTL 缓存设计说明，非顶部为有意为之
+"services/agent/src/agent/graph/nodes/planner.py" = ["E402"]
+# 领域控制流异常（冲突/超限/拒绝等信号），命名不带 Error 后缀为有意设计，改名影响面大
+"services/agent/src/agent/biznav/storage.py" = ["N818"]
+"services/agent/src/agent/envconfig/scrub.py" = ["N818"]
+"services/agent/src/agent/llm/dspark/llamacpp_backend.py" = ["N818"]
+"services/agent/src/agent/orchestrator/queue.py" = ["N818"]
+"services/agent/src/agent/orchestrator/state_repo.py" = ["N818"]
+"services/agent/src/agent/orchestrator/tree_guard.py" = ["N818"]
+"services/agent/src/agent/sessions/sharing.py" = ["N818"]
+"services/mcp-servers/mcp-server-database/src/mcp_server_database/server.py" = ["N818"]
+"services/mcp-servers/mcp-server-database/src/mcp_server_database/tools/query.py" = ["N818"]
 
 [tool.mypy]
-python_version = "3.10"
+# 3.12：numpy/pandas 自带 stub 使用 type 语句（3.12 语法），低版本 target 下解析报 syntax error；
+# 运行时仍由 ruff target-version=py310 与 requires-python 约束
+python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
+# 各包 tests/ 同名目录会冲突（Duplicate module named "tests"），测试不纳入 mypy strict
+exclude = ["tests/"]
+
+# 无类型 stub 的第三方库（yaml/jsonschema 等）与可选驱动（asyncpg/aiomysql/pptx 等）
+[[tool.mypy.overrides]]
+module = [
+    "yaml",
+    "jsonschema",
+    "lxml",
+    "openpyxl",
+    "openpyxl.*",
+    "pptx",
+    "llama_cpp",
+    "asyncpg",
+    "aiomysql",
+    "playwright",
+    "playwright.*",
+    "weasyprint",
+    "jinja2",
+    "oracledb",
+    "aioodbc",
+    "dmPython",
+    "clickhouse_connect",
+    "markitdown",
+    "pyarrow",
+    "pyarrow.*",
+]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

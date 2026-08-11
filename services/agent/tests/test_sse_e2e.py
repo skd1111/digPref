@@ -13,9 +13,9 @@ What we assert:
       interrupt backend (verified via a side-channel probe)
     - Cross-checks: invalid decision returns 200 with `ok: false`
 """
+
 from __future__ import annotations
 
-import asyncio
 import json
 import sys
 from pathlib import Path
@@ -29,39 +29,59 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from fastapi.testclient import TestClient
 
-
 # ---- A scripted graph runtime for testing ---------------------------------
 
+
 class _ScriptedLLM:
-    async def classify_intent(self, text): return "query"
+    async def classify_intent(self, text):
+        return "query"
 
     async def plan(self, *, intent, user_prompt, history, tool_specs):
         return (
-            [{"server": "db", "name": "db.query",
-              "args": {"sql": "SELECT 1"}, "risk_level": "read",
-              "rationale": "mock"}],
+            [
+                {
+                    "server": "db",
+                    "name": "db.query",
+                    "args": {"sql": "SELECT 1"},
+                    "risk_level": "read",
+                    "rationale": "mock",
+                }
+            ],
             "scripted plan",
         )
 
-    async def repair_call(self, *, original, error, history): return original
+    async def repair_call(self, *, original, error, history):
+        return original
+
     async def summarise(self, *, intent, user_prompt, plan, results):
         return "Mock final answer.", ["db"]
 
 
 class _ScriptedMCP:
     async def list_tools(self):
-        return [{"server": "db", "name": "db.query",
-                 "inputSchema": {"type": "object", "properties": {"sql": {"type": "string"}}}}]
+        return [
+            {
+                "server": "db",
+                "name": "db.query",
+                "inputSchema": {"type": "object", "properties": {"sql": {"type": "string"}}},
+            }
+        ]
+
     async def invoke(self, call, *, timeout_sec, row_limit):
-        return {"ok": True, "columns": ["n"], "rows": [[42]],
-                "rows_returned": 1, "truncated": False}
+        return {
+            "ok": True,
+            "columns": ["n"],
+            "rows": [[42]],
+            "rows_returned": 1,
+            "truncated": False,
+        }
 
 
 def _build_test_app():
     """Build a fresh FastAPI app with a scripted runtime for tests."""
     # Import inside the function so conftest has run first (env vars set)
     from agent.graph.compile import Runtime, compile_graph
-    from agent.main import create_app, set_runtime_for_testing, get_compiled_graph
+    from agent.main import create_app, set_runtime_for_testing
 
     runtime = Runtime(llm=_ScriptedLLM(), mcp=_ScriptedMCP())
     graph = compile_graph(runtime)
@@ -77,6 +97,7 @@ def _build_test_app():
 
 # ---- SSE wire-format parsing ---------------------------------------------
 
+
 def _parse_sse_stream(body_iter):
     """Yield (event_name, data_dict) tuples from an SSE byte stream.
 
@@ -89,7 +110,6 @@ def _parse_sse_stream(body_iter):
     """
     last_event: str | None = None
     last_data: list[str] = []
-    pending_event: str | None = None
 
     def _flush():
         nonlocal last_event, last_data
@@ -105,9 +125,9 @@ def _parse_sse_stream(body_iter):
                 # New frame begins → flush the previous one
                 if last_event:
                     yield from _flush()
-                last_event = line[len("event:"):].strip()
+                last_event = line[len("event:") :].strip()
             elif line.startswith("data:"):
-                last_data.append(line[len("data:"):].lstrip())
+                last_data.append(line[len("data:") :].lstrip())
     if last_event and last_data:
         yield last_event, _safe_json("\n".join(last_data))
 
@@ -121,6 +141,7 @@ def _safe_json(s: str) -> Any:
 
 # ---- Tests ----------------------------------------------------------------
 
+
 @pytest.fixture
 def client():
     app = _build_test_app()
@@ -131,7 +152,8 @@ def client():
 class TestChatStream:
     def test_sse_content_type(self, client):
         with client.stream(
-            "POST", "/chat/run-abc/stream",
+            "POST",
+            "/chat/run-abc/stream",
             json={"prompt": "show me orders"},
         ) as resp:
             assert resp.status_code == 200
@@ -139,7 +161,8 @@ class TestChatStream:
 
     def test_full_event_sequence(self, client):
         with client.stream(
-            "POST", "/chat/run-xyz/stream",
+            "POST",
+            "/chat/run-xyz/stream",
             json={"prompt": "show me orders"},
         ) as resp:
             events = list(_parse_sse_stream(resp.iter_lines()))
@@ -154,7 +177,8 @@ class TestChatStream:
 
     def test_done_payload_includes_runId(self, client):
         with client.stream(
-            "POST", "/chat/run-payload/stream",
+            "POST",
+            "/chat/run-payload/stream",
             json={"prompt": "ping"},
         ) as resp:
             events = list(_parse_sse_stream(resp.iter_lines()))
@@ -164,7 +188,8 @@ class TestChatStream:
     def test_sse_framing_newlines(self, client):
         """Each event must be terminated by a blank line."""
         with client.stream(
-            "POST", "/chat/run-frame/stream",
+            "POST",
+            "/chat/run-frame/stream",
             json={"prompt": "ping"},
         ) as resp:
             body = b"".join(resp.iter_bytes()).decode("utf-8", "replace")
@@ -198,6 +223,7 @@ class TestApprovalEndpoint:
 
     def test_reject(self, client, monkeypatch):
         from agent.api import approval as approval_mod
+
         captured = {}
 
         async def _capture(approval_id, decision):

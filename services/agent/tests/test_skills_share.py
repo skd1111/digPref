@@ -1,12 +1,11 @@
 """V1 skill zip 分享测试。"""
+
 from __future__ import annotations
 
 import io
 import zipfile
-from pathlib import Path
 
 import pytest
-
 from agent.skills.loader import SkillLoader
 from agent.skills.models import Skill
 from agent.skills.share import export_zip, import_zip
@@ -81,7 +80,7 @@ def test_import_zip_skip_existing(loader):
     """已存在的 skill → skipped（overwrite 默认 False）。"""
     # 先写一个
     (loader._dir / "db_query_order.yaml").write_text(
-        "schema_version: \"1.0\"\nid: db_query_order\nname: 订单\n",
+        'schema_version: "1.0"\nid: db_query_order\nname: 订单\n',
         encoding="utf-8",
     )
     loader.load_all()
@@ -96,7 +95,7 @@ def test_import_zip_skip_existing(loader):
 def test_import_zip_overwrite_existing(loader):
     """overwrite=True 时覆盖。"""
     (loader._dir / "db_query_order.yaml").write_text(
-        "schema_version: \"1.0\"\nid: db_query_order\nname: 订单\n",
+        'schema_version: "1.0"\nid: db_query_order\nname: 订单\n',
         encoding="utf-8",
     )
     loader.load_all()
@@ -119,7 +118,7 @@ def test_import_zip_bad_zip(loader):
 def test_import_zip_empty(loader):
     """空 zip → 报告错误。"""
     buf = io.BytesIO()
-    with zipfile.ZipFile(buf, mode="w") as zf:
+    with zipfile.ZipFile(buf, mode="w"):
         pass
     report = import_zip(buf.getvalue(), loader)
     assert len(report.errors) == 1
@@ -130,7 +129,7 @@ def test_import_zip_zip_slip_blocked(loader):
     """zip slip（路径含 ../）被拦截。"""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, mode="w") as zf:
-        zf.writestr("../evil.yaml", "schema_version: \"1.0\"\nid: evil\nname: e\n")
+        zf.writestr("../evil.yaml", 'schema_version: "1.0"\nid: evil\nname: e\n')
     report = import_zip(buf.getvalue(), loader)
     assert report.imported == []
     assert len(report.errors) == 1
@@ -151,12 +150,14 @@ def test_import_zip_invalid_skill_yaml(loader):
 
 def test_import_zip_partial_success(loader):
     """部分成功：1 个有效 + 1 个无效。"""
-    s_good = _make_skill("db_query_order")
+    _make_skill("db_query_order")
     # 直接构造 zip：一个有效 + 一个 schema 不合法
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("db_query_order.yaml", "schema_version: \"1.0\"\nid: db_query_order\nname: 订单\n")
-        zf.writestr("bad.yaml", "schema_version: \"1.0\"\nid: bad id with space\nname: bad\n")
+        zf.writestr(
+            "db_query_order.yaml", 'schema_version: "1.0"\nid: db_query_order\nname: 订单\n'
+        )
+        zf.writestr("bad.yaml", 'schema_version: "1.0"\nid: bad id with space\nname: bad\n')
     report = import_zip(buf.getvalue(), loader)
     assert report.imported == ["db_query_order"]
     assert len(report.errors) == 1

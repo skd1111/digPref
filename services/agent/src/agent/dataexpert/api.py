@@ -11,12 +11,14 @@
   - POST /data/templates            —— 保存/更新报表模板
   - GET  /data/tasks                —— 历史分析任务列表
 """
+
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, WebSocket
 from pydantic import BaseModel, Field
 
 from agent.dataexpert.events import (
@@ -30,15 +32,23 @@ from agent.dataexpert.models import generate_id, now_epoch
 from agent.dataexpert.readonly.guard import (
     WriteBlockedError,
     enforce_readonly,
+    enforce_select_only,
     inject_limit,
     is_heavy,
 )
-from agent.dataexpert.storage import get_default_storage
+from agent.dataexpert.readonly.pool import ReadOnlyPool
+from agent.dataexpert.storage import get_default_storage, load_result_parquet, save_result_parquet
 
 router = APIRouter(prefix="/data", tags=["data-expert"])
 
+# 内联阈值：超过此行数结果落 Parquet + WS Arrow 流，不进 HTTP JSON（设计红线）
+ROW_INLINE_MAX = 500
+# WS Arrow 流每批行数
+ARROW_BATCH_ROWS = 5000
+
 
 # ---- Pydantic schemas -------------------------------------------------------
+
 
 class NL2SQLRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2048)
@@ -50,12 +60,15 @@ class NL2SQLResponse(BaseModel):
     is_heavy: bool
     tables_used: list[str] = Field(default_factory=list)
     dictionary_context: str = ""
+    error: str = ""  # 生成 SQL 未通过白名单时的降级说明
 
 
 class SqlRunRequest(BaseModel):
     sql: str = Field(min_length=1, max_length=8192)
     source_id: str = ""
     confirmed: bool = False  # HITL 确认（重查询需 true）
+    # Rust 桥接注入的连接配置（keyring 已解析）；凭证只在内存传递，不落库不打日志
+    connection: dict = Field(default_factory=dict)
 
 
 class PythonRunRequest(BaseModel):
@@ -70,13 +83,15 @@ class ChartRecommendRequest(BaseModel):
 
 
 class ExportRequest(BaseModel):
-    columns: list[str]
-    rows: list[list[Any]]
+    task_id: str = ""  # 优先：服务端从 Parquet 取数（整表不经前端，设计红线）
+    columns: list[str] = Field(default_factory=list)  # 兼容：内联小结果前端直传
+    rows: list[list[Any]] = Field(default_factory=list)
     title: str = "数据报表"
 
 
 class TestConnectionRequest(BaseModel):
     """测试数据库连接请求体。"""
+
     db_type: str = Field(min_length=1, description="数据库类型")
     host: str = "127.0.0.1"
     port: int | None = None
@@ -97,6 +112,7 @@ class TemplateRequest(BaseModel):
 
 # ---- 端点 -------------------------------------------------------------------
 
+
 @router.get("/sources")
 async def list_sources() -> dict:
     """数据源列表。"""
@@ -106,22 +122,48 @@ async def list_sources() -> dict:
 
 
 @router.post("/sources/{source_id}/sync")
-async def sync_schema(source_id: str) -> dict:
-    """同步 Schema 元数据（V0：刷新 updated_at）。"""
+async def sync_schema(source_id: str, body: dict | None = None) -> dict:
+    """同步 Schema 元数据（缺口 2：真实拉取表结构 + 中文注释）。"""
     storage = get_default_storage()
     source = await storage.get_source(source_id)
     if source is None:
         raise HTTPException(status_code=404, detail=f"source not found: {source_id}")
-    # V0：仅更新时间戳（V1 真实连接 DB 拉 schema）
+
+    # 连接配置：请求体优先（Rust 注入），其次数据源登记的 connection_config
+    cfg = (body or {}).get("connection") or {}
+    if not cfg:
+        cfg = source.get("connection_config", {}) or {}
+    if not cfg:
+        raise HTTPException(status_code=400, detail="缺少数据源连接配置（connection）")
+
+    pool = ReadOnlyPool(cfg)
+    try:
+        tables = await pool.fetch_schema()
+    finally:
+        await pool.close()
+
     await storage.upsert_source(
         source_id=source_id,
         name=source["name"],
         source_type=source["type"],
         connection_ref=source.get("connection_ref", ""),
-        schema_cache=source.get("schema_cache", []),
+        schema_cache=tables,
         updated_at=now_epoch(),
     )
-    return {"ok": True, "source_id": source_id, "synced_at": now_epoch()}
+    emit_event_sync(
+        "data_source_sync",
+        {
+            "kind": "data_source_sync",
+            "source_id": source_id,
+            "tables": len(tables),
+        },
+    )
+    return {
+        "ok": True,
+        "source_id": source_id,
+        "synced_at": now_epoch(),
+        "tables_synced": len(tables),
+    }
 
 
 @router.post("/test_connection")
@@ -175,6 +217,18 @@ async def nl2sql(req: NL2SQLRequest) -> NL2SQLResponse:
     # 生成 SQL
     sql = await to_sql(req.question, tables, dict_ctx)
 
+    # 缺口 10 前置校验：生成的 SQL 必须是单条 SELECT，否则丢弃，绝不下发执行
+    try:
+        enforce_select_only(sql)
+    except WriteBlockedError as e:
+        return NL2SQLResponse(
+            sql="",
+            is_heavy=False,
+            tables_used=[t.name for t in tables],
+            dictionary_context=dict_ctx,
+            error=f"生成的 SQL 含非查询语句（{e.token}），已拒绝",
+        )
+
     # 判断是否重查询
     heavy = is_heavy(sql)
 
@@ -188,20 +242,25 @@ async def nl2sql(req: NL2SQLRequest) -> NL2SQLResponse:
 
 @router.post("/sql/run")
 async def run_sql(req: SqlRunRequest) -> dict:
-    """执行只读 SQL（guard + LIMIT + HITL）。"""
-    # 安全层 1：写操作硬拦截
+    """执行只读 SQL（SELECT 白名单 + 黑名单双层 guard + LIMIT + HITL）。"""
+    # 安全层 1：SELECT 白名单（缺口 10：除 dev 环境外仅 SELECT/WITH）
+    # 安全层 2：写操作黑名单（纵深防御）
     try:
+        enforce_select_only(req.sql)
         enforce_readonly(req.sql)
     except WriteBlockedError as e:
         # 记 DATA_WRITE_BLOCKED 审计
-        emit_event_sync("data_write_blocked", {
-            "kind": "data_write_blocked",
-            "sql": req.sql[:200],
-            "token": e.token,
-        })
+        emit_event_sync(
+            "data_write_blocked",
+            {
+                "kind": "data_write_blocked",
+                "sql": req.sql[:200],
+                "token": e.token,
+            },
+        )
         raise HTTPException(status_code=403, detail=str(e))
 
-    # 安全层 2：重查询 HITL
+    # 安全层 3：重查询 HITL
     if is_heavy(req.sql) and not req.confirmed:
         return {
             "needs_confirm": True,
@@ -209,27 +268,74 @@ async def run_sql(req: SqlRunRequest) -> dict:
             "sql": inject_limit(req.sql),
         }
 
-    # 安全层 3：强制 LIMIT
-    safe_sql = inject_limit(req.sql)
+    # 解析连接配置：请求体优先（Rust 注入），其次数据源登记的 connection_config
+    source_cfg = dict(req.connection)
+    storage = get_default_storage()
+    if not source_cfg and req.source_id:
+        source = await storage.get_source(req.source_id)
+        source_cfg = (source or {}).get("connection_config", {}) or {}
+    if not source_cfg:
+        raise HTTPException(status_code=400, detail="缺少数据源连接配置（connection 或 source_id）")
 
-    # V0：模拟执行（真实实现走 ReadOnlyPool）
+    # 真实执行（pool 内部再次 enforce_readonly + inject_limit，纵深防御）
+    pool = ReadOnlyPool(source_cfg)
     start = time.perf_counter()
+    try:
+        df = await pool.execute_sql(req.sql)
+    except WriteBlockedError as e:
+        emit_event_sync(
+            "data_write_blocked",
+            {
+                "kind": "data_write_blocked",
+                "sql": req.sql[:200],
+                "token": e.token,
+            },
+        )
+        raise HTTPException(status_code=403, detail=str(e))
+    finally:
+        await pool.close()
     elapsed_ms = int((time.perf_counter() - start) * 1000)
 
+    # 结果分流 + 任务落库（缺口 1/4）
+    task_id = generate_id()
+    row_count = len(df)
+    columns = [str(c) for c in df.columns]
+    dtypes = [str(t) for t in df.dtypes]
+    inline = row_count <= ROW_INLINE_MAX
+    result_data_ref = "" if inline else save_result_parquet(df, task_id)
+
+    await storage.insert_task(
+        task_id=task_id,
+        name=req.sql[:64],
+        user_id="local",
+        query_sql=req.sql,
+        result_metadata={"columns": columns, "dtypes": dtypes, "row_count": row_count},
+        result_data_ref=result_data_ref,
+        created_at=now_epoch(),
+    )
+
     # 记 DATA_SQL_RUN 审计
-    emit_event_sync(EVT_DATA_QUERY_RESULT, {
-        "kind": EVT_DATA_QUERY_RESULT,
-        "sql": safe_sql[:500],
-        "elapsed_ms": elapsed_ms,
-        "row_count": 0,
-    })
+    emit_event_sync(
+        EVT_DATA_QUERY_RESULT,
+        {
+            "kind": EVT_DATA_QUERY_RESULT,
+            "sql": req.sql[:500],
+            "elapsed_ms": elapsed_ms,
+            "row_count": row_count,
+            "task_id": task_id,
+        },
+    )
 
     return {
         "ok": True,
-        "sql": safe_sql,
-        "columns": [],
-        "rows": [],
-        "row_count": 0,
+        "task_id": task_id,
+        "sql": req.sql,
+        "columns": columns,
+        "dtypes": dtypes,
+        "rows": df.values.tolist() if inline else [],
+        "result_data_ref": result_data_ref,
+        "stream_ref": "" if inline else f"/data/stream/{task_id}",
+        "row_count": row_count,
         "elapsed_ms": elapsed_ms,
         "truncated": False,
     }
@@ -237,25 +343,51 @@ async def run_sql(req: SqlRunRequest) -> dict:
 
 @router.post("/python/run")
 async def run_python(req: PythonRunRequest) -> dict:
-    """沙箱执行 Python。"""
+    """沙箱执行 Python（缺口 8：task_id 非空时注入上一步 SQL 结果 df）。"""
     from agent.dataexpert.sandbox.executor import run
 
-    result = await run(req.script)
+    # 解析上一步 SQL 结果的 Parquet 引用（子进程直接读盘）
+    df_input_ref = ""
+    if req.task_id:
+        task = await get_default_storage().get_task(req.task_id)
+        df_input_ref = (task or {}).get("result_data_ref", "") or ""
 
-    emit_event_sync(EVT_DATA_PYTHON_RESULT, {
-        "kind": EVT_DATA_PYTHON_RESULT,
-        "ok": result.ok,
-        "elapsed_s": result.elapsed_s,
-        "error": result.error[:500] if result.error else "",
-    })
+    result = await run(req.script, df_input_ref=df_input_ref)
 
-    return {
+    emit_event_sync(
+        EVT_DATA_PYTHON_RESULT,
+        {
+            "kind": EVT_DATA_PYTHON_RESULT,
+            "ok": result.ok,
+            "elapsed_s": result.elapsed_s,
+            "error": result.error[:500] if result.error else "",
+        },
+    )
+
+    resp: dict = {
         "ok": result.ok,
         "out_df_ref": result.out_df_ref,
         "stdout": result.stdout[:2000],
         "error": result.error[:2000],
         "elapsed_s": result.elapsed_s,
+        "columns": [],
+        "dtypes": [],
+        "rows": [],
+        "row_count": 0,
     }
+
+    # 输出 DataFrame 存在时：回传头部（≤ ROW_INLINE_MAX 行）供前端网格展示
+    if result.ok and result.out_df_ref:
+        try:
+            out_df = load_result_parquet(result.out_df_ref)
+            resp["columns"] = [str(c) for c in out_df.columns]
+            resp["dtypes"] = [str(t) for t in out_df.dtypes]
+            resp["row_count"] = len(out_df)
+            resp["rows"] = out_df.head(ROW_INLINE_MAX).values.tolist()
+        except Exception:
+            pass
+
+    return resp
 
 
 @router.post("/chart/recommend")
@@ -265,38 +397,59 @@ async def chart_recommend(req: ChartRecommendRequest) -> dict:
 
     reco = recommend_chart(req.columns, req.dtypes, req.row_count)
 
-    emit_event_sync(EVT_DATA_CHART_READY, {
-        "kind": EVT_DATA_CHART_READY,
-        "chart_type": reco["chart_type"],
-        "reason": reco["reason"],
-    })
+    emit_event_sync(
+        EVT_DATA_CHART_READY,
+        {
+            "kind": EVT_DATA_CHART_READY,
+            "chart_type": reco["chart_type"],
+            "reason": reco["reason"],
+        },
+    )
 
     return reco
 
 
 @router.post("/export/{fmt}")
 async def export_data(fmt: str, req: ExportRequest) -> dict:
-    """导出（PII 脱敏 + 水印 + 审计）。"""
+    """导出（PII 脱敏 + 水印 + 审计）。优先按 task_id 服务端取数。"""
+    columns, rows = req.columns, req.rows
+    if req.task_id:
+        task = await get_default_storage().get_task(req.task_id)
+        ref = (task or {}).get("result_data_ref", "")
+        if not task or not ref:
+            raise HTTPException(status_code=404, detail="task result not found")
+        df = load_result_parquet(ref)
+        columns = [str(c) for c in df.columns]
+        rows = df.values.tolist()
+    elif not columns and not rows:
+        raise HTTPException(status_code=400, detail="task_id 或 columns/rows 必须提供其一")
+
     if fmt == "excel":
         from agent.dataexpert.export.excel import export_excel
-        meta = export_excel(req.columns, req.rows, title=req.title)
+
+        meta = export_excel(columns, rows, title=req.title)
     elif fmt == "pdf":
         from agent.dataexpert.export.pdf import export_pdf
-        meta = export_pdf(req.columns, req.rows, title=req.title)
+
+        meta = export_pdf(columns, rows, title=req.title)
     elif fmt == "csv":
         from agent.dataexpert.export.csv import export_csv
-        meta = export_csv(req.columns, req.rows, title=req.title)
+
+        meta = export_csv(columns, rows, title=req.title)
     else:
         raise HTTPException(status_code=400, detail=f"unsupported format: {fmt}")
 
     # 记 DATA_EXPORT 审计
-    emit_event_sync(EVT_DATA_EXPORT_DONE, {
-        "kind": EVT_DATA_EXPORT_DONE,
-        "format": fmt,
-        "row_count": meta.get("row_count", 0),
-        "md5": meta.get("md5", ""),
-        "path": meta.get("path", ""),
-    })
+    emit_event_sync(
+        EVT_DATA_EXPORT_DONE,
+        {
+            "kind": EVT_DATA_EXPORT_DONE,
+            "format": fmt,
+            "row_count": meta.get("row_count", 0),
+            "md5": meta.get("md5", ""),
+            "path": meta.get("path", ""),
+        },
+    )
 
     return meta
 
@@ -324,3 +477,48 @@ async def list_tasks(user_id: str | None = None, limit: int = 50) -> dict:
     storage = get_default_storage()
     tasks = await storage.list_tasks(user_id=user_id, limit=min(limit, 200))
     return {"tasks": tasks, "count": len(tasks)}
+
+
+@router.websocket("/stream/{task_id}")
+async def stream_result(ws: WebSocket, task_id: str) -> None:
+    """大结果集 Arrow IPC 二进制流（缺口 5，设计红线：不走 SSE/JSON）。
+
+    协议：首帧 text(meta) → N 帧 binary(Arrow IPC 批) → 末帧 text(done)。
+    每批是独立完整的 IPC stream（含 schema），前端逐批 tableFromIPC 后合并。
+    """
+    await ws.accept()
+    storage = get_default_storage()
+    task = await storage.get_task(task_id)
+    ref = (task or {}).get("result_data_ref", "")
+    if not task or not ref:
+        await ws.close(code=4404)
+        return
+
+    try:
+        import pyarrow as pa
+
+        df = load_result_parquet(ref)
+        raw_meta = task.get("result_metadata") or {}
+        meta = raw_meta if isinstance(raw_meta, dict) else {}
+        await ws.send_text(
+            json.dumps(
+                {"kind": "meta", **meta},
+                ensure_ascii=False,
+                default=str,
+            )
+        )
+
+        table = pa.Table.from_pandas(df, preserve_index=False)
+        for batch in table.to_batches(max_chunksize=ARROW_BATCH_ROWS):
+            sink = pa.BufferOutputStream()
+            with pa.ipc.new_stream(sink, batch.schema) as writer:
+                writer.write_batch(batch)
+            await ws.send_bytes(sink.getvalue().to_pybytes())
+
+        await ws.send_text(
+            json.dumps(
+                {"kind": "done", "done": True, "row_count": len(df)},
+            )
+        )
+    finally:
+        await ws.close()

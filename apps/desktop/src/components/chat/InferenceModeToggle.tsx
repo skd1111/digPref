@@ -1,7 +1,7 @@
 /**
  * InferenceModeToggle —— Phase 4 V0 推理模式切换。
  *
- * 放在 ChatInput 发送按钮旁：
+ * 2026-08-05 起渲染于 设置 → 高级设置（AdvancedSettingsPanel）：
  *   ⚡ 正常 —— 简单任务端侧优先（本地模型做分类+列计划）
  *   🚀 性能 —— 全部走云端（跳过端侧，内网/云端模型直出）
  */

@@ -14,6 +14,7 @@
     - 多 yaml 文件监听（一个项目多个 yaml）
     - YAML 与 DB 冲突时合并策略（同 id source='manual' 优先）
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -21,7 +22,6 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Optional
 
 from .events import EVT_YAML_RELOADED, emit_biznav_event
 from .import_export import FeatureImportError, FeatureIO
@@ -157,10 +157,10 @@ class YamlHotReloader:
         self._project_name = project_name
         self._storage = storage
         self._debounce_ms = debounce_ms
-        self._task: Optional[asyncio.Task] = None
+        self._task: asyncio.Task | None = None
         self._stop_event = asyncio.Event()
         # watchfiles 在 sync 线程跑；事件回调通过 run_coroutine_threadsafe 调度
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     @property
     def yaml_path(self) -> Path:
@@ -173,7 +173,9 @@ class YamlHotReloader:
         """启动 watcher（在主 event loop 里）。"""
         self._ensure_yaml_parent()
         self._loop = asyncio.get_running_loop()
-        self._task = asyncio.create_task(self._watch_loop(), name=f"biznav-reload-{self._project_name}")
+        self._task = asyncio.create_task(
+            self._watch_loop(), name=f"biznav-reload-{self._project_name}"
+        )
 
     async def stop(self) -> None:
         self._stop_event.set()
@@ -181,7 +183,7 @@ class YamlHotReloader:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            except (asyncio.CancelledError, Exception):
                 pass
 
     async def _watch_loop(self) -> None:
@@ -189,9 +191,7 @@ class YamlHotReloader:
         try:
             from watchfiles import awatch
         except ImportError:
-            logger.warning(
-                "[biznav.hot_reload] watchfiles 未安装，跳过 hot_reload 功能"
-            )
+            logger.warning("[biznav.hot_reload] watchfiles 未安装，跳过 hot_reload 功能")
             return
 
         yaml_path = self.yaml_path
@@ -212,23 +212,17 @@ class YamlHotReloader:
                     continue
                 if _is_self_written(yaml_path):
                     # 本进程刚刚写入 → 跳过
-                    logger.debug(
-                        "[biznav.hot_reload] 跳过自写入 YAML: %s", yaml_path
-                    )
+                    logger.debug("[biznav.hot_reload] 跳过自写入 YAML: %s", yaml_path)
                     continue
                 try:
-                    await reload_yaml_to_db(
-                        yaml_path, self._project_name, self._storage
-                    )
+                    await reload_yaml_to_db(yaml_path, self._project_name, self._storage)
                 except FileNotFoundError:
                     pass  # 已 emit；watch 继续
                 except FeatureImportError:
                     pass  # 已 emit；watch 继续
-                except Exception as e:  # noqa: BLE001 —— best-effort
-                    logger.exception(
-                        "[biznav.hot_reload] reload 失败: %s", e
-                    )
+                except Exception as e:
+                    logger.exception("[biznav.hot_reload] reload 失败: %s", e)
         except asyncio.CancelledError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.exception("[biznav.hot_reload] watcher crashed: %s", e)

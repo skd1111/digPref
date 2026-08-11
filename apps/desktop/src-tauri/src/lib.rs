@@ -1,6 +1,9 @@
 //! Tauri runtime bootstrap.
 //! Wires together: state, plugins, commands, event router.
 //!
+// dead_code 豁免：大量结构/方法为 Phase 预留 API（Tauri command 基础设施、
+// MCP registry 字段等）或仅在 #[cfg(test)] 中使用，lib target 下判定为未使用。
+#![allow(dead_code)]
 //! 关键防御：release 包没有控制台，所有 panic / stderr 都丢失。
 //! 所以 `run()` 第一件事就是装 panic hook，把所有 panic
 //! 写到 `%LOCALAPPDATA%\Enterprise AI IDE\crash.log`。
@@ -143,11 +146,14 @@ pub fn run() {
             commands::agent::agent_chat,
             commands::agent::agent_approval,
             commands::agent::agent_cancel,
+            commands::agent::chat_summarize_title,
             commands::agent::agent_active_runs,
             commands::agent::agent_restart,
             commands::agent::agent_autonomy_confirm,
             commands::agent::agent_toolchain_get,
             commands::agent::agent_toolchain_save,
+            // Token 用量（状态栏实时速率 + 当日总量）
+            commands::agent::token_usage_get,
             commands::credentials::credential_get,
             commands::credentials::credential_set,
             commands::credentials::credential_delete,
@@ -179,6 +185,16 @@ pub fn run() {
             commands::skills::skills_import,
             commands::skills::skills_export_all,
             commands::skills::skills_reload,
+            // 专家团资产（设置页维护 + 运营模式自动选择注入）
+            commands::expert_teams::expert_teams_list,
+            commands::expert_teams::expert_teams_get,
+            commands::expert_teams::expert_teams_save,
+            commands::expert_teams::expert_teams_delete,
+            commands::expert_teams::expert_teams_import,
+            commands::expert_teams::expert_teams_export_all,
+            commands::expert_teams::expert_teams_recommend,
+            commands::expert_teams::expert_teams_import_package,
+            commands::expert_teams::expert_teams_export_package,
             // Phase 2C V0
             commands::router::router_get_metrics,
             commands::router::router_get_decisions,
@@ -187,6 +203,7 @@ pub fn run() {
             commands::router::router_set_spark_mode,
             commands::router::router_test_connection,
             commands::router::router_list_backends,
+            commands::router::router_reload_context,
             commands::router::router_upsert_backend,
             commands::router::router_delete_backend,
             commands::router::router_get_weights,
@@ -221,6 +238,7 @@ pub fn run() {
             commands::codenav::code_nav_status,
             commands::codenav::code_nav_list_symbols,
             commands::codenav::code_nav_explain,
+            commands::codenav::code_nav_explain_stream,
             commands::codenav::code_nav_llm_config,
             commands::codenav::code_nav_llm_config_reload,
             commands::codenav::code_nav_allowed_roots,
@@ -240,6 +258,45 @@ pub fn run() {
             commands::biznav::biznav_import_yaml,
             commands::biznav::biznav_export_yaml,
             commands::biznav::biznav_affected,
+            commands::biznav::biznav_profile,
+            // reqflow V1：运营专家需求改造工作流（需求卡片）10 command
+            commands::reqflow::reqflow_create_batch,
+            commands::reqflow::reqflow_list_batches,
+            commands::reqflow::reqflow_generate_card,
+            commands::reqflow::reqflow_list_cards,
+            commands::reqflow::reqflow_create_card,
+            commands::reqflow::reqflow_update_card,
+            commands::reqflow::reqflow_delete_card,
+            commands::reqflow::reqflow_list_card_versions,
+            commands::reqflow::reqflow_get_card_version,
+            commands::reqflow::reqflow_export,
+            commands::reqflow::reqflow_write_export,
+            // Phase 2H：运营工作台业务记录 + 数据字典
+            commands::ops::ops_create_record,
+            commands::ops::ops_list_records,
+            commands::ops::ops_get_record,
+            commands::ops::ops_delete_record,
+            commands::ops::ops_summarize_record,
+            // 专家验收工作流 Case（2026-08-10）
+            commands::ops::ops_case_get,
+            commands::ops::ops_case_clear,
+            commands::ops::ops_case_file_add,
+            commands::ops::ops_case_file_review,
+            commands::ops::ops_case_file_content,
+            commands::ops::ops_case_file_save_as,
+            commands::ops::ops_case_file_override,
+            commands::ops::ops_case_file_delete,
+            commands::ops::ops_case_ask,
+            commands::ops::ops_case_draft_save,
+            commands::ops::ops_case_draft_submit,
+            commands::ops::ops_case_export,
+            commands::ops::ops_case_crosscheck,
+            commands::datadict::dict_list_items,
+            commands::datadict::dict_search_items,
+            commands::datadict::dict_list_categories,
+            commands::datadict::dict_create_item,
+            commands::datadict::dict_update_item,
+            commands::datadict::dict_delete_item,
             // Phase 4 V0 本地端侧模型
             commands::localai::localai_status,
             commands::localai::localai_health,
@@ -280,9 +337,13 @@ pub fn run() {
             commands::dataexpert::data_export,
             commands::dataexpert::data_save_template,
             commands::dataexpert::data_test_connection,
+            // Phase 7 补齐：大结果集 WS+Arrow 中继 + 历史分析列表
+            commands::dataexpert::data_stream_result,
+            commands::dataexpert::data_list_tasks,
             // Phase 5 V1：审核专家工作台（13 操作经 _op 字段分发到 Python FastAPI）
             commands::audit_expert::audit_decide,
             commands::doc_review::doc_review,
+            commands::doc_review::doc_review_export_word,
             // Phase 6 V1.5：会话管理 17 command（V0 5 + V1.5 12）
             commands::sessions::sessions_create,
             commands::sessions::sessions_list,

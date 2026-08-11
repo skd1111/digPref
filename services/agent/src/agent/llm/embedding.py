@@ -2,6 +2,7 @@
 
 Phase 4 V0：为外部 KB 检索提供向量化能力。
 """
+
 from __future__ import annotations
 
 import logging
@@ -52,9 +53,7 @@ class LocalEmbeddingClient:
             ) from exc
         except httpx.TimeoutException as exc:
             logger.debug("local_embedding: request timed out")
-            raise LocalEmbeddingUnavailableError(
-                "Local embedding model request timed out"
-            ) from exc
+            raise LocalEmbeddingUnavailableError("Local embedding model request timed out") from exc
         except (KeyError, IndexError) as exc:
             logger.debug("local_embedding: unexpected response shape: %s", exc)
             raise LocalEmbeddingUnavailableError(
@@ -76,9 +75,7 @@ class LocalEmbeddingClient:
             logger.debug("local_embedding: embed failed: %s", e)
             return [0.0] * self.dimensions
 
-    async def embed_batch(
-        self, texts: list[str], batch_size: int = 32
-    ) -> list[list[float]]:
+    async def embed_batch(self, texts: list[str], batch_size: int = 32) -> list[list[float]]:
         """批量向量化。
 
         Returns:

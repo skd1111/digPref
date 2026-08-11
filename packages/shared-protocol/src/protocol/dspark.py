@@ -8,12 +8,12 @@
 
 文档：[docs/design/phase-13-dspark.md](../../../docs/design/phase-13-dspark.md)
 """
+
 from __future__ import annotations
 
 from typing import Literal
 
 from pydantic import BaseModel, Field
-
 
 # === 校验边界常量（前后端共用唯一真源） ======================================
 

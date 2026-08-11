@@ -1,7 +1,8 @@
 """Phase 18 ExecutionPolicy：子任务级执行策略。"""
+
 from __future__ import annotations
 
-from agent.dual.policy import ExecutionPolicy, build_policy, tag_plan_with_policy
+from agent.dual.policy import build_policy, tag_plan_with_policy
 
 
 def test_coding_policy_defaults():

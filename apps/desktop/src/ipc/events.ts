@@ -49,6 +49,7 @@ export const EVT = {
   // Phase 2C V0 LLM 路由
   AGENT_LLM_ROUTE_DECIDED: "agent://llm_route_decided",
   AGENT_LLM_DEGRADED: "agent://llm_degraded",
+  AGENT_LLM_CACHE_STATS: "agent://llm_cache_stats",
   AGENT_LLM_BUDGET_ALERT: "agent://llm_budget_alert",
 
   // Phase 2G V1.2 业务功能点导航 —— SSE 三处同步占位（V1.3 才有真 emit）
@@ -60,6 +61,11 @@ export const EVT = {
   BIZNAV_FEATURE_AFFECTED: "agent://biznav_feature_affected",
   /** 后台 extraction 任务完成（V1.3 才真发） */
   BIZNAV_EXTRACTION_DONE: "agent://biznav_extraction_done",
+
+  // Phase 2F V1 —— 代码导航 AI 解释流式增量（Rust command app.emit 直发，
+  // 不经 SSE 桥，无需 graph/stream.py 同步）
+  /** 代码解释流式增量（含 symbol + delta） */
+  CODENAV_EXPLAIN_DELTA: "agent://codenav_explain_delta",
 
   // Phase 4 V0 —— 本地端侧模型 SSE 三处同步（CLAUDE.md §4）
   /** 本地端侧模型就绪 */
@@ -142,6 +148,10 @@ export const EVT = {
   DATA_CHART_READY: "agent://data_chart_ready",
   /** 导出完成 */
   DATA_EXPORT_DONE: "agent://data_export_done",
+  /** Phase 7 补齐：大结果集 Arrow 批/元数据帧（Rust WS 中继，非 SSE） */
+  DATA_STREAM_CHUNK: "agent://data_stream_chunk",
+  /** Phase 7 补齐：大结果集流结束 */
+  DATA_STREAM_DONE: "agent://data_stream_done",
 
   // Phase 6 V1.5 —— 会话管理 SSE 三处同步（CLAUDE.md §4）
   /** CompressionRouter 选策略后实际执行压缩完成（含 before/after tokens + ratio） */

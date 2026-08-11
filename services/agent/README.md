@@ -88,16 +88,16 @@
 
 ### 4.1 内部企业模型
 
-默认指向内网 OpenAI 兼容网关：
+默认为空 —— 是否启用内网后端只看「模型管理」（`router.db.llm_backends`）里有没有
+启用的 `private` 后端；也可用环境变量注入：
 
-```python
-# agent/config.py
-private_llm_base_url = "http://172.1.0.134:8000/v1"
-private_llm_model    = "DeepSeek-RD-Llama-70B-Int8"
-private_llm_api_key  = "internal-no-auth"
+```
+EAIDE_PRIVATE_LLM_BASE_URL = "http://你的内网网关/v1"
+EAIDE_PRIVATE_LLM_MODEL    = "模型名"
+EAIDE_PRIVATE_LLM_API_KEY  = "密钥"
 ```
 
-环境变量覆盖：`EAIDE_PRIVATE_LLM_BASE_URL` / `EAIDE_PRIVATE_LLM_MODEL` / `EAIDE_PRIVATE_LLM_API_KEY`。
+注：不要内置占位网关默认地址 —— 不可达的默认地址会让每条消息白等 TCP 连接超时（BUGFIX #57）。
 
 **已知特性**：该模型会在 JSON 之前输出 `<think>...</think>` 推理块。
 [`private_llm.py`](src/agent/llm/private_llm.py) 用正则 `_strip_think()` 在解析前剥离。

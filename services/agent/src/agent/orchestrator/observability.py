@@ -21,6 +21,7 @@ CLAUDE.md §2 红线遵守：
         payload={"depth": 1, "task_type": "data_summary"},
     )
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -30,9 +31,7 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
-
-from agent.config import settings
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -52,11 +51,23 @@ _PII_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 # 永远红化的 JSON 字段名（不区分大小写）
-_SENSITIVE_KEYS = frozenset({
-    "password", "passwd", "secret", "token", "api_key", "apikey",
-    "dsn", "connection_string", "private_key", "authorization",
-    "session", "cookie", "credit_card",
-})
+_SENSITIVE_KEYS = frozenset(
+    {
+        "password",
+        "passwd",
+        "secret",
+        "token",
+        "api_key",
+        "apikey",
+        "dsn",
+        "connection_string",
+        "private_key",
+        "authorization",
+        "session",
+        "cookie",
+        "credit_card",
+    }
+)
 
 
 def _scrub_value(v: Any, *, _depth: int = 0) -> Any:
@@ -65,7 +76,11 @@ def _scrub_value(v: Any, *, _depth: int = 0) -> Any:
         return "<truncated-depth>"
     if isinstance(v, dict):
         return {
-            k: ("<redacted>" if k.lower() in _SENSITIVE_KEYS else _scrub_value(val, _depth=_depth + 1))
+            k: (
+                "<redacted>"
+                if k.lower() in _SENSITIVE_KEYS
+                else _scrub_value(val, _depth=_depth + 1)
+            )
             for k, val in v.items()
         }
     if isinstance(v, list):
@@ -110,7 +125,7 @@ class StructuredLogger:
         self._lock = asyncio.Lock()
         # 当前打开的 file handle（按日期切）
         self._current_date: str = ""
-        self._current_handle: Optional[Any] = None
+        self._current_handle: Any | None = None
 
     # ---- 公开 API --------------------------------------------------
 
@@ -121,9 +136,9 @@ class StructuredLogger:
         correlation_id: str,
         payload: dict[str, Any],
         actor_type: str = "sub_agent",
-        task_id: Optional[str] = None,
-        parent_task_id: Optional[str] = None,
-        run_id: Optional[str] = None,
+        task_id: str | None = None,
+        parent_task_id: str | None = None,
+        run_id: str | None = None,
     ) -> None:
         """异步写一条结构化事件。失败不抛异常（降级 stderr）。"""
         if actor_type not in _ALLOWED_ACTOR_TYPES:
@@ -141,7 +156,7 @@ class StructuredLogger:
         }
         try:
             await self._write_line(envelope)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             # 兜底：stderr 单行；不阻塞主流程
             print(f"[observability] log_event failed: {exc}", flush=True)
 
@@ -150,7 +165,7 @@ class StructuredLogger:
         *,
         correlation_id: str,
         sub_agent_id: str,
-        parent_sub_agent_id: Optional[str],
+        parent_sub_agent_id: str | None,
         run_id: str,
         task_type: str,
         task_description: str,
@@ -178,7 +193,7 @@ class StructuredLogger:
         *,
         correlation_id: str,
         sub_agent_id: str,
-        parent_sub_agent_id: Optional[str],
+        parent_sub_agent_id: str | None,
         run_id: str,
         attempt: int,
         status: str,
@@ -202,7 +217,7 @@ class StructuredLogger:
         *,
         correlation_id: str,
         sub_agent_id: str,
-        parent_sub_agent_id: Optional[str],
+        parent_sub_agent_id: str | None,
         run_id: str,
         status: str,
         attempts: int,
@@ -274,7 +289,8 @@ class StructuredLogger:
                 pass
         path = self._log_dir / f"orchestrator-{today}.jsonl"
         # append 模式；编码 utf-8；newline='' 让 jsonl 不重复换行
-        self._current_handle = open(path, "a", encoding="utf-8", newline="")
+        # 长生命周期句柄，由 _rotate / aclose 显式关闭，不适用 with 块
+        self._current_handle = open(path, "a", encoding="utf-8", newline="")  # noqa: SIM115
         self._current_date = today
 
     async def aclose(self) -> None:

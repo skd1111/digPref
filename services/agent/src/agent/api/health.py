@@ -3,6 +3,7 @@
 `/version` 让 Tauri 在启动时核对 Agent 是不是「匹配当前 EXE 的代码」。
 未来如果新 EXE 装上但 Agent 复用旧版，可靠 /version 对比强制重启（修复 404/老接口问题）。
 """
+
 from __future__ import annotations
 
 import os

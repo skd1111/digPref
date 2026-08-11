@@ -1,9 +1,6 @@
 """test_codenav_backend_binding.py —— Phase 2F 代码导航 backend 绑定测试。"""
-from __future__ import annotations
 
-import os
-import tempfile
-from pathlib import Path
+from __future__ import annotations
 
 import pytest
 
@@ -18,12 +15,14 @@ def isolated_cwd(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_feature_backend_get_returns_none_when_unbound(isolated_cwd):
     from agent.llm.storage import get_feature_backend
+
     assert await get_feature_backend("codenav") is None
 
 
 @pytest.mark.asyncio
 async def test_feature_backend_set_then_get(isolated_cwd):
     from agent.llm.storage import get_feature_backend, set_feature_backend
+
     await set_feature_backend("codenav", "deepseek-cloud")
     assert await get_feature_backend("codenav") == "deepseek-cloud"
 
@@ -31,6 +30,7 @@ async def test_feature_backend_set_then_get(isolated_cwd):
 @pytest.mark.asyncio
 async def test_feature_backend_unbind_with_none(isolated_cwd):
     from agent.llm.storage import get_feature_backend, set_feature_backend
+
     await set_feature_backend("codenav", "deepseek-cloud")
     await set_feature_backend("codenav", None)
     assert await get_feature_backend("codenav") is None
@@ -39,6 +39,7 @@ async def test_feature_backend_unbind_with_none(isolated_cwd):
 @pytest.mark.asyncio
 async def test_feature_backend_unbind_with_empty_string(isolated_cwd):
     from agent.llm.storage import get_feature_backend, set_feature_backend
+
     await set_feature_backend("codenav", "deepseek-cloud")
     await set_feature_backend("codenav", "")
     assert await get_feature_backend("codenav") is None
@@ -47,6 +48,7 @@ async def test_feature_backend_unbind_with_empty_string(isolated_cwd):
 @pytest.mark.asyncio
 async def test_feature_backend_upsert_overwrites(isolated_cwd):
     from agent.llm.storage import get_feature_backend, set_feature_backend
+
     await set_feature_backend("codenav", "a")
     await set_feature_backend("codenav", "b")
     assert await get_feature_backend("codenav") == "b"
@@ -58,6 +60,7 @@ async def test_resolve_returns_none_without_anything(isolated_cwd, monkeypatch):
     monkeypatch.delenv("EAIDE_CODENAV_LLM_MODEL", raising=False)
     monkeypatch.delenv("EAIDE_CODENAV_LLM_API_KEY", raising=False)
     from agent.codenav.llm_client import resolve_codenav_backend
+
     assert await resolve_codenav_backend() is None
 
 
@@ -67,6 +70,7 @@ async def test_resolve_env_fallback(isolated_cwd, monkeypatch):
     monkeypatch.setenv("EAIDE_CODENAV_LLM_MODEL", "env-model")
     monkeypatch.setenv("EAIDE_CODENAV_LLM_API_KEY", "env-key")
     from agent.codenav.llm_client import resolve_codenav_backend
+
     cfg = await resolve_codenav_backend()
     assert cfg is not None
     assert cfg["base_url"] == "http://env-host/v1"
@@ -80,8 +84,9 @@ async def test_resolve_bound_to_missing_falls_back_to_env(isolated_cwd, monkeypa
     """bound 到不存在的 backend → resolve 降级到 env（便于离线开发）。"""
     monkeypatch.setenv("EAIDE_CODENAV_LLM_BASE_URL", "http://env/v1")
     monkeypatch.setenv("EAIDE_CODENAV_LLM_MODEL", "env-model")
-    from agent.llm.storage import set_feature_backend
     from agent.codenav.llm_client import resolve_codenav_backend
+    from agent.llm.storage import set_feature_backend
+
     await set_feature_backend("codenav", "nonexistent")
     cfg = await resolve_codenav_backend()
     # bound 找不到 → env 兜底
@@ -92,9 +97,10 @@ async def test_resolve_bound_to_missing_falls_back_to_env(isolated_cwd, monkeypa
 @pytest.mark.asyncio
 async def test_resolve_with_bound_backend_works(isolated_cwd):
     """先在 llm_backends 插一个，再绑 codenav → resolve 应返回这个 backend。"""
-    from agent.llm.storage import upsert_backend as insert_backend, set_feature_backend
-    from agent.llm.models import LLMBackend
     from agent.codenav.llm_client import resolve_codenav_backend
+    from agent.llm.models import LLMBackend
+    from agent.llm.storage import set_feature_backend
+    from agent.llm.storage import upsert_backend as insert_backend
 
     backend = LLMBackend(
         name="cloud-test",
@@ -116,9 +122,10 @@ async def test_resolve_with_bound_backend_works(isolated_cwd):
 @pytest.mark.asyncio
 async def test_resolve_preferred_overrides_bound(isolated_cwd):
     """preferred_name 直接覆盖 bound。"""
-    from agent.llm.storage import upsert_backend as insert_backend, set_feature_backend
-    from agent.llm.models import LLMBackend
     from agent.codenav.llm_client import resolve_codenav_backend
+    from agent.llm.models import LLMBackend
+    from agent.llm.storage import set_feature_backend
+    from agent.llm.storage import upsert_backend as insert_backend
 
     a = LLMBackend(name="a", type="local", base_url="http://a/v1", model_name="m-a")
     b = LLMBackend(name="b", type="local", base_url="http://b/v1", model_name="m-b")
@@ -134,11 +141,13 @@ async def test_resolve_preferred_overrides_bound(isolated_cwd):
 # /codenav/llm-backend + /bind 端点
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_llm_backend_endpoint_returns_unbound(isolated_cwd, monkeypatch):
     monkeypatch.delenv("EAIDE_CODENAV_LLM_BASE_URL", raising=False)
     monkeypatch.delenv("EAIDE_CODENAV_LLM_MODEL", raising=False)
     from fastapi.testclient import TestClient
+
     app = __import__("agent.main", fromlist=["create_app"]).create_app()
     c = TestClient(app)
     resp = c.get("/codenav/llm-backend")
@@ -151,17 +160,21 @@ async def test_llm_backend_endpoint_returns_unbound(isolated_cwd, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_llm_backend_bind_endpoint(isolated_cwd, monkeypatch):
-    from agent.llm.storage import upsert_backend as insert_backend
     from agent.llm.models import LLMBackend
+    from agent.llm.storage import upsert_backend as insert_backend
+
     monkeypatch.delenv("EAIDE_CODENAV_LLM_BASE_URL", raising=False)
     monkeypatch.delenv("EAIDE_CODENAV_LLM_MODEL", raising=False)
     backend = LLMBackend(
-        name="my-cloud", type="cloud",
-        base_url="https://api.test/v1", model_name="test-model",
+        name="my-cloud",
+        type="cloud",
+        base_url="https://api.test/v1",
+        model_name="test-model",
     )
     await insert_backend(backend)
 
     from fastapi.testclient import TestClient
+
     app = __import__("agent.main", fromlist=["create_app"]).create_app()
     c = TestClient(app)
     # 绑定

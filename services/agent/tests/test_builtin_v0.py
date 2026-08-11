@@ -9,17 +9,17 @@
   - builtin_grep: ripgrep 走 OR Python 降级 + 100MB 超限
   - dispatcher: 端到端（tool_runner → builtin → audit → state）
 """
+
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
 from pathlib import Path
 
 import pytest
 
-
 # ---- path_sandbox 5 攻击向量 ----------------------------------------------------
+
 
 class TestPathSandbox:
     """5 攻击向量必须 100% 拦截。"""
@@ -27,6 +27,7 @@ class TestPathSandbox:
     def test_valid_path(self, tmp_path: Path):
         """普通文件路径走通。"""
         from agent.builtin.path_sandbox import validate_path
+
         p = tmp_path / "test.txt"
         p.write_text("hello")
         result = validate_path(str(p))
@@ -36,6 +37,7 @@ class TestPathSandbox:
         """路径穿越 `..` 必须被 allowed_roots 拦截。"""
         from agent.builtin.models import PathOutOfBoundsError
         from agent.builtin.path_sandbox import validate_path
+
         outside = tmp_path.parent / "secret.txt"
         outside.write_text("secret")
         with pytest.raises(PathOutOfBoundsError):
@@ -45,6 +47,7 @@ class TestPathSandbox:
         """Windows 保留名（CON / PRN / NUL 等）必须拒绝。"""
         from agent.builtin.models import PathSecurityError
         from agent.builtin.path_sandbox import validate_path
+
         # 在 Windows 下强制 NUL 路径
         if sys.platform == "win32":
             with pytest.raises(PathSecurityError):
@@ -58,6 +61,7 @@ class TestPathSandbox:
         """UNC 路径（\\\\server\\share）必须拒绝。"""
         from agent.builtin.models import PathSecurityError
         from agent.builtin.path_sandbox import validate_path
+
         with pytest.raises(PathSecurityError):
             validate_path("\\\\evil-server\\share")
 
@@ -65,6 +69,7 @@ class TestPathSandbox:
         """null byte 注入必须拒绝。"""
         from agent.builtin.models import PathSecurityError
         from agent.builtin.path_sandbox import validate_path
+
         with pytest.raises(PathSecurityError):
             validate_path("path\x00injected")
 
@@ -72,6 +77,7 @@ class TestPathSandbox:
         """空路径必须拒绝。"""
         from agent.builtin.models import PathSecurityError
         from agent.builtin.path_sandbox import validate_path
+
         with pytest.raises(PathSecurityError):
             validate_path("")
 
@@ -79,6 +85,7 @@ class TestPathSandbox:
         """超长路径必须拒绝。"""
         from agent.builtin.models import PathSecurityError
         from agent.builtin.path_sandbox import validate_path
+
         long_path = "a" * 5000
         with pytest.raises(PathSecurityError):
             validate_path(long_path)
@@ -86,11 +93,13 @@ class TestPathSandbox:
 
 # ---- builtin_read_file ----------------------------------------------------------
 
+
 class TestBuiltinReadFile:
     """2 用例：正常读取 + 100MB 超限。"""
 
     async def test_read_normal(self, tmp_path: Path):
         from agent.builtin.files import builtin_read_file
+
         p = tmp_path / "hello.txt"
         p.write_text("line1\nline2\nline3\n", encoding="utf-8")
         result = await builtin_read_file(str(p))
@@ -101,6 +110,7 @@ class TestBuiltinReadFile:
 
     async def test_read_line_range(self, tmp_path: Path):
         from agent.builtin.files import builtin_read_file
+
         p = tmp_path / "lines.txt"
         p.write_text("\n".join(f"line{i}" for i in range(100)), encoding="utf-8")
         result = await builtin_read_file(str(p), start_line=10, max_lines=5)
@@ -121,16 +131,19 @@ class TestBuiltinReadFile:
         result = await builtin_read_file(str(p))
         assert not result.ok
         assert "file_too_large" in result.error
-        assert "logviewer" in result.hint
+        # V7：超限 hint 指向大文件只读工具（原为 logviewer）
+        assert "builtin_log_read_lines" in result.hint
 
 
 # ---- builtin_write_file ---------------------------------------------------------
+
 
 class TestBuiltinWriteFile:
     """2 用例：原子写入 + overwrite=False。"""
 
     async def test_write_new_file(self, tmp_path: Path):
         from agent.builtin.files import builtin_write_file
+
         p = tmp_path / "new.txt"
         result = await builtin_write_file(str(p), "hello world")
         assert result.ok
@@ -140,6 +153,7 @@ class TestBuiltinWriteFile:
 
     async def test_write_no_overwrite(self, tmp_path: Path):
         from agent.builtin.files import builtin_write_file
+
         p = tmp_path / "exists.txt"
         p.write_text("original")
         result = await builtin_write_file(str(p), "new content")
@@ -151,11 +165,13 @@ class TestBuiltinWriteFile:
 
 # ---- builtin_edit_file ----------------------------------------------------------
 
+
 class TestBuiltinEditFile:
     """2 用例：search-replace 命中 + 0 匹配。"""
 
     async def test_edit_match(self, tmp_path: Path):
         from agent.builtin.files import builtin_edit_file
+
         p = tmp_path / "code.py"
         p.write_text("def foo():\n    return 1\n")
         result = await builtin_edit_file(str(p), "return 1", "return 42")
@@ -166,6 +182,7 @@ class TestBuiltinEditFile:
 
     async def test_edit_no_match(self, tmp_path: Path):
         from agent.builtin.files import builtin_edit_file
+
         p = tmp_path / "code.py"
         p.write_text("hello world")
         result = await builtin_edit_file(str(p), "xxxxx", "yyyy")
@@ -175,11 +192,13 @@ class TestBuiltinEditFile:
 
 # ---- builtin_list_dir -----------------------------------------------------------
 
+
 class TestBuiltinListDir:
     """1 用例：正常列出。"""
 
     async def test_list_normal(self, tmp_path: Path):
         from agent.builtin.files import builtin_list_dir
+
         (tmp_path / "a.txt").write_text("a")
         (tmp_path / "b.txt").write_text("b")
         sub = tmp_path / "sub"
@@ -196,11 +215,13 @@ class TestBuiltinListDir:
 
 # ---- builtin_grep ---------------------------------------------------------------
 
+
 class TestBuiltinGrep:
     """2 用例：文本匹配 + 100MB 超限。"""
 
     async def test_grep_match(self, tmp_path: Path):
         from agent.builtin.search import builtin_grep
+
         (tmp_path / "a.txt").write_text("hello\nworld\nfoo\n")
         (tmp_path / "b.txt").write_text("hello\neveryone\n")
         result = await builtin_grep("hello", str(tmp_path))
@@ -223,6 +244,7 @@ class TestBuiltinGrep:
 
 # ---- ToolDispatcher 集成 ---------------------------------------------------------
 
+
 class TestDispatcherIntegration:
     """1 用例：端到端（tool_runner → builtin → audit → state）。"""
 
@@ -230,6 +252,7 @@ class TestDispatcherIntegration:
         """调度器调用 builtin_read_file,写 audit,返 state 增量。"""
         # 重定向 audit 到 tmp_path
         from agent.config import settings
+
         audit_db = tmp_path / "audit.sqlite"
         monkeypatch.setattr(settings, "audit_db_path", str(audit_db))
 
@@ -240,6 +263,7 @@ class TestDispatcherIntegration:
         # 触发 dispatcher
         from agent.builtin.dispatcher import dispatcher as get_dispatcher
         from agent.builtin.dispatcher import reset_default_dispatcher
+
         reset_default_dispatcher()
 
         state = {"run_id": "test_run_1", "current_step_index": 0}
@@ -263,6 +287,7 @@ class TestDispatcherIntegration:
         # 验证 audit 落库
         import json
         import sqlite3
+
         # 等异步 audit 落盘
         await asyncio.sleep(0.1)
         conn = sqlite3.connect(str(audit_db))
@@ -280,6 +305,7 @@ class TestDispatcherIntegration:
         """未知工具返 error。"""
         from agent.builtin.dispatcher import dispatcher as get_dispatcher
         from agent.builtin.dispatcher import reset_default_dispatcher
+
         reset_default_dispatcher()
 
         state = {"run_id": "test_run_2"}
@@ -292,6 +318,7 @@ class TestDispatcherIntegration:
         """非 builtin call 返 None（让上游走 mcp）。"""
         from agent.builtin.dispatcher import dispatcher as get_dispatcher
         from agent.builtin.dispatcher import reset_default_dispatcher
+
         reset_default_dispatcher()
 
         state = {"run_id": "test_run_3"}

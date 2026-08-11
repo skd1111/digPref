@@ -15,6 +15,7 @@ V2 增量（2026-07-31）：
   - Tauri IPC 桥完整调用（超时 + 重试 + 运行时注入）
   - 3 高危工具的 Python 原生兜底（Agent 独立运行可用）
 """
+
 from __future__ import annotations
 
 from agent.builtin._tauri_runtime import (
@@ -40,73 +41,81 @@ from agent.builtin.lightweight import (
     builtin_regex_match,
     builtin_url_parse,
 )
+from agent.builtin.markdown_convert import builtin_file_to_markdown
 from agent.builtin.models import (
     BUILTIN_TOOL_NAMES,
+    RUST_TOOL_NAMES,
     BuiltinTool,
-    PathSecurityError,
     PathOutOfBoundsError,
+    PathSecurityError,
     RiskLevel,
     ToolResult,
     is_rust_tool,
-    RUST_TOOL_NAMES,
 )
 from agent.builtin.path_sandbox import validate_path
 from agent.builtin.registry import BuiltinToolRegistry, get_default_registry
 from agent.builtin.search import builtin_grep
 from agent.builtin.shell import builtin_shell
 from agent.builtin.tauri_bridge import (
-    invoke_rust_tool_sync,
     has_python_fallback,
+    invoke_rust_tool_sync,
+)
+from agent.builtin.tauri_bridge import (
     is_implemented as is_rust_tool_implemented,
+)
+from agent.builtin.tauri_bridge import (
     is_v1_5_implemented as is_rust_tool_v1_5_implemented,
+)
+from agent.builtin.tauri_bridge import (
     is_v2_implemented as is_rust_tool_v2_implemented,
 )
 
 # V1 公开 API 列表（30+ 项）
 __all__ = [
-    # 核心数据类
-    "ToolResult",
-    "BuiltinTool",
-    "RiskLevel",
-    "PathSecurityError",
-    "PathOutOfBoundsError",
-    # 工具注册
-    "BuiltinToolRegistry",
-    "get_default_registry",
     "BUILTIN_TOOL_NAMES",
     "RUST_TOOL_NAMES",
-    "is_rust_tool",
-    # V0 5 工具
-    "builtin_read_file",
-    "builtin_write_file",
-    "builtin_edit_file",
-    "builtin_list_dir",
-    "builtin_grep",
-    # V1 5 轻量工具
-    "builtin_calculator",
-    "builtin_json_parse",
-    "builtin_json_format",
-    "builtin_regex_match",
-    "builtin_url_parse",
-    # V2 高危工具（Python 原生兜底）
-    "builtin_delete_file",
-    "builtin_move_file",
-    "builtin_shell",
-    # 路径沙箱
-    "validate_path",
+    "BuiltinTool",
+    # 工具注册
+    "BuiltinToolRegistry",
+    "PathOutOfBoundsError",
+    "PathSecurityError",
+    "RiskLevel",
     # Tauri 运行时注入
     "TauriRuntimeClient",
-    "set_tauri_runtime",
-    "get_tauri_app_handle",
-    "clear_tauri_runtime",
-    "is_tauri_runtime_available",
-    # V2 Rust IPC 桥接
-    "invoke_rust_tool_sync",
-    "is_rust_tool_v1_5_implemented",
-    "is_rust_tool_v2_implemented",
-    "is_rust_tool_implemented",
-    "has_python_fallback",
     # 调度器
     "ToolDispatcher",
+    # 核心数据类
+    "ToolResult",
+    # V1 5 轻量工具
+    "builtin_calculator",
+    # V2 高危工具（Python 原生兜底）
+    "builtin_delete_file",
+    "builtin_edit_file",
+    "builtin_file_to_markdown",
+    "builtin_grep",
+    "builtin_json_format",
+    "builtin_json_parse",
+    "builtin_list_dir",
+    "builtin_move_file",
+    # V0 5 工具
+    "builtin_read_file",
+    "builtin_regex_match",
+    "builtin_shell",
+    "builtin_url_parse",
+    "builtin_write_file",
+    "clear_tauri_runtime",
     "dispatcher",
+    "get_default_registry",
+    "get_tauri_app_handle",
+    "has_python_fallback",
+    # V2 Rust IPC 桥接
+    "invoke_rust_tool_sync",
+    "is_rust_tool",
+    "is_rust_tool_implemented",
+    "is_rust_tool_v1_5_implemented",
+    "is_rust_tool_v2_implemented",
+    "is_tauri_runtime_available",
+    "set_tauri_runtime",
+    # 路径沙箱
+    "validate_path",
 ]

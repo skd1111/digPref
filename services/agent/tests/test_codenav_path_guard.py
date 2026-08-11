@@ -1,8 +1,6 @@
 """test_codenav_path_guard.py —— Phase 2F V3 路径护栏测试。"""
-from __future__ import annotations
 
-import shutil
-from pathlib import Path
+from __future__ import annotations
 
 import pytest
 
@@ -27,14 +25,21 @@ def setup_projects(tmp_path, monkeypatch):
     outside_file = outside / "Secret.java"
     outside_file.write_text("public class S {}", encoding="utf-8")
 
-    return {"p1": p1, "p1_file": p1_file, "p2": p2, "p2_inner": p2_inner,
-            "outside": outside, "outside_file": outside_file}
+    return {
+        "p1": p1,
+        "p1_file": p1_file,
+        "p2": p2,
+        "p2_inner": p2_inner,
+        "outside": outside,
+        "outside_file": outside_file,
+    }
 
 
 @pytest.fixture
 def guard(setup_projects):
     """每个测试前清空 + 重新初始化。"""
     from agent.codenav import path_guard
+
     path_guard._opened = []
     path_guard.init_opened_projects([str(setup_projects["p1"]), str(setup_projects["p2"])])
     return path_guard
@@ -46,6 +51,7 @@ def test_init_loads_projects(guard, setup_projects):
 
 def test_init_from_env(monkeypatch, setup_projects):
     from agent.codenav import path_guard
+
     monkeypatch.setenv("EAIDE_AGENT_OPENED_PROJECTS", str(setup_projects["p1"]))
     path_guard._opened = []
     guard = path_guard.init_opened_projects()
@@ -69,6 +75,7 @@ def test_check_passes_for_within(guard, setup_projects):
 
 def test_check_raises_for_outside(guard, setup_projects):
     from agent.codenav.path_guard import PathOutsideProjectsError
+
     with pytest.raises(PathOutsideProjectsError) as exc:
         guard.check(str(setup_projects["outside_file"]), operation="write")
     assert exc.value.path == str(setup_projects["outside_file"])
@@ -104,9 +111,11 @@ def test_remove_opened_project_not_found(guard, setup_projects):
 # API 端点
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_api_list_opened_projects(guard):
     from fastapi.testclient import TestClient
+
     app = __import__("agent.main", fromlist=["create_app"]).create_app()
     c = TestClient(app)
     resp = c.get("/codenav/opened-projects")
@@ -117,6 +126,7 @@ async def test_api_list_opened_projects(guard):
 @pytest.mark.asyncio
 async def test_api_sync_opened_projects(setup_projects):
     from fastapi.testclient import TestClient
+
     app = __import__("agent.main", fromlist=["create_app"]).create_app()
     c = TestClient(app)
     resp = c.post(
@@ -131,6 +141,7 @@ async def test_api_sync_opened_projects(setup_projects):
 @pytest.mark.asyncio
 async def test_api_add_then_remove(setup_projects):
     from fastapi.testclient import TestClient
+
     app = __import__("agent.main", fromlist=["create_app"]).create_app()
     c = TestClient(app)
     # 同步到只剩 p1

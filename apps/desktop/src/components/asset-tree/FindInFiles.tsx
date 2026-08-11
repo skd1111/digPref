@@ -37,7 +37,7 @@ export function FindInFiles({ defaultMode }: { defaultMode?: SearchMode } = {}):
   const items = useMemo(() => {
     const list = tree;
     if (!query) return [];
-    let hits: { node: AssetNode; matchedField: string }[] = [];
+    const hits: { node: AssetNode; matchedField: string }[] = [];
     for (const n of list) {
       const fieldsToCheck = [n.label, n.id, JSON.stringify(n.meta)];
       let matcher: (s: string) => boolean;

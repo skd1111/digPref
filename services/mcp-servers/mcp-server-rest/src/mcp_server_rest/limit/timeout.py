@@ -1,4 +1,5 @@
 """Timeout helper."""
+
 from mcp_server_rest.config import Settings
 
 

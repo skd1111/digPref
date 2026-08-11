@@ -1,7 +1,6 @@
 """Schema 校验测试。"""
-import pytest
-from agent.skills.schema import validate_skill_yaml, validate_no_dsn
 
+from agent.skills.schema import validate_no_dsn, validate_skill_yaml
 
 VALID_SKILL = {
     "schema_version": "1.0",

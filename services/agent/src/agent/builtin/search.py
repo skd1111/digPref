@@ -10,6 +10,7 @@ V1 范围：
   - ripgrep 进程池（OnceCell<Command>）
   - 跨平台路径处理
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -20,7 +21,6 @@ from pathlib import Path
 
 from agent.builtin.models import PathOutOfBoundsError, PathSecurityError, ToolResult
 from agent.builtin.path_sandbox import validate_path
-
 
 # 100MB 文件大小限制（与 files.py 保持一致）
 _MAX_FILE_BYTES = 100 * 1024 * 1024
@@ -80,7 +80,7 @@ async def builtin_grep(
         return ToolResult(
             ok=False,
             error=f"file_too_large: {p.stat().st_size} bytes",
-            hint="use logviewer for files > 100MB",
+            hint="use builtin_log_search for files > 100MB",
             meta={"size": p.stat().st_size},
             risk_level="read",
         )
@@ -88,12 +88,21 @@ async def builtin_grep(
     # 优先 ripgrep，无则降级 Python
     if shutil.which("rg"):
         return await _grep_ripgrep(
-            pattern, p, is_regex=is_regex, case_insensitive=case_insensitive,
-            context_lines=context_lines, max_results=max_results,
+            pattern,
+            p,
+            is_regex=is_regex,
+            case_insensitive=case_insensitive,
+            context_lines=context_lines,
+            max_results=max_results,
         )
     return await _grep_python(
-        pattern, p, is_regex=is_regex, case_insensitive=case_insensitive,
-        context_lines=context_lines, max_results=max_results, encoding=encoding,
+        pattern,
+        p,
+        is_regex=is_regex,
+        case_insensitive=case_insensitive,
+        context_lines=context_lines,
+        max_results=max_results,
+        encoding=encoding,
     )
 
 
@@ -120,7 +129,7 @@ async def _grep_ripgrep(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+        stdout, _stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
     except (asyncio.TimeoutError, OSError) as exc:
         return ToolResult(
             ok=False,
@@ -130,6 +139,7 @@ async def _grep_ripgrep(
 
     # 解析 JSON Lines
     import json
+
     hits: list[dict] = []
     truncated = False
     for line_bytes in stdout.splitlines():
@@ -144,13 +154,15 @@ async def _grep_ripgrep(
             data = ev.get("data", {})
             text_obj = data.get("lines", {})
             line_text = text_obj.get("text", "").rstrip("\n")
-            hits.append({
-                "file": data.get("path", {}).get("text", ""),
-                "line_no": data.get("line_number", 0),
-                "line": line_text,
-                "context_before": [],  # ripgrep --json 不直接带 context
-                "context_after": [],
-            })
+            hits.append(
+                {
+                    "file": data.get("path", {}).get("text", ""),
+                    "line_no": data.get("line_number", 0),
+                    "line": line_text,
+                    "context_before": [],  # ripgrep --json 不直接带 context
+                    "context_after": [],
+                }
+            )
 
     return ToolResult(
         ok=True,
@@ -191,26 +203,28 @@ async def _grep_python(
         try:
             if target.stat().st_size > _MAX_FILE_BYTES:
                 return []
-            with open(target, "r", encoding=encoding, errors="replace") as f:
+            with open(target, encoding=encoding, errors="replace") as f:
                 lines = f.readlines()
         except OSError:
             return []
         local: list[dict] = []
         for i, line in enumerate(lines, start=1):
             if compiled.search(line):
-                local.append({
-                    "file": str(target),
-                    "line_no": i,
-                    "line": line.rstrip("\n"),
-                    "context_before": [
-                        lines[j].rstrip("\n")
-                        for j in range(max(0, i - 1 - context_lines), i - 1)
-                    ],
-                    "context_after": [
-                        lines[j].rstrip("\n")
-                        for j in range(i, min(len(lines), i + context_lines))
-                    ],
-                })
+                local.append(
+                    {
+                        "file": str(target),
+                        "line_no": i,
+                        "line": line.rstrip("\n"),
+                        "context_before": [
+                            lines[j].rstrip("\n")
+                            for j in range(max(0, i - 1 - context_lines), i - 1)
+                        ],
+                        "context_after": [
+                            lines[j].rstrip("\n")
+                            for j in range(i, min(len(lines), i + context_lines))
+                        ],
+                    }
+                )
         return local
 
     for target in targets:

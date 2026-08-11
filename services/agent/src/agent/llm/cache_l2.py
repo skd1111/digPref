@@ -23,16 +23,16 @@ CLAUDE.md §2 红线：
     - LRU 淘汰（V3 用 TTL 24h 单维度淘汰）
     - 多模态 embedding（图像 / 代码）
 """
+
 from __future__ import annotations
 
 import hashlib
 import math
 import time
-from typing import Callable, Optional
-
+from collections.abc import Callable
 
 # _LOCAL_ONLY_TASKS 不写 L2（敏感上下文不缓存）
-from agent.llm.router import _LOCAL_ONLY_TASKS  # noqa: PLC2701
+from agent.llm.router import _LOCAL_ONLY_TASKS
 
 
 def mock_embed(prompt: str, dim: int = 64) -> list[float]:
@@ -81,7 +81,7 @@ class L2Cache:
         enable: bool = False,
         threshold: float = 0.92,
         ttl_sec: float = 86400.0,
-        embed_fn: Optional[Callable[[str], list[float]]] = None,
+        embed_fn: Callable[[str], list[float]] | None = None,
         dim: int = 64,
     ) -> None:
         self._enable = enable
@@ -104,10 +104,10 @@ class L2Cache:
     @staticmethod
     def _make_key(model: str, prompt: str) -> str:
         normalized = " ".join(prompt.split())
-        raw = f"{model}\x00{normalized}".encode("utf-8")
+        raw = f"{model}\x00{normalized}".encode()
         return hashlib.sha256(raw).hexdigest()
 
-    def get(self, model: str, prompt: str) -> Optional[str]:
+    def get(self, model: str, prompt: str) -> str | None:
         if not self._enable:
             self.misses += 1
             return None
@@ -116,7 +116,7 @@ class L2Cache:
         if entry is None:
             # 即使 prompt 完全一致也要尝试 embedding 匹配（语义缓存）
             target = self._embed(prompt)
-            best_key: Optional[str] = None
+            best_key: str | None = None
             best_sim = 0.0
             for k, (emb, _text, expires) in self._store.items():
                 if expires < time.monotonic():

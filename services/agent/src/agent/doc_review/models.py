@@ -6,14 +6,19 @@ import uuid
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class DocFormat(str, Enum):
     PDF = "pdf"
     DOCX = "docx"
-    TXT = "txt"
+    # Word 97-2003 旧格式：解析时经 Word/WPS COM 转 docx（Windows）
+    DOC = "doc"
+    TXT = "txt"  # txt / md / csv 统一按纯文本处理
     MD = "md"
+    HTML = "html"
+    XLSX = "xlsx"
+    PPTX = "pptx"
 
 
 class DocCategory(str, Enum):
@@ -82,11 +87,43 @@ class Position(BaseModel):
     end: int = Field(ge=0)
 
 
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _normalize_confidence(value: Any) -> dict[str, float]:
+    """宽容归一化模型输出的 confidence。
+
+    兼容三种形态（本地模型输出不稳定，均不报错）：
+    1. 扁平 {"compliance": 0.97, ...} → 原样保留
+    2. 嵌套 {"risk_types": {"compliance": 0.97, ...}} → 递归提取最深层数值 dict
+    3. 混合 {"overall": 0.9, "risk_types": {...}} → 数值项保留，嵌套项展开合并
+    """
+    if not isinstance(value, dict):
+        return {}
+    flat: dict[str, float] = {}
+    for key, item in value.items():
+        if _is_number(item):
+            flat[key] = float(item)
+        elif isinstance(item, dict):
+            for k, v in _normalize_confidence(item).items():
+                flat.setdefault(k, v)
+    return flat
+
+
 class ClassificationResult(BaseModel):
     doc_category: DocCategory
     risk_types: list[RiskType]
     reason: str = ""
     confidence: dict[str, float] = Field(default_factory=dict)
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def _flatten_confidence(cls, value: Any) -> Any:
+        # 模型输出结构不稳定：扁平/嵌套/混合都要能解析，绝不因结构偏差报错
+        if isinstance(value, dict):
+            return _normalize_confidence(value)
+        return {} if value is not None else value
 
 
 class Finding(BaseModel):

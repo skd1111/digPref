@@ -40,6 +40,10 @@ const ITEMS: ActivityItem[] = [
   // Phase 6 V1.5 (2026-07-31)：会话管理顶级入口
   // 复用 SideBar 280px 宽度，SessionsPanel 渲染在侧栏
   { id: 'sessions', label: 'Sessions\n会话管理', icon: '🗂️' },
+  // reqflow V1 (2026-08-05)：需求工作台（运营专家需求改造工作流，需求卡片管理）
+  { id: 'requirements', label: 'Requirements\n需求工作台', icon: '📋' },
+  // 数据字典：独立入口（原运营工作台右侧 tab 迁出，公共参数维护）
+  { id: 'data-dict', label: 'Data Dictionary\n数据字典', icon: '📖' },
 ];
 
 interface Props {
@@ -65,7 +69,9 @@ export function ActivityBar({ active, onChange }: Props): JSX.Element {
             type="button"
             title={item.label}
             onClick={() => onChange(item.id)}
-            className="relative flex h-[48px] w-[48px] items-center justify-center text-lg transition-colors hover:text-gray-900"
+            className={`relative flex h-[48px] w-[48px] items-center justify-center text-lg transition-colors hover:text-gray-900${
+              isActive && item.id === 'data-dict' ? ' data-dict-active' : ''
+            }`}
             style={{
               color: isActive ? '#1f1f1f' : '#616161',
               borderLeft: isActive ? '2px solid #007acc' : '2px solid transparent',

@@ -6,15 +6,15 @@ Two distinct concerns:
 
 Both are bounded by environment-tunable defaults; callers can override.
 """
+
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
 from typing import Any
 
-
-_DEFAULT_PER_CELL = 8 * 1024          # 8 KB
-_DEFAULT_PER_RESULT = 256 * 1024      # 256 KB
+_DEFAULT_PER_CELL = 8 * 1024  # 8 KB
+_DEFAULT_PER_RESULT = 256 * 1024  # 256 KB
 
 
 @dataclass(frozen=True)
@@ -31,6 +31,7 @@ def from_args(args: dict) -> TruncationConfig:
 
 
 # ---- Per-cell truncation ---------------------------------------------------
+
 
 def truncate_cell(value: Any, cap: int) -> tuple[Any, bool]:
     """Return (possibly-truncated-value, was_truncated)."""
@@ -66,7 +67,9 @@ def truncate_row(row: list[Any], cfg: TruncationConfig) -> tuple[list[Any], bool
     return out, truncated
 
 
-def truncate_rows(rows: list[list[Any]], cfg: TruncationConfig) -> tuple[list[list[Any]], bool, int]:
+def truncate_rows(
+    rows: list[list[Any]], cfg: TruncationConfig
+) -> tuple[list[list[Any]], bool, int]:
     """Truncate rows, then truncate the whole payload if it still exceeds per_result_bytes.
 
     Returns (rows, was_truncated_at_least_once, dropped_rows_count).
@@ -80,8 +83,7 @@ def truncate_rows(rows: list[list[Any]], cfg: TruncationConfig) -> tuple[list[li
 
     # Whole-result cap: encode and measure
     encoded_size = sum(
-        len(json.dumps(r, ensure_ascii=False, default=str).encode("utf-8"))
-        for r in out
+        len(json.dumps(r, ensure_ascii=False, default=str).encode("utf-8")) for r in out
     )
     dropped = 0
     if encoded_size > cfg.per_result_bytes:

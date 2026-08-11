@@ -10,12 +10,12 @@
 - api.py `POST /sessions/{id}/distill-rules` —— 触发蒸馏
 - ContextManager V2 L3 语义层
 """
+
 from __future__ import annotations
 
 import logging
 import re
 from collections import defaultdict
-from typing import Any
 
 from agent.sessions.models_macc import SemanticRule
 from agent.sessions.storage import SessionStorage
@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---- 启发式蒸馏 -----------------------------------------------------------
+
 
 def distill_rules_from_events(
     session_id: str,
@@ -67,19 +68,23 @@ def distill_rules_from_events(
             rule_text=rule_text,
             session_id=session_id,
             confidence=confidence,
-            source_event_ids=[n["id"] for n in nodes
-                              if n["entity"] == entity and n["action"] == action][:5],
+            source_event_ids=[
+                n["id"] for n in nodes if n["entity"] == entity and n["action"] == action
+            ][:5],
         )
-        rules.append(SemanticRule(
-            id=rule_id,
-            session_id=session_id,
-            pattern=pattern,
-            rule_text=rule_text,
-            confidence=confidence,
-            last_updated=0,
-            source_event_ids=[n["id"] for n in nodes
-                              if n["entity"] == entity and n["action"] == action][:5],
-        ))
+        rules.append(
+            SemanticRule(
+                id=rule_id,
+                session_id=session_id,
+                pattern=pattern,
+                rule_text=rule_text,
+                confidence=confidence,
+                last_updated=0,
+                source_event_ids=[
+                    n["id"] for n in nodes if n["entity"] == entity and n["action"] == action
+                ][:5],
+            )
+        )
     return rules
 
 
@@ -146,5 +151,3 @@ def _extract_keywords(text: str) -> list[str]:
     for m in re.finditer(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b", text):
         keywords.append(m.group(0))
     return list(set(keywords))
-
-

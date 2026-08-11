@@ -31,13 +31,14 @@ Topology:
                                     │ responder│
                                     └─────────┘
 """
+
 from __future__ import annotations
 
 from agent.config import settings
-from agent.graph.state import AgentState, StepStatus
-
+from agent.graph.state import AgentState
 
 # ---- Edge functions --------------------------------------------------------
+
 
 def route_after_planner(state: AgentState) -> str:
     """planner → tool_runner (have plan) | responder (empty)."""

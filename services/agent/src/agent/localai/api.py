@@ -1,4 +1,5 @@
 """localai.api —— Phase 4 V0 本地模型 FastAPI 路由。"""
+
 from __future__ import annotations
 
 import logging

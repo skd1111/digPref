@@ -19,12 +19,12 @@ Returns a dict shaped like:
       "duration_ms": 87,
     }
 """
+
 from __future__ import annotations
 
 import asyncio
 import os
 import time
-from typing import Any
 
 from mcp_server_database.audit.emitter import audit
 from mcp_server_database.config import Settings
@@ -50,21 +50,18 @@ class ApprovalMissingError(ExecuteError):
 
 # ---- Public entry point ----------------------------------------------------
 
+
 async def run(args: dict) -> dict:
     started = time.monotonic()
     approval_id = args.get("approval_id")
     if not approval_id:
-        raise ApprovalMissingError(
-            "approval_id is required for db.execute (HITL gate)"
-        )
+        raise ApprovalMissingError("approval_id is required for db.execute (HITL gate)")
 
     # Verify the approval is real. Implementation: check that an
     # `approval.decision=approve` row exists for this id in the shared audit log.
     # For now: simple env-based gating (dev mode).
     if not _verify_approval(approval_id, args):
-        raise ApprovalMissingError(
-            f"approval_id {approval_id!r} not found or not approved"
-        )
+        raise ApprovalMissingError(f"approval_id {approval_id!r} not found or not approved")
 
     # Resolve connection
     connection = args["connection"]
@@ -80,12 +77,15 @@ async def run(args: dict) -> dict:
         assert_safe_sql(sql, dialect=dialect)
         assert_no_destructive(sql, dialect=dialect)
     except (UnsafeSqlError, DestructiveOpError) as exc:
-        audit("db.execute.reject", {
-            "approval_id": approval_id,
-            "connection": connection,
-            "reason": str(exc),
-            "sql_preview": sql[:200],
-        })
+        audit(
+            "db.execute.reject",
+            {
+                "approval_id": approval_id,
+                "connection": connection,
+                "reason": str(exc),
+                "sql_preview": sql[:200],
+            },
+        )
         raise ExecuteError(f"rejected by safety policy: {exc}") from exc
 
     # ---- execute with hard timeout ----
@@ -96,30 +96,39 @@ async def run(args: dict) -> dict:
             timeout=timeout_sec,
         )
     except asyncio.TimeoutError as exc:
-        audit("db.execute.timeout", {
-            "approval_id": approval_id,
-            "connection": connection,
-            "sql_preview": sql[:200],
-            "timeout_sec": timeout_sec,
-        })
+        audit(
+            "db.execute.timeout",
+            {
+                "approval_id": approval_id,
+                "connection": connection,
+                "sql_preview": sql[:200],
+                "timeout_sec": timeout_sec,
+            },
+        )
         raise ExecuteError(f"execute exceeded {timeout_sec}s timeout") from exc
-    except Exception as exc:  # noqa: BLE001
-        audit("db.execute.error", {
-            "approval_id": approval_id,
-            "connection": connection,
-            "sql_preview": sql[:200],
-            "error": str(exc),
-        })
+    except Exception as exc:
+        audit(
+            "db.execute.error",
+            {
+                "approval_id": approval_id,
+                "connection": connection,
+                "sql_preview": sql[:200],
+                "error": str(exc),
+            },
+        )
         raise ExecuteError(f"execute failed: {exc}") from exc
 
     # ---- success audit ----
-    audit("db.execute.ok", {
-        "approval_id": approval_id,
-        "connection": connection,
-        "rows_affected": affected,
-        "sql_preview": sql[:200],
-        "duration_ms": int((time.monotonic() - started) * 1000),
-    })
+    audit(
+        "db.execute.ok",
+        {
+            "approval_id": approval_id,
+            "connection": connection,
+            "rows_affected": affected,
+            "sql_preview": sql[:200],
+            "duration_ms": int((time.monotonic() - started) * 1000),
+        },
+    )
 
     return {
         "ok": True,
@@ -132,6 +141,7 @@ async def run(args: dict) -> dict:
 
 
 # ---- Implementation --------------------------------------------------------
+
 
 def _verify_approval(approval_id: str, args: dict) -> bool:
     """Verify that `approval_id` exists, was approved, and matches the SQL.
@@ -146,6 +156,7 @@ def _verify_approval(approval_id: str, args: dict) -> bool:
     """
     if os.environ.get("EAIDE_APPROVAL_DRY_RUN") == "1":
         import logging
+
         logging.getLogger("mcp_server_database").warning(
             "EAIDE_APPROVAL_DRY_RUN=1 — ALL approval checks bypassed. "
             "This MUST never be set in production."
@@ -169,7 +180,6 @@ def _approval_audit_lookup(approval_id: str, sql: str) -> bool:
     import hashlib
     import json
     import sqlite3
-    import time
     from pathlib import Path
 
     db_path = Path(os.environ.get("EAIDE_AUDIT_DB", "audit.sqlite"))
@@ -182,11 +192,11 @@ def _approval_audit_lookup(approval_id: str, sql: str) -> bool:
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         cur = conn.execute(
-            "SELECT payload, created_at FROM audit "
+            "SELECT payload, ts FROM audit "
             "WHERE action IN ('approval.decision','approval.approve') "
             "ORDER BY id DESC",
         )
-        for (payload, created_at) in cur.fetchall():
+        for payload, created_at in cur.fetchall():
             try:
                 d = json.loads(payload)
             except (TypeError, json.JSONDecodeError):
@@ -200,6 +210,7 @@ def _approval_audit_lookup(approval_id: str, sql: str) -> bool:
                 try:
                     # created_at is ISO-8601 string
                     from datetime import datetime, timezone
+
                     created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
                     age = (datetime.now(timezone.utc) - created).total_seconds()
                     if age > max_age_sec:
@@ -216,12 +227,13 @@ def _approval_audit_lookup(approval_id: str, sql: str) -> bool:
     finally:
         try:
             conn.close()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
     return False
 
 
 # ---- Driver dispatch -------------------------------------------------------
+
 
 async def _execute(dsn: str, dialect: str, sql: str, params: list) -> int:
     """Dispatch to the right driver. Returns rows affected."""
@@ -236,6 +248,7 @@ async def _execute(dsn: str, dialect: str, sql: str, params: list) -> int:
 
 async def _pg(dsn: str, sql: str, params: list) -> int:
     import asyncpg
+
     conn = await asyncpg.connect(dsn)
     try:
         async with conn.transaction():
@@ -247,13 +260,18 @@ async def _pg(dsn: str, sql: str, params: list) -> int:
 
 
 async def _my(dsn: str, sql: str, params: list) -> int:
-    import aiomysql
     from urllib.parse import urlparse
+
+    import aiomysql
+
     u = urlparse(dsn if "://" in dsn else f"mysql://{dsn}")
     conn = await aiomysql.connect(
-        host=u.hostname or "127.0.0.1", port=u.port or 3306,
-        user=u.username or "", password=u.password or "",
-        db=(u.path or "/").lstrip("/"), autocommit=False,
+        host=u.hostname or "127.0.0.1",
+        port=u.port or 3306,
+        user=u.username or "",
+        password=u.password or "",
+        db=(u.path or "/").lstrip("/"),
+        autocommit=False,
     )
     try:
         async with conn.cursor() as cur:
@@ -271,12 +289,13 @@ async def _my(dsn: str, sql: str, params: list) -> int:
 
 async def _sq(dsn: str, sql: str, params: list) -> int:
     import aiosqlite
+
     # 支持多种 SQLite DSN 格式（与 query.py 保持一致）
     raw = dsn
     if ":///" in raw:
         raw = raw.split(":///", 1)[-1]
     elif raw.startswith("file:"):
-        raw = raw[len("file:"):]
+        raw = raw[len("file:") :]
         if raw.startswith("///"):
             raw = raw[3:]
         elif raw.startswith("//"):

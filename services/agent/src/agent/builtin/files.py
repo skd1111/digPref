@@ -4,6 +4,7 @@
 medium → 由 dispatcher 决定是否走 HITL；delete/move 为 V2 高危工具（high），
 永远先过 HITL 审批再执行。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -19,12 +20,12 @@ from agent.builtin.models import (
 )
 from agent.builtin.path_sandbox import validate_path
 
-
 # 100MB 文件大小限制（超过走 logviewer）
 _MAX_FILE_BYTES = 100 * 1024 * 1024
 
 
 # ---- read_file ----------------------------------------------------------------
+
 
 async def builtin_read_file(
     path: str,
@@ -61,14 +62,14 @@ async def builtin_read_file(
         return ToolResult(
             ok=False,
             error=f"file_too_large: {size} bytes",
-            hint="use logviewer for files > 100MB",
+            hint="use builtin_log_read_lines for files > 100MB",
             meta={"size": size},
             risk_level="read",
         )
 
     # 用 asyncio.to_thread 避免阻塞事件循环
     def _read() -> tuple[str, int, bool]:
-        with open(p, "r", encoding=encoding, errors="replace") as f:
+        with open(p, encoding=encoding, errors="replace") as f:
             all_lines = f.readlines()
         truncated = False
         if start_line >= len(all_lines):
@@ -94,6 +95,7 @@ async def builtin_read_file(
 
 
 # ---- write_file ---------------------------------------------------------------
+
 
 async def builtin_write_file(
     path: str,
@@ -169,6 +171,7 @@ async def builtin_write_file(
 
 
 # ---- edit_file ----------------------------------------------------------------
+
 
 async def builtin_edit_file(
     path: str,
@@ -281,6 +284,7 @@ async def builtin_edit_file(
 
 # ---- list_dir ------------------------------------------------------------------
 
+
 async def builtin_list_dir(
     path: str,
     *,
@@ -322,14 +326,16 @@ async def builtin_list_dir(
                 break
             try:
                 stat = entry.stat()
-                entries.append({
-                    "name": entry.name,
-                    "path": str(entry),
-                    "is_file": entry.is_file(),
-                    "is_dir": entry.is_dir(),
-                    "size": stat.st_size if entry.is_file() else None,
-                    "mtime": stat.st_mtime,
-                })
+                entries.append(
+                    {
+                        "name": entry.name,
+                        "path": str(entry),
+                        "is_file": entry.is_file(),
+                        "is_dir": entry.is_dir(),
+                        "size": stat.st_size if entry.is_file() else None,
+                        "mtime": stat.st_mtime,
+                    }
+                )
             except OSError:
                 # 跳过不可访问的条目
                 continue
@@ -350,6 +356,7 @@ async def builtin_list_dir(
 
 
 # ---- delete_file / move_file（V2 高危工具 · Python 原生兜底）----------------
+
 
 async def builtin_delete_file(
     path: str,

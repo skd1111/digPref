@@ -10,11 +10,12 @@ CLAUDE.md §6 红线：
 - 失败兜底不可抛异常（不阻塞用户）
 - 草稿模型路径为空 → 全部 off（已由 policy.py 拦截）
 """
+
 from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
@@ -36,20 +37,20 @@ class DSparkBackend(Protocol):
         n_draft: int,
         draft_p_min: float,
         draft_model_path: str | None = None,
-    ) -> "DSparkResult":
-        ...
+    ) -> DSparkResult: ...
 
 
 @dataclass
 class DSparkResult:
     """DSpark 生成结果。"""
+
     text: str
-    backend: str = "unknown"             # "llamacpp" | "mock"
+    backend: str = "unknown"  # "llamacpp" | "mock"
     speculative_enabled: bool = False
     n_draft: int = 1
     accepted_tokens: int = 0
     drafted_tokens: int = 0
-    speedup_ratio: float = 1.0           # vs 不加速（> 1.0 表示加速）
+    speedup_ratio: float = 1.0  # vs 不加速（> 1.0 表示加速）
     duration_ms: int = 0
     error: str = ""
 
@@ -114,9 +115,7 @@ class LlamaCppDSparkBackend:
                 verbose=False,
             )
         except Exception as e:
-            raise DSparkBackendUnavailable(
-                f"主模型加载失败 {self.target_model_path}: {e}"
-            ) from e
+            raise DSparkBackendUnavailable(f"主模型加载失败 {self.target_model_path}: {e}") from e
 
     def _load_draft(self) -> Any | None:
         """加载草稿模型（可选）。失败返 None（静默降级为主模型单跑）。"""
@@ -124,6 +123,7 @@ class LlamaCppDSparkBackend:
             return None
         try:
             from llama_cpp import Llama
+
             draft = Llama(
                 model_path=self.draft_model_path,
                 n_ctx=self.n_ctx,
@@ -134,7 +134,8 @@ class LlamaCppDSparkBackend:
         except Exception as e:
             logger.warning(
                 "[DSpark] 草稿模型加载失败 %s: %s —— 静默降级为主模型单跑",
-                self.draft_model_path, e,
+                self.draft_model_path,
+                e,
             )
             return None
 
@@ -181,7 +182,9 @@ class LlamaCppDSparkBackend:
         except Exception as e:
             logger.warning("[DSpark] generate failed: %s", e)
             return DSparkResult(
-                text="", backend="llamacpp", speculative_enabled=speculative,
+                text="",
+                backend="llamacpp",
+                speculative_enabled=speculative,
                 error=f"{type(e).__name__}: {e}",
             )
 
@@ -235,11 +238,12 @@ class MockDSparkBackend:
         # 模拟耗时：加速比 = baseline_time / dspark_time
         await_time = 0.001 / max(1.0, self.mock_speedup if n_draft >= 2 else 1.0)
         import asyncio
+
         await asyncio.sleep(await_time)
         elapsed = int((time.monotonic() - t0) * 1000)
         speculative = n_draft >= 2 and draft_model_path is not None
         drafted = max_tokens * (n_draft if speculative else 1)
-        accepted = max_tokens if speculative else max_tokens
+        accepted = max_tokens
         speedup = (drafted / max(1, accepted)) if speculative else 1.0
         return DSparkResult(
             text=self.fixed_output,
@@ -258,6 +262,7 @@ class MockDSparkBackend:
 
 class DSparkBackendUnavailable(Exception):
     """DSpark 后端不可用（llama_cpp 未装 / 模型加载失败）。"""
+
     pass
 
 

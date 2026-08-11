@@ -11,6 +11,7 @@
     - 多项目隔离（按 project_name 分目录）
     - YAML 删除事件（watchfiles 兜底漏 reload，需 DELETE 监听）
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -18,7 +19,6 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Optional
 
 from watchfiles import awatch
 
@@ -67,7 +67,7 @@ def reload_yaml_to_loader(
     yaml_path: str | Path,
     loader: SkillLoader,
     project_name: str = "default",
-) -> Optional[str]:
+) -> str | None:
     """读 YAML → loader.load_one → emit `skill_matched` SSE 事件。
 
     Returns:
@@ -118,7 +118,9 @@ def reload_yaml_to_loader(
     )
     logger.info(
         "[skill_watchdog] %s: skill_id=%s success=%s",
-        project_name, skill_id, skill is not None,
+        project_name,
+        skill_id,
+        skill is not None,
     )
     return skill_id
 
@@ -154,13 +156,10 @@ class SkillWatchdog:
         self._loader = loader
         self._project_name = project_name
         # 'default' 走根目录；其他走子目录（V1 多项目隔离）
-        self._watch_dir = (
-            self._dir if project_name == "default"
-            else self._dir / project_name
-        )
+        self._watch_dir = self._dir if project_name == "default" else self._dir / project_name
         self._debounce_ms = debounce_ms
-        self._task: Optional[asyncio.Task] = None
-        self._stop_event: Optional[asyncio.Event] = None
+        self._task: asyncio.Task | None = None
+        self._stop_event: asyncio.Event | None = None
 
     async def start(self) -> None:
         self._watch_dir.mkdir(parents=True, exist_ok=True)
@@ -176,7 +175,7 @@ class SkillWatchdog:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            except (asyncio.CancelledError, Exception):
                 pass
 
     async def _watch_loop(self) -> None:
@@ -204,9 +203,9 @@ class SkillWatchdog:
                     self._reload(yaml_path)
         except asyncio.CancelledError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.exception("[skill_watchdog] watcher crashed: %s", e)
 
-    def _reload(self, yaml_path: Path) -> Optional[str]:
+    def _reload(self, yaml_path: Path) -> str | None:
         """按 project 模式路由：委托 `reload_yaml_to_loader`（复用事件 emit + 校验）。"""
         return reload_yaml_to_loader(yaml_path, self._loader, self._project_name)

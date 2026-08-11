@@ -12,6 +12,7 @@ V1 接力：
   - 跳板机（ProxyJump）
   - 跳板路由审计
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -22,11 +23,11 @@ from typing import Any
 
 from agent.ssh.models import SshConnectionError
 
-
 logger = logging.getLogger(__name__)
 
 
 # ---- V0 简单 SSH server handler ---------------------------------------------
+
 
 class _DemoSSHServerHandler:
     """V0 demo SSH server 处理器 —— 返回 hostname + 当前路径。"""
@@ -63,7 +64,7 @@ class _DemoSSHServerHandler:
                 elif line == "pwd":
                     writer.write((os.getcwd() + "\r\n").encode())
                 elif line == "whoami":
-                    writer.write(("demo\r\n").encode())
+                    writer.write(b"demo\r\n")
                 else:
                     writer.write(f"unknown command: {line}\r\n".encode())
                 writer.write(b"$ ")
@@ -79,6 +80,7 @@ class _DemoSSHServerHandler:
 
 
 # ---- Demo 服务端启动 / 停止 ------------------------------------------------
+
 
 class SshDemoServer:
     """V0 demo SSH server 包装（仅 PoC 用）。"""

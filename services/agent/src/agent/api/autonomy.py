@@ -3,6 +3,7 @@
 只做一件事：把"用户显式授权开启自动模式"写入审计库（AUTO_MODE_ENABLED）。
 autonomy 本身是会话级运行时状态（chatStore → chat 请求透传），后端不存储。
 """
+
 from __future__ import annotations
 
 import logging
@@ -40,6 +41,6 @@ async def confirm_auto_mode(body: AutonomyConfirmRequest) -> dict:
             actor_type="user",
             event_type="AUTO_MODE_ENABLED",
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("audit AUTO_MODE_ENABLED failed: %s", exc)
     return {"ok": True}

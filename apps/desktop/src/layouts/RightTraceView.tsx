@@ -59,12 +59,12 @@ export function RightTraceView(): JSX.Element {
     }
   };
 
-  // 新条目追加时自动滚到底
+  // 新条目 / 流式增量更新时自动滚到底
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [consoleEntries.length]);
+  }, [consoleEntries]);
 
   return (
     <div className="flex h-full flex-col">
@@ -72,7 +72,7 @@ export function RightTraceView(): JSX.Element {
         className="flex items-center justify-between border-b px-3 py-2 text-sm font-semibold"
         style={{ color: '#1f1f1f' }}
       >
-        <span>控制台 · 思维链 + AI 解释</span>
+        <span>控制台 · 思维链</span>
         <button
           type="button"
           onClick={() => clearConsole()}
@@ -98,11 +98,11 @@ export function RightTraceView(): JSX.Element {
           {mode === 'full' ? <ThinkingChainPanel /> : <ExecutionTrace />}
         </div>
 
-        {/* 下半：AI 解释 —— 仅在用户手动选区点「AI 解释」后出现，无内容时整块隐藏 */}
+        {/* 下半：代码解释 —— 仅在用户手动选区点解释后出现，无内容时整块隐藏 */}
         {consoleEntries.length > 0 && (
           <div>
             <div className="mb-1 text-2xs font-semibold uppercase tracking-wider" style={{ color: '#616161' }}>
-              AI 解释（{consoleEntries.length}）
+              代码解释（{consoleEntries.length}）
             </div>
             <ConsoleLogList
               entries={consoleEntries}
@@ -183,7 +183,7 @@ function ConsoleLogRow({
 
   return (
     <details
-      open={autoOpen || undefined}
+      open={entry.status === 'running' || autoOpen || undefined}
       onToggle={(e) => onToggle(entry.id, (e.target as HTMLDetailsElement).open)}
       className="rounded font-mono text-2xs"
       style={{ backgroundColor: '#f3f3f3', borderLeft: `3px solid ${color}` }}

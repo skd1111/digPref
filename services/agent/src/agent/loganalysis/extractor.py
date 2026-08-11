@@ -12,11 +12,12 @@
 - api.py：先用 extractor 切块 → scrubber 脱敏 → LLM 根因分析
 - log_level_classify：本模块的 detect_level 提供正则兜底（无 LLM 时）
 """
+
 from __future__ import annotations
 
 import re
 import zlib
-from typing import Iterable
+from collections.abc import Iterable
 
 from agent.loganalysis.models import (
     ALL_LEVELS,
@@ -28,7 +29,6 @@ from agent.loganalysis.models import (
     LEVEL_WARN,
     ErrorBlock,
 )
-
 
 # ---- ERROR 头识别 ---------------------------------------------------------
 
@@ -169,7 +169,7 @@ def _finalize_block(
 
 def _stack_fingerprint(stack: list[str]) -> str:
     blob = "\n".join(stack).encode("utf-8", errors="replace")
-    return f"{zlib.adler32(blob) & 0xffffffff:08x}"
+    return f"{zlib.adler32(blob) & 0xFFFFFFFF:08x}"
 
 
 # ---- 工具函数 -------------------------------------------------------------

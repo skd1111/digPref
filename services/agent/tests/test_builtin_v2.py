@@ -8,16 +8,16 @@
   - dispatcher HITL 前置闸门（审批前不执行 + 审批后放行 + 消费 approval_decision）
   - 无运行时 6 工具仍 not_implemented；审计行完整性
 """
+
 from __future__ import annotations
 
 import asyncio
-import sys
 from pathlib import Path
 
 import pytest
 
-
 # ---- _tauri_runtime 注入协议 -------------------------------------------------
+
 
 class TestTauriRuntimeInjection:
     def test_default_is_none(self):
@@ -26,6 +26,7 @@ class TestTauriRuntimeInjection:
             get_tauri_app_handle,
             is_tauri_runtime_available,
         )
+
         clear_tauri_runtime()
         assert get_tauri_app_handle() is None
         assert is_tauri_runtime_available() is False
@@ -37,9 +38,11 @@ class TestTauriRuntimeInjection:
             is_tauri_runtime_available,
             set_tauri_runtime,
         )
+
         class Fake:
             async def invoke(self, command, args):
                 return {}
+
         set_tauri_runtime(Fake())
         try:
             assert get_tauri_app_handle() is not None
@@ -53,15 +56,18 @@ class TestTauriRuntimeInjection:
             get_tauri_app_handle,
             set_tauri_runtime,
         )
+
         class Fake:
             async def invoke(self, command, args):
                 return {}
+
         set_tauri_runtime(Fake())
         set_tauri_runtime(None)
         assert get_tauri_app_handle() is None
 
 
 # ---- tauri_bridge V2 --------------------------------------------------------
+
 
 class TestTauriBridgeV2:
     def test_implemented_sets(self):
@@ -73,6 +79,7 @@ class TestTauriBridgeV2:
             is_v1_5_implemented,
             is_v2_implemented,
         )
+
         assert len(_V1_5_IMPLEMENTED_RUST_TOOLS) == 6
         assert len(_V2_IMPLEMENTED_RUST_TOOLS) == 9
         for name in ("stat_file", "mkdir", "find", "glob", "hash", "base64"):
@@ -93,6 +100,7 @@ class TestTauriBridgeV2:
 
     def test_build_rust_args_mapping(self):
         from agent.builtin.tauri_bridge import build_rust_args
+
         # 高危工具 require_hitl 透传
         args = build_rust_args(
             "delete_file",
@@ -130,6 +138,7 @@ class TestTauriBridgeV2:
     async def test_invoke_no_runtime_returns_none(self):
         from agent.builtin._tauri_runtime import clear_tauri_runtime
         from agent.builtin.tauri_bridge import invoke_rust_tool_sync
+
         clear_tauri_runtime()
         for name in ("stat_file", "delete_file", "shell", "base64"):
             result = await invoke_rust_tool_sync(
@@ -147,6 +156,7 @@ class TestTauriBridgeV2:
         class FakeRuntime:
             def __init__(self):
                 self.calls = []
+
             async def invoke(self, command, args):
                 self.calls.append((command, args))
                 return {
@@ -182,11 +192,18 @@ class TestTauriBridgeV2:
         class FlakyRuntime:
             def __init__(self):
                 self.attempts = 0
+
             async def invoke(self, command, args):
                 self.attempts += 1
                 if self.attempts == 1:
                     raise asyncio.TimeoutError("ipc timeout")
-                return {"ok": True, "content": "retried", "meta": {}, "needs_hitl": False, "risk_level": "read"}
+                return {
+                    "ok": True,
+                    "content": "retried",
+                    "meta": {},
+                    "needs_hitl": False,
+                    "risk_level": "read",
+                }
 
         flaky = FlakyRuntime()
         set_tauri_runtime(flaky)
@@ -232,10 +249,17 @@ class TestTauriBridgeV2:
         class RecordingRuntime:
             def __init__(self):
                 self.seen = None
+
             async def invoke(self, command, args):
                 self.seen = args
-                return {"ok": False, "error": "hitl_required", "hint": "approve first",
-                        "meta": {}, "needs_hitl": True, "risk_level": "high"}
+                return {
+                    "ok": False,
+                    "error": "hitl_required",
+                    "hint": "approve first",
+                    "meta": {},
+                    "needs_hitl": True,
+                    "risk_level": "high",
+                }
 
         fake = RecordingRuntime()
         set_tauri_runtime(fake)
@@ -256,10 +280,12 @@ class TestTauriBridgeV2:
 
 # ---- 3 高危工具 Python 原生兜底 ---------------------------------------------
 
+
 class TestPythonFallbackDelete:
     @pytest.mark.asyncio
     async def test_delete_file_ok(self, tmp_path: Path):
         from agent.builtin.files import builtin_delete_file
+
         f = tmp_path / "bye.txt"
         f.write_text("x")
         r = await builtin_delete_file(str(f))
@@ -271,6 +297,7 @@ class TestPythonFallbackDelete:
     @pytest.mark.asyncio
     async def test_delete_dir_requires_recursive(self, tmp_path: Path):
         from agent.builtin.files import builtin_delete_file
+
         d = tmp_path / "sub"
         d.mkdir()
         r = await builtin_delete_file(str(d))
@@ -281,6 +308,7 @@ class TestPythonFallbackDelete:
     @pytest.mark.asyncio
     async def test_delete_dir_recursive(self, tmp_path: Path):
         from agent.builtin.files import builtin_delete_file
+
         d = tmp_path / "sub"
         d.mkdir()
         (d / "inner.txt").write_text("x")
@@ -291,6 +319,7 @@ class TestPythonFallbackDelete:
     @pytest.mark.asyncio
     async def test_delete_root_forbidden(self, tmp_path: Path):
         from agent.builtin.files import builtin_delete_file
+
         r = await builtin_delete_file(str(tmp_path), recursive=True, allowed_roots=[str(tmp_path)])
         assert not r.ok
         assert "delete_root_forbidden" in r.error
@@ -299,6 +328,7 @@ class TestPythonFallbackDelete:
     @pytest.mark.asyncio
     async def test_delete_out_of_bounds(self, tmp_path: Path):
         from agent.builtin.files import builtin_delete_file
+
         outside = tmp_path.parent / "secret_v2.txt"
         outside.write_text("s")
         try:
@@ -315,6 +345,7 @@ class TestPythonFallbackMove:
     @pytest.mark.asyncio
     async def test_move_ok(self, tmp_path: Path):
         from agent.builtin.files import builtin_move_file
+
         src = tmp_path / "a.txt"
         dest = tmp_path / "b.txt"
         src.write_text("hello")
@@ -326,6 +357,7 @@ class TestPythonFallbackMove:
     @pytest.mark.asyncio
     async def test_move_no_overwrite(self, tmp_path: Path):
         from agent.builtin.files import builtin_move_file
+
         src = tmp_path / "a.txt"
         dest = tmp_path / "b.txt"
         src.write_text("new")
@@ -338,6 +370,7 @@ class TestPythonFallbackMove:
     @pytest.mark.asyncio
     async def test_move_overwrite(self, tmp_path: Path):
         from agent.builtin.files import builtin_move_file
+
         src = tmp_path / "a.txt"
         dest = tmp_path / "b.txt"
         src.write_text("new")
@@ -349,6 +382,7 @@ class TestPythonFallbackMove:
     @pytest.mark.asyncio
     async def test_move_dir(self, tmp_path: Path):
         from agent.builtin.files import builtin_move_file
+
         src = tmp_path / "dir_a"
         dest = tmp_path / "dir_b"
         src.mkdir()
@@ -362,6 +396,7 @@ class TestPythonFallbackShell:
     @pytest.mark.asyncio
     async def test_echo_ok(self):
         from agent.builtin.shell import builtin_shell
+
         r = await builtin_shell("echo hello v2", allowed_prefixes=["echo"])
         assert r.ok, r.error
         assert r.content["exit_code"] == 0
@@ -372,6 +407,7 @@ class TestPythonFallbackShell:
     @pytest.mark.asyncio
     async def test_blocks_metacharacters(self):
         from agent.builtin.shell import builtin_shell
+
         for cmd in (
             "echo hi; rm -rf /",
             "echo hi && rm -rf /",
@@ -387,6 +423,7 @@ class TestPythonFallbackShell:
     @pytest.mark.asyncio
     async def test_command_not_allowed(self):
         from agent.builtin.shell import builtin_shell
+
         r = await builtin_shell("rm -rf x", allowed_prefixes=["echo"])
         assert not r.ok
         assert "command_not_allowed" in r.error
@@ -394,14 +431,17 @@ class TestPythonFallbackShell:
     @pytest.mark.asyncio
     async def test_empty_command(self):
         from agent.builtin.shell import builtin_shell
+
         r = await builtin_shell("   ")
         assert not r.ok
         assert "empty_command" in r.error
 
     @pytest.mark.asyncio
     async def test_timeout_kills(self):
-        from agent.builtin.shell import builtin_shell
         import sys as _sys
+
+        from agent.builtin.shell import builtin_shell
+
         if _sys.platform == "win32":
             cmd = "ping -n 6 127.0.0.1"
         else:
@@ -413,6 +453,7 @@ class TestPythonFallbackShell:
 
 
 # ---- dispatcher HITL 前置闸门 ------------------------------------------------
+
 
 class TestDispatcherHitlGateV2:
     @pytest.mark.asyncio
@@ -491,8 +532,11 @@ class TestDispatcherHitlGateV2:
         reset_default_registry()
         reset_default_dispatcher()
         result = await dispatcher().dispatch(
-            {"server": "builtin", "name": "shell",
-             "args": {"command": "echo approved", "allowed_prefixes": ["echo"]}},
+            {
+                "server": "builtin",
+                "name": "shell",
+                "args": {"command": "echo approved", "allowed_prefixes": ["echo"]},
+            },
             {"run_id": "v2-shell-ok", "approval_decision": "approve"},
         )
         assert result["tool_result"]["ok"] is True
@@ -509,8 +553,7 @@ class TestDispatcherHitlGateV2:
         reset_default_dispatcher()
         f = tmp_path / "gated.txt"
         result = await dispatcher().dispatch(
-            {"server": "builtin", "name": "write_file",
-             "args": {"path": str(f), "content": "x"}},
+            {"server": "builtin", "name": "write_file", "args": {"path": str(f), "content": "x"}},
             {"run_id": "v2-write-gate"},
         )
         assert result["awaiting_approval"] is True
@@ -519,9 +562,9 @@ class TestDispatcherHitlGateV2:
     @pytest.mark.asyncio
     async def test_stat_file_python_fallback_without_runtime(self, tmp_path: Path):
         """无运行时 → stat_file 走 V3 Python 兜底执行。"""
+        from agent.builtin._tauri_runtime import clear_tauri_runtime
         from agent.builtin.dispatcher import dispatcher, reset_default_dispatcher
         from agent.builtin.registry import reset_default_registry
-        from agent.builtin._tauri_runtime import clear_tauri_runtime
 
         clear_tauri_runtime()
         reset_default_registry()
@@ -570,6 +613,7 @@ class TestDispatcherHitlGateV2:
         )
         await asyncio.sleep(0.15)
         import sqlite3
+
         conn = sqlite3.connect(str(tmp_path / "audit.sqlite"))
         row = conn.execute(
             "SELECT tool_name, ok, needs_hitl FROM tool_calls ORDER BY id DESC LIMIT 1"
@@ -582,6 +626,7 @@ class TestDispatcherHitlGateV2:
 
 
 # ---- V2 公开 API ------------------------------------------------------------
+
 
 class TestV2PublicAPI:
     def test_v2_exports(self):
@@ -596,6 +641,7 @@ class TestV2PublicAPI:
             is_tauri_runtime_available,
             set_tauri_runtime,
         )
+
         assert callable(builtin_delete_file)
         assert callable(builtin_move_file)
         assert callable(builtin_shell)
@@ -611,4 +657,5 @@ class TestV2PublicAPI:
     def test_v1_5_alias_still_works(self):
         from agent.builtin import is_rust_tool_v1_5_implemented
         from agent.builtin.tauri_bridge import is_v1_5_implemented
+
         assert is_rust_tool_v1_5_implemented is is_v1_5_implemented

@@ -12,6 +12,7 @@
  * 时渲染本组件，并隐藏 SideBar/Bottom/Right。
  */
 import { DataSourceTree } from '@/components/data/DataSourceTree';
+import { HistoryAnalysisList } from '@/components/data/HistoryAnalysisList';
 import { QueryEditor } from '@/components/data/QueryEditor';
 import { DataGrid } from '@/components/data/DataGrid';
 import { ChartPanel } from '@/components/data/ChartPanel';
@@ -21,8 +22,14 @@ export function DataWorkbench(): JSX.Element {
   return (
     <div className="data-workbench flex h-full" style={{ backgroundColor: '#ffffff' }}>
       {/* 左栏：数据源 + 表结构/字典 + 历史分析 */}
-      <div className="flex-shrink-0 border-r" style={{ width: 260, borderColor: '#d4d4d4' }}>
-        <DataSourceTree />
+      <div className="flex flex-shrink-0 flex-col border-r" style={{ width: 260, borderColor: '#d4d4d4' }}>
+        <div className="min-h-0 flex-1 overflow-hidden">
+          <DataSourceTree />
+        </div>
+        {/* 历史分析（缺口 9） */}
+        <div className="flex-shrink-0" style={{ height: 200, borderTop: '1px solid #d0d0d0' }}>
+          <HistoryAnalysisList />
+        </div>
       </div>
 
       {/* 中栏：编辑器（SQL/Python/对话） */}

@@ -17,15 +17,18 @@
 
 抽样是**确定性**的（计数器取模），不用随机数 —— 测试可复现，也便于统计对齐。
 """
+
 from __future__ import annotations
 
 import logging
 import math
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any
 
 from agent.config import settings
+from agent.llm.prompts import load_prompt, render_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -33,30 +36,13 @@ logger = logging.getLogger(__name__)
 THRESHOLDS: dict[str, float] = {
     "validation_pass_rate": 0.95,
     "success_rate": 0.85,
-    "retry_rate": 0.10,          # 上限
-    "dlq_rate": 0.01,            # 上限
+    "retry_rate": 0.10,  # 上限
+    "dlq_rate": 0.01,  # 上限
     "compression_ratio": 0.60,
     "required_fields_kept_rate": 1.0,
-    "p50_ms": 5_000.0,           # 上限
-    "p99_ms": 30_000.0,          # 上限
+    "p50_ms": 5_000.0,  # 上限
+    "p99_ms": 30_000.0,  # 上限
 }
-
-JUDGE_PROMPT_TEMPLATE = """你是子 Agent 输出质量评审员。请对下面这份子 Agent 摘要打分。
-
-评分标准（1-5 分整数）：
-5 = 摘要准确、结构清晰、对主 Agent 决策直接有用
-4 = 基本可用，个别细节缺失
-3 = 勉强可用，信息密度低
-2 = 明显跑题或缺关键结论
-1 = 无效输出
-
-任务类型: __TASK_TYPE__
-任务描述: __TASK_DESC__
-子 Agent 摘要:
-__SUMMARY__
-
-只输出一行 JSON：{"score": <1-5>, "reason": "<不超过 40 字>"}
-"""
 
 
 def _percentile(values: list[float], pct: float) -> float:
@@ -76,6 +62,7 @@ def _percentile(values: list[float], pct: float) -> float:
 @dataclass
 class JudgeVerdict:
     """Judge 评分结果。"""
+
     task_id: str
     score: int = 0
     reason: str = ""
@@ -167,7 +154,7 @@ class EvalCollector:
             return False
         if rate >= 1:
             return True
-        interval = max(1, int(round(1 / rate)))
+        interval = max(1, round(1 / rate))
         hit = (self._judge_counter % interval) == 0
         self._judge_counter += 1
         return hit
@@ -189,13 +176,16 @@ class EvalCollector:
             "retry_rate": self.retries / total,
             "dlq_rate": self.dlq / total,
             "validation_pass_rate": (checked - self.validation_failed) / checked
-            if self.validation_checked else 1.0,
+            if self.validation_checked
+            else 1.0,
             "compression_ratio": (
                 sum(self.compression_ratios) / len(self.compression_ratios)
-                if self.compression_ratios else 0.0
+                if self.compression_ratios
+                else 0.0
             ),
             "required_fields_kept_rate": self.required_fields_kept / req_checked
-            if self.required_fields_checked else 1.0,
+            if self.required_fields_checked
+            else 1.0,
             "p50_ms": _percentile(self.latencies_ms, 0.50),
             "p99_ms": _percentile(self.latencies_ms, 0.99),
             "local_only_forced": self.local_only_forced,
@@ -207,11 +197,10 @@ class EvalCollector:
             "judge": {
                 "samples": len(self.judge_scores),
                 "avg_score": (
-                    sum(self.judge_scores) / len(self.judge_scores)
-                    if self.judge_scores else 0.0
+                    sum(self.judge_scores) / len(self.judge_scores) if self.judge_scores else 0.0
                 ),
                 "sample_rate": settings.orchestrator_judge_sample_rate,
-                "is_ci_gate": False,   # 设计文档 §3.3：Judge 不作 CI 闸门
+                "is_ci_gate": False,  # 设计文档 §3.3：Judge 不作 CI 闸门
             },
         }
         metrics["thresholds"] = dict(THRESHOLDS)
@@ -222,8 +211,12 @@ class EvalCollector:
     def _violations(metrics: dict[str, Any]) -> list[str]:
         """列出未达标项（仅提示，不阻塞）。"""
         out: list[str] = []
-        lower_bound = ("validation_pass_rate", "success_rate",
-                       "compression_ratio", "required_fields_kept_rate")
+        lower_bound = (
+            "validation_pass_rate",
+            "success_rate",
+            "compression_ratio",
+            "required_fields_kept_rate",
+        )
         upper_bound = ("retry_rate", "dlq_rate", "p50_ms", "p99_ms")
         for key in lower_bound:
             if metrics.get(key, 0) < THRESHOLDS[key]:
@@ -247,12 +240,13 @@ def _parse_judge_output(text: str) -> tuple[int, str]:
     match = re.search(r"\{[^{}]*\}", text, re.S)
     if match:
         import json
+
         try:
             data = json.loads(match.group(0))
             score = int(data.get("score", 0))
             reason = str(data.get("reason", ""))[:120]
             return max(0, min(5, score)), reason
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
     digits = re.search(r"\b([1-5])\b", text)
     if digits:
@@ -266,8 +260,8 @@ async def judge_report(
     task_type: str,
     task_description: str,
     summary: str,
-    judge_caller: Optional[Callable[[str], Awaitable[str]]] = None,
-    collector: Optional[EvalCollector] = None,
+    judge_caller: Callable[[str], Awaitable[str]] | None = None,
+    collector: EvalCollector | None = None,
 ) -> JudgeVerdict:
     """对一份子 Agent 摘要打分（无 caller → 直接返 sampled=False 空结果）。
 
@@ -275,15 +269,15 @@ async def judge_report(
     """
     if judge_caller is None:
         return JudgeVerdict(task_id=task_id, sampled=False, error="no judge_caller")
-    prompt = (
-        JUDGE_PROMPT_TEMPLATE
-        .replace("__TASK_TYPE__", task_type or "")
-        .replace("__TASK_DESC__", (task_description or "")[:200])
-        .replace("__SUMMARY__", (summary or "")[:1500])
+    prompt = render_prompt(
+        load_prompt("orchestrator/eval_judge"),
+        TASK_TYPE=task_type or "",
+        TASK_DESC=(task_description or "")[:200],
+        SUMMARY=(summary or "")[:1500],
     )
     try:
         raw = await judge_caller(prompt)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("[eval] judge 调用失败 task=%s err=%s", task_id, exc)
         return JudgeVerdict(task_id=task_id, sampled=True, error=f"{type(exc).__name__}: {exc}")
     score, reason = _parse_judge_output(raw or "")
@@ -312,10 +306,10 @@ def reset_default_collector() -> EvalCollector:
 
 
 __all__ = [
+    "THRESHOLDS",
     "EvalCollector",
     "JudgeVerdict",
-    "THRESHOLDS",
-    "judge_report",
     "get_default_collector",
+    "judge_report",
     "reset_default_collector",
 ]

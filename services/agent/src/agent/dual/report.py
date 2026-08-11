@@ -4,6 +4,7 @@
 - 只在真实存在信号时生成（repair 发生 / 审批决策产生）；
 - 无验证信号绝不声称"已验证"；无执行信号绝不声称"已完成"。
 """
+
 from __future__ import annotations
 
 

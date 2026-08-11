@@ -6,10 +6,9 @@ Covers:
     - Error injection: simulated MCP failures → Auto-Repair → give up
     - HITL across multi-step plans: only write ops gate, read ops flow through
 """
+
 from __future__ import annotations
 
-import asyncio
-import json
 import sys
 from pathlib import Path
 
@@ -19,11 +18,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from agent.graph.compile import Runtime, compile_graph
-from agent.graph.interrupt import _LOCAL_DECISIONS, post_decision
+from agent.graph.interrupt import _LOCAL_DECISIONS
 from agent.graph.state import empty_state
 
-
 # ---- Multi-server mock MCP -------------------------------------------------
+
 
 class _MultiServerMCP:
     """Mock MCP with 2 servers: db (SQL) + rest (HTTP)."""
@@ -34,14 +33,28 @@ class _MultiServerMCP:
 
     async def list_tools(self):
         return [
-            {"server": "db", "name": "db.query",
-             "inputSchema": {"type": "object", "properties": {"sql": {"type": "string"}}}},
-            {"server": "db", "name": "db.execute",
-             "inputSchema": {"type": "object", "properties": {"sql": {"type": "string"}}}},
-            {"server": "rest", "name": "rest.request",
-             "inputSchema": {"type": "object", "properties": {"host": {"type": "string"},
-                                                              "method": {"type": "string"},
-                                                              "path": {"type": "string"}}}},
+            {
+                "server": "db",
+                "name": "db.query",
+                "inputSchema": {"type": "object", "properties": {"sql": {"type": "string"}}},
+            },
+            {
+                "server": "db",
+                "name": "db.execute",
+                "inputSchema": {"type": "object", "properties": {"sql": {"type": "string"}}},
+            },
+            {
+                "server": "rest",
+                "name": "rest.request",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "host": {"type": "string"},
+                        "method": {"type": "string"},
+                        "path": {"type": "string"},
+                    },
+                },
+            },
         ]
 
     async def invoke(self, call, *, timeout_sec, row_limit):
@@ -50,10 +63,15 @@ class _MultiServerMCP:
             self.fail_next -= 1
             raise RuntimeError(f"simulated failure on {call.get('name')}")
         if call["name"] == "db.query":
-            return {"ok": True, "rows": [[1, 2, 3]], "columns": ["a", "b", "c"],
-                    "rows_returned": 1, "truncated": False}
+            return {
+                "ok": True,
+                "rows": [[1, 2, 3]],
+                "columns": ["a", "b", "c"],
+                "rows_returned": 1,
+                "truncated": False,
+            }
         if call["name"] == "rest.request":
-            return {"ok": True, "status": 200, "body": "{\"ok\":true}", "truncated": False}
+            return {"ok": True, "status": 200, "body": '{"ok":true}', "truncated": False}
         if call["name"] == "db.execute":
             return {"ok": True, "rows_affected": 1}
         return {"ok": False, "error": "unknown"}
@@ -62,25 +80,40 @@ class _MultiServerMCP:
 class _MultiServerLLM:
     """Planner that returns a 3-step plan spanning DB and REST."""
 
-    async def classify_intent(self, text): return "query"
+    async def classify_intent(self, text):
+        return "query"
+
     async def plan(self, *, intent, user_prompt, history, tool_specs):
         return (
             [
-                {"server": "db", "name": "db.query",
-                 "args": {"sql": "SELECT 1"}, "risk_level": "read",
-                 "rationale": "step1: db"},
-                {"server": "rest", "name": "rest.request",
-                 "args": {"host": "api.x", "method": "GET", "path": "/health"},
-                 "risk_level": "read", "rationale": "step2: api"},
-                {"server": "db", "name": "db.query",
-                 "args": {"sql": "SELECT 2"}, "risk_level": "read",
-                 "rationale": "step3: db again"},
+                {
+                    "server": "db",
+                    "name": "db.query",
+                    "args": {"sql": "SELECT 1"},
+                    "risk_level": "read",
+                    "rationale": "step1: db",
+                },
+                {
+                    "server": "rest",
+                    "name": "rest.request",
+                    "args": {"host": "api.x", "method": "GET", "path": "/health"},
+                    "risk_level": "read",
+                    "rationale": "step2: api",
+                },
+                {
+                    "server": "db",
+                    "name": "db.query",
+                    "args": {"sql": "SELECT 2"},
+                    "risk_level": "read",
+                    "rationale": "step3: db again",
+                },
             ],
             "multi-server plan",
         )
 
     async def repair_call(self, *, original, error, history):
         return original
+
     async def summarise(self, *, intent, user_prompt, plan, results):
         return f"Summarised {len(results)} results.", ["db", "rest"]
 
@@ -88,20 +121,39 @@ class _MultiServerLLM:
 class _LongContextLLM:
     """Planner that returns a query that produces a huge result."""
 
-    async def classify_intent(self, text): return "query"
+    async def classify_intent(self, text):
+        return "query"
+
     async def plan(self, *, intent, user_prompt, history, tool_specs):
-        return ([{"server": "db", "name": "db.query",
-                 "args": {"sql": "SELECT * FROM huge"}, "risk_level": "read",
-                 "rationale": "big query"}], "long context")
-    async def repair_call(self, *, original, error, history): return original
+        return (
+            [
+                {
+                    "server": "db",
+                    "name": "db.query",
+                    "args": {"sql": "SELECT * FROM huge"},
+                    "risk_level": "read",
+                    "rationale": "big query",
+                }
+            ],
+            "long context",
+        )
+
+    async def repair_call(self, *, original, error, history):
+        return original
+
     async def summarise(self, *, intent, user_prompt, plan, results):
         return "summary", ["db"]
 
 
 class _LongContextMCP:
     async def list_tools(self):
-        return [{"server": "db", "name": "db.query",
-                 "inputSchema": {"type": "object", "properties": {"sql": {"type": "string"}}}}]
+        return [
+            {
+                "server": "db",
+                "name": "db.query",
+                "inputSchema": {"type": "object", "properties": {"sql": {"type": "string"}}},
+            }
+        ]
 
     async def invoke(self, call, *, timeout_sec, row_limit):
         # Return a result with 1000 rows of 1KB strings = ~1MB
@@ -117,6 +169,7 @@ class _LongContextMCP:
 
 # ---- Fixtures --------------------------------------------------------------
 
+
 @pytest.fixture(autouse=True)
 def _clear_local_decisions():
     _LOCAL_DECISIONS.clear()
@@ -129,6 +182,7 @@ def _build(llm, mcp):
 
 
 # ---- Tests -----------------------------------------------------------------
+
 
 class TestMultiServerCoordination:
     @pytest.mark.asyncio
@@ -170,7 +224,7 @@ class TestLongContext:
             events.append(chunk)
 
         # The graph completed (responder ran)
-        nodes_visited = [list(c.keys())[0] for c in events]
+        nodes_visited = [next(iter(c.keys())) for c in events]
         assert "responder" in nodes_visited
         assert "tool_runner" in nodes_visited
 
@@ -180,7 +234,7 @@ class TestErrorInjection:
     async def test_first_call_fails_then_recovers(self):
         llm = _MultiServerLLM()
         mcp = _MultiServerMCP()
-        mcp.fail_next = 1   # fail first call only
+        mcp.fail_next = 1  # fail first call only
         graph = _build(llm, mcp)
 
         last_answer = None

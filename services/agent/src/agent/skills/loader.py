@@ -3,13 +3,13 @@
 V0 实现选择：用 %APPDATA%\\eaide\\skills 目录（与 envconfig/config/ 同父级）。
 V1 计划：迁移到 <EAIDE_INSTALL_DIR>/skills（spec §0.5 决策）。
 """
+
 from __future__ import annotations
 
 import logging
 import os
 import time
 from pathlib import Path
-from typing import Optional
 
 import yaml
 
@@ -63,7 +63,7 @@ class SkillLoader:
                 skill = self._load_one_inner(yaml_path)
                 if skill:
                     self._skills[skill.id] = skill
-            except Exception as e:
+            except Exception:
                 logger.exception("Failed to load skill: %s", yaml_path)
         return list(self._skills.values())
 
@@ -79,7 +79,7 @@ class SkillLoader:
             if skill:
                 self._skills[skill.id] = skill
             return skill
-        except Exception as e:
+        except Exception:
             logger.exception("Failed to load skill: %s", path)
             return None
 
@@ -93,7 +93,7 @@ class SkillLoader:
             if skill:
                 self._project_skills.setdefault(project_name, {})[skill.id] = skill
             return skill
-        except Exception as e:
+        except Exception:
             logger.exception("Failed to load skill: %s", path)
             return None
 
@@ -114,7 +114,7 @@ class SkillLoader:
             return proj[skill_id]
         return self._skills.get(skill_id)
 
-    def list(self, project_name: Optional[str] = None) -> list[Skill]:
+    def list(self, project_name: str | None = None) -> list[Skill]:
         """V0：返全部共享。V1：若指定 project_name，返该项目专属 + 共享（项目覆盖）。"""
         if project_name is None:
             return list(self._skills.values())

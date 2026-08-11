@@ -10,19 +10,13 @@
     - 启动恢复扫描 find_resumable_sessions
     - api V1.5 端点（search / branch / share / export / recovery / event-chain）
 """
+
 from __future__ import annotations
 
 import json
-import os
-import time
-from pathlib import Path
 
 import pytest
-
 from agent.sessions.export import (
-    EAS_MAGIC,
-    EAS_VERSION,
-    SessionExporter,
     SessionImporter,
     _scrub_text,
     export_session_to_eas,
@@ -31,11 +25,9 @@ from agent.sessions.export import (
 from agent.sessions.models import (
     BranchInfo,
     Session,
-    SessionEvent,
     ShareToken,
 )
 from agent.sessions.recovery import (
-    DEFAULT_IDLE_THRESHOLD_MS,
     RecoveryReport,
     scan_resumable_sessions,
 )
@@ -49,8 +41,8 @@ from agent.sessions.storage import (
     now_ms,
 )
 
-
 # ---- Fixtures ---------------------------------------------------------------
+
 
 @pytest.fixture
 def storage(tmp_path):
@@ -64,8 +56,9 @@ def session_with_messages(storage):
     storage.append_message(s.id, "user", "查询订单余额")
     storage.append_message(s.id, "assistant", "SELECT * FROM t_order", tool_name="db.query")
     storage.append_message(
-        s.id, "tool",
-        "[{\"id\": 1, \"amount\": 100}]",
+        s.id,
+        "tool",
+        '[{"id": 1, "amount": 100}]',
         tool_name="db.query",
         tool_result="OK",
     )
@@ -75,9 +68,11 @@ def session_with_messages(storage):
 
 # ---- 1. Schema 迁移 --------------------------------------------------------
 
+
 def test_migrate_adds_new_columns_to_existing_v0_db(tmp_path):
     """V0 DB（无 V1.5 新列）→ 自动 ALTER 加列，CREATE 不报错。"""
     import sqlite3
+
     db_path = tmp_path / "legacy_v0.db"
     # 模拟 V0 schema（无 V1.5 新列）
     conn = sqlite3.connect(str(db_path))
@@ -117,11 +112,12 @@ def test_migrate_adds_new_columns_to_existing_v0_db(tmp_path):
 
 def test_migrate_idempotent_double_init(storage):
     """二次构造不应抛 duplicate column 错。"""
-    s2 = SessionStorage(db_path=storage._db_path)  # noqa: SLF001
+    s2 = SessionStorage(db_path=storage._db_path)
     assert s2 is not None
 
 
 # ---- 2. FTS5 全文搜索 ------------------------------------------------------
+
 
 def test_fts5_search_finds_message_content(session_with_messages):
     """FTS 应能匹配消息内容（unicode61 tokenizer 按空格切，英文 token 命中）。"""
@@ -135,7 +131,7 @@ def test_fts5_search_finds_message_content(session_with_messages):
 
 def session_with_messages_storage_fts_search(s):
     """小工具：通过 fixture 拿 storage。"""
-    return s.storage.fts_search("order") if hasattr(s, 'storage') else None
+    return s.storage.fts_search("order") if hasattr(s, "storage") else None
 
 
 def test_fts5_search_empty_query_returns_empty(storage):
@@ -172,7 +168,7 @@ def test_fts5_trigger_sync_on_message_delete(storage):
     s = storage.create_session("s")
     msg = storage.append_message(s.id, "user", "abcdef-unique-token-xyz")
     assert len(storage.fts_search("abcdef-unique-token-xyz")) >= 1
-    with storage._connect() as conn:  # noqa: SLF001
+    with storage._connect() as conn:
         conn.execute("DELETE FROM session_messages WHERE id = ?", (msg.id,))
     # FTS trigger messages_ad 仅删 first match；可能残留（V1.5 不保证 UPDATE 同步）
 
@@ -187,6 +183,7 @@ def test_fts5_search_filter_by_project(storage):
 
 
 # ---- 3. 分支 ---------------------------------------------------------------
+
 
 def test_create_branch_returns_session_with_parent(storage):
     parent = storage.create_session("parent")
@@ -223,6 +220,7 @@ def test_branch_has_event_chain_entry(storage):
 
 # ---- 4. SessionEvent 哈希链 ----------------------------------------------
 
+
 def test_session_event_chain_created_and_message_appended(storage):
     s = storage.create_session("test")
     storage.append_message(s.id, "user", "hello")
@@ -244,7 +242,7 @@ def test_verify_event_chain_valid_for_intact(session_with_messages):
 def test_verify_event_chain_detects_tampered_payload(session_with_messages):
     """篡改 payload_json → 重算 hash 与存储 hash 不一致 → verify 报 broken。"""
     storage, s = session_with_messages
-    with storage._connect() as conn:  # noqa: SLF001
+    with storage._connect() as conn:
         # 篡改第一条非 'created' 事件的 payload（SQLite UPDATE 不支持 LIMIT，
         # 用子查询选 id 限定一行）
         conn.execute(
@@ -265,7 +263,7 @@ def test_verify_event_chain_detects_tampered_payload(session_with_messages):
 def test_verify_event_chain_detects_prev_hash_break(session_with_messages):
     """篡改 prev_hash → verify 报 broken。"""
     storage, s = session_with_messages
-    with storage._connect() as conn:  # noqa: SLF001
+    with storage._connect() as conn:
         # 把第 2 条事件的 prev_hash 改成 0...0
         conn.execute(
             "UPDATE session_event_chain SET prev_hash = ? "
@@ -283,6 +281,7 @@ def test_verify_event_chain_detects_prev_hash_break(session_with_messages):
 def test_compute_event_hash_is_deterministic():
     """同输入 → 同 hash（与字段顺序无关 — payload 已 sort_keys）。"""
     from agent.sessions.storage import SessionStorage
+
     h1 = SessionStorage._compute_event_hash("0" * 64, "created", '{"a":1}', 1000)
     h2 = SessionStorage._compute_event_hash("0" * 64, "created", '{"a":1}', 1000)
     assert h1 == h2
@@ -290,6 +289,7 @@ def test_compute_event_hash_is_deterministic():
 
 
 # ---- 5. 共享权限矩阵 -------------------------------------------------------
+
 
 def test_add_share_token_stores_in_json(storage):
     s = storage.create_session("s", owner="alice")
@@ -360,6 +360,7 @@ def test_check_session_access_helper(storage):
 
 # ---- 6. 加密 .eas 导出/导入 ----------------------------------------------
 
+
 def test_scrub_text_removes_pii():
     text = "联系 13812345678 / ID 110101199001011234 / 卡 6222021234567890123"
     out = _scrub_text(text)
@@ -403,7 +404,8 @@ def test_export_scrubs_pii(storage, tmp_path):
     export_session_to_eas(storage, s.id, out, actor="alice", scrub_pii=True)
     # 文件不可读（Fernet 加密）；但能用 SessionImporter 反向验证
     # 这里改用 _get_or_create_key 解密（测试无 keyring）
-    from agent.sessions.export import _get_or_create_key, _decrypt
+    from agent.sessions.export import _decrypt, _get_or_create_key
+
     plaintext = _decrypt(out.read_bytes(), _get_or_create_key())
     payload = json.loads(plaintext.decode("utf-8"))
     assert "13812345678" not in json.dumps(payload, ensure_ascii=False)
@@ -432,11 +434,12 @@ def test_import_as_branch_sets_parent(storage, tmp_path):
     export_session_to_eas(storage, s.id, out, actor="alice")
     storage2 = SessionStorage(db_path=tmp_path / "imp.db")
     result = import_session_from_eas(storage2, out, actor="alice")
-    new_id = result["new_session_id"]
+    result["new_session_id"]
     # 模拟 import_as_branch：手动 update 字段（同 api.py 行为）
-    from agent.sessions.export import SessionImporter
     importer = SessionImporter(storage2)
-    res2 = importer.import_from_file(out, actor="alice", import_as_branch=True, parent_session_id=s.id)
+    res2 = importer.import_from_file(
+        out, actor="alice", import_as_branch=True, parent_session_id=s.id
+    )
     # res2['new_session_id'] 是新的；但我们直接验证 update 也对
     new_sess = storage2.get_session(res2["new_session_id"])
     assert new_sess.parent_session_id == s.id
@@ -458,13 +461,14 @@ def test_export_emits_event_chain(storage, tmp_path):
 
 # ---- 7. 启动恢复扫描 ------------------------------------------------------
 
+
 def test_find_resumable_sessions_detects_idle(storage):
     """updated_at 距今 > 阈值的 active 会话 → 返回。"""
     s = storage.create_session("idle")
     storage.append_message(s.id, "user", "hello")
     # 手动把 updated_at 调到很久以前
     long_ago = now_ms() - 600_000  # 10 分钟前
-    with storage._connect() as conn:  # noqa: SLF001
+    with storage._connect() as conn:
         conn.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (long_ago, s.id))
     # 阈值 5 分钟 → 应能恢复
     resumable = storage.find_resumable_sessions(idle_threshold_ms=300_000)
@@ -478,7 +482,7 @@ def test_find_resumable_sessions_excludes_branch(storage):
     branch = storage.create_branch(parent.id, "b")
     storage.append_message(branch.id, "user", "y")
     long_ago = now_ms() - 600_000
-    with storage._connect() as conn:  # noqa: SLF001
+    with storage._connect() as conn:
         conn.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (long_ago, parent.id))
         conn.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (long_ago, branch.id))
     resumable = storage.find_resumable_sessions(idle_threshold_ms=300_000)
@@ -491,7 +495,7 @@ def test_find_resumable_sessions_excludes_empty(storage):
     """无消息的会话不进入恢复列表。"""
     s = storage.create_session("empty")
     long_ago = now_ms() - 600_000
-    with storage._connect() as conn:  # noqa: SLF001
+    with storage._connect() as conn:
         conn.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (long_ago, s.id))
     resumable = storage.find_resumable_sessions(idle_threshold_ms=300_000)
     assert all(r.id != s.id for r in resumable)
@@ -501,7 +505,7 @@ def test_scan_resumable_returns_report(storage):
     s = storage.create_session("idle")
     storage.append_message(s.id, "user", "x")
     long_ago = now_ms() - 600_000
-    with storage._connect() as conn:  # noqa: SLF001
+    with storage._connect() as conn:
         conn.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (long_ago, s.id))
     report = scan_resumable_sessions(storage)
     assert isinstance(report, RecoveryReport)
@@ -511,11 +515,17 @@ def test_scan_resumable_returns_report(storage):
 
 # ---- 8. Session 模型 + stats ----------------------------------------------
 
+
 def test_session_dataclass_v15_fields():
     s = Session(
-        id="x", title="t", owner="alice", project_name="p",
-        parent_session_id="parent", branch_label="label",
-        share_tokens=[{"token": "abc"}], permissions={"bob": "read"},
+        id="x",
+        title="t",
+        owner="alice",
+        project_name="p",
+        parent_session_id="parent",
+        branch_label="label",
+        share_tokens=[{"token": "abc"}],
+        permissions={"bob": "read"},
     )
     assert s.parent_session_id == "parent"
     assert s.branch_label == "label"
@@ -563,9 +573,11 @@ def test_get_session_stats_invalid_session_raises(storage):
 
 # ---- 9. API 端点（FastAPI TestClient）-----------------------------------
 
+
 def test_api_v15_endpoints_registered():
     """V1.5 全部端点已注册到 router。"""
     from agent.sessions.api import router
+
     paths = {r.path for r in router.routes if hasattr(r, "path")}
     expected = [
         "/sessions/{session_id}/stats",
@@ -588,9 +600,9 @@ def test_api_v15_endpoints_registered():
 
 
 def test_api_search_endpoint(storage, monkeypatch):
-    from fastapi.testclient import TestClient
-    from fastapi import FastAPI
     from agent.sessions import api as sessions_api
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
 
     monkeypatch.setattr(sessions_api, "_storage", storage)
     monkeypatch.setattr(sessions_api, "_checkpointer", None)
@@ -608,9 +620,9 @@ def test_api_search_endpoint(storage, monkeypatch):
 
 
 def test_api_branch_endpoint(storage, monkeypatch):
-    from fastapi.testclient import TestClient
-    from fastapi import FastAPI
     from agent.sessions import api as sessions_api
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
 
     monkeypatch.setattr(sessions_api, "_storage", storage)
     monkeypatch.setattr(sessions_api, "_checkpointer", None)
@@ -630,9 +642,9 @@ def test_api_branch_endpoint(storage, monkeypatch):
 
 
 def test_api_share_create_then_revoke(storage, monkeypatch):
-    from fastapi.testclient import TestClient
-    from fastapi import FastAPI
     from agent.sessions import api as sessions_api
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
 
     monkeypatch.setattr(sessions_api, "_storage", storage)
     monkeypatch.setattr(sessions_api, "_checkpointer", None)
@@ -642,7 +654,8 @@ def test_api_share_create_then_revoke(storage, monkeypatch):
 
     s = storage.create_session("s", owner="alice")
     r1 = client.post(
-        f"/sessions/{s.id}/share", json={"permission": "read", "actor": "alice"},
+        f"/sessions/{s.id}/share",
+        json={"permission": "read", "actor": "alice"},
     )
     assert r1.status_code == 201
     token = r1.json()["token"]
@@ -651,9 +664,9 @@ def test_api_share_create_then_revoke(storage, monkeypatch):
 
 
 def test_api_share_non_owner_forbidden(storage, monkeypatch):
-    from fastapi.testclient import TestClient
-    from fastapi import FastAPI
     from agent.sessions import api as sessions_api
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
 
     monkeypatch.setattr(sessions_api, "_storage", storage)
     monkeypatch.setattr(sessions_api, "_checkpointer", None)
@@ -663,15 +676,16 @@ def test_api_share_non_owner_forbidden(storage, monkeypatch):
 
     s = storage.create_session("s", owner="alice")
     r = client.post(
-        f"/sessions/{s.id}/share", json={"permission": "read", "actor": "bob"},
+        f"/sessions/{s.id}/share",
+        json={"permission": "read", "actor": "bob"},
     )
     assert r.status_code == 403
 
 
 def test_api_event_chain_verify_endpoint(storage, monkeypatch):
-    from fastapi.testclient import TestClient
-    from fastapi import FastAPI
     from agent.sessions import api as sessions_api
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
 
     monkeypatch.setattr(sessions_api, "_storage", storage)
     monkeypatch.setattr(sessions_api, "_checkpointer", None)
@@ -689,9 +703,9 @@ def test_api_event_chain_verify_endpoint(storage, monkeypatch):
 
 
 def test_api_recovery_endpoint(storage, monkeypatch):
-    from fastapi.testclient import TestClient
-    from fastapi import FastAPI
     from agent.sessions import api as sessions_api
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
 
     monkeypatch.setattr(sessions_api, "_storage", storage)
     monkeypatch.setattr(sessions_api, "_checkpointer", None)
@@ -708,8 +722,14 @@ def test_api_recovery_endpoint(storage, monkeypatch):
 
 # ---- 10. SSE 三处同步注册 ------------------------------------------------
 
+
 def test_sse_channel_session_compression_registered_in_stream():
     """CLAUDE.md §4：Python stream.py 必须注册 session_compression_applied + session_memory_consolidated。"""
     from agent.graph.stream import _CHANNEL_BY_KIND
-    assert _CHANNEL_BY_KIND.get("session_compression_applied") == "agent://session_compression_applied"
-    assert _CHANNEL_BY_KIND.get("session_memory_consolidated") == "agent://session_memory_consolidated"
+
+    assert (
+        _CHANNEL_BY_KIND.get("session_compression_applied") == "agent://session_compression_applied"
+    )
+    assert (
+        _CHANNEL_BY_KIND.get("session_memory_consolidated") == "agent://session_memory_consolidated"
+    )

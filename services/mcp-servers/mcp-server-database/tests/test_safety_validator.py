@@ -1,8 +1,8 @@
 """Tests for sqlglot_validator — every common SQL-injection trick."""
+
 from __future__ import annotations
 
 import pytest
-
 from mcp_server_database.safety.sqlglot_validator import (
     UnsafeSqlError,
     assert_safe_sql,
@@ -21,8 +21,7 @@ class TestHappyPath:
 
     def test_select_with_cte(self):
         assert_safe_sql(
-            "WITH active AS (SELECT * FROM users WHERE active) "
-            "SELECT count(*) FROM active",
+            "WITH active AS (SELECT * FROM users WHERE active) SELECT count(*) FROM active",
             dialect="postgres",
         )
 
@@ -138,9 +137,7 @@ class TestDangerousCommands:
         # UPDATE/DELETE without WHERE inside the EXPLAIN body via the raw SQL
         # belt-and-braces check.
         # Here the inner has WHERE, so nothing trips.
-        assert_safe_sql(
-            "EXPLAIN UPDATE users SET name = 'x' WHERE id = 1", dialect="postgres"
-        )
+        assert_safe_sql("EXPLAIN UPDATE users SET name = 'x' WHERE id = 1", dialect="postgres")
 
     def test_explain_on_select_ok(self):
         # EXPLAIN SELECT remains a Command but inner is a Select → allowed
@@ -153,6 +150,7 @@ class TestDialect:
             UnsupportedDialectError,
             assert_dialect_allowed,
         )
+
         with pytest.raises(UnsupportedDialectError):
             assert_dialect_allowed("oracle")
 
@@ -160,6 +158,7 @@ class TestDialect:
         from mcp_server_database.safety.dialect_allowlist import (
             dialect_from_connection,
         )
+
         assert dialect_from_connection("orders_pg") == "postgres"
         assert dialect_from_connection("billing_my") == "mysql"
         assert dialect_from_connection("local_sq") == "sqlite"

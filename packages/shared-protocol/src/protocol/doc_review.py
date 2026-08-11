@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-DocFormat = Literal["pdf", "docx", "txt", "md"]
+DocFormat = Literal["pdf", "docx", "doc", "txt", "md", "html", "xlsx", "pptx"]
 DocCategory = Literal["contract", "internal_policy", "announcement", "bidding", "other"]
 DocRiskType = Literal["compliance", "legal", "data_security", "financial"]
 DocRiskLevel = Literal["low", "medium", "high", "critical"]
@@ -32,6 +32,15 @@ class DocPosition(BaseModel):
     end: int = Field(ge=0)
 
 
+class DocKbRef(BaseModel):
+    """知识库/案例库引用（grep 式匹配，解释"为什么有风险"）。"""
+
+    source: str
+    heading: str
+    excerpt: str = ""
+    matched_terms: list[str] = Field(default_factory=list)
+
+
 class DocFinding(BaseModel):
     finding_id: str
     risk_type: DocRiskType
@@ -42,6 +51,7 @@ class DocFinding(BaseModel):
     rule_ref: str | None = None
     evidence_text: str = ""
     positions: list[DocPosition] = Field(default_factory=list)
+    kb_refs: list[DocKbRef] = Field(default_factory=list)
 
 
 class DocSummary(BaseModel):

@@ -10,6 +10,7 @@ CLAUDE.md §2 红线：
     - KB 调用失败 → 返回空 context（best-effort，不阻塞 agent 决策）
     - KB 调用超时严格（默认 5s）
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 # ---- 配置 ------------------------------------------------------------------
 
+
 @dataclass
 class KBConfig:
     """外部知识库配置。
@@ -32,6 +34,7 @@ class KBConfig:
       - EAIDE_KB_BASE_URL: e.g. 'https://wiki.company.com/api/v1'
       - EAIDE_KB_API_KEY_REF: Keyring 占位符名
     """
+
     backend: str = "mock"
     base_url: str = ""
     api_key_ref: str = ""
@@ -39,7 +42,7 @@ class KBConfig:
     extra: dict = field(default_factory=dict)
 
     @classmethod
-    def from_env(cls) -> "KBConfig":
+    def from_env(cls) -> KBConfig:
         return cls(
             backend=os.environ.get("EAIDE_KB_BACKEND", "mock"),
             base_url=os.environ.get("EAIDE_KB_BASE_URL", ""),
@@ -50,9 +53,11 @@ class KBConfig:
 
 # ---- 数据类 ---------------------------------------------------------------
 
+
 @dataclass
 class KBQueryResult:
     """单条 KB 检索结果。"""
+
     doc_id: str
     title: str
     snippet: str
@@ -64,6 +69,7 @@ class KBQueryResult:
 @dataclass
 class KBContext:
     """一次 KB 检索返回的 context。"""
+
     query: str
     results: list[KBQueryResult] = field(default_factory=list)
     backend: str = "mock"
@@ -72,12 +78,12 @@ class KBContext:
 
 # ---- 适配器协议 ----------------------------------------------------------
 
+
 @runtime_checkable
 class KnowledgeBaseAdapter(Protocol):
     """所有外部 KB 适配器必须实现的接口。"""
 
-    def is_available(self) -> bool:
-        ...
+    def is_available(self) -> bool: ...
 
     async def search(
         self,
@@ -85,15 +91,14 @@ class KnowledgeBaseAdapter(Protocol):
         *,
         top_k: int = 3,
         timeout_s: float | None = None,
-    ) -> KBContext:
-        ...
+    ) -> KBContext: ...
 
     @property
-    def name(self) -> str:
-        ...
+    def name(self) -> str: ...
 
 
 # ---- Mock 适配器 ----------------------------------------------------------
+
 
 class MockKBAdapter:
     """V0 Mock 适配器：返回固定示例 context。"""
@@ -115,6 +120,7 @@ class MockKBAdapter:
         timeout_s: float | None = None,
     ) -> KBContext:
         import time
+
         self._call_count += 1
         t0 = time.monotonic()
         await asyncio.sleep(0.02)
@@ -156,6 +162,7 @@ def build_adapter(config: KBConfig | None = None) -> KnowledgeBaseAdapter:
 
 
 # ---- 统一入口 -------------------------------------------------------------
+
 
 async def build_kb_context(
     query: str,

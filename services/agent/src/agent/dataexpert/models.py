@@ -5,19 +5,20 @@ V0 范围：
   - SourceType / ExportFormat 枚举
   - TableSchema / ColumnSchema 辅助结构
 """
+
 from __future__ import annotations
 
 import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
-
 
 # ---- 枚举 -------------------------------------------------------------------
 
+
 class SourceType(str, Enum):
     """数据源类型。"""
+
     MYSQL = "mysql"
     ORACLE = "oracle"
     CSV = "csv"
@@ -26,6 +27,7 @@ class SourceType(str, Enum):
 
 class ExportFormat(str, Enum):
     """导出格式。"""
+
     EXCEL = "excel"
     PDF = "pdf"
     CSV = "csv"
@@ -33,9 +35,11 @@ class ExportFormat(str, Enum):
 
 # ---- 辅助结构 -----------------------------------------------------------------
 
+
 @dataclass
 class ColumnSchema:
     """字段元数据（含中文注释）。"""
+
     name: str
     dtype: str
     comment: str = ""
@@ -46,12 +50,14 @@ class ColumnSchema:
 @dataclass
 class TableSchema:
     """表结构（含字段列表 + 中文注释）。"""
+
     name: str
     comment: str = ""
     columns: list[ColumnSchema] = field(default_factory=list)
 
 
 # ---- 核心数据类 ---------------------------------------------------------------
+
 
 @dataclass
 class DataSource:
@@ -65,6 +71,7 @@ class DataSource:
         schema_cache: 表结构缓存（JSON 序列化后的 list[TableSchema]）。
         updated_at: 最后同步时间戳（epoch seconds）。
     """
+
     id: str
     name: str
     type: SourceType
@@ -88,6 +95,7 @@ class AnalysisTask:
         chart_config: ECharts 配置项（dict）。
         created_at: 创建时间戳。
     """
+
     id: str
     name: str
     user_id: str = ""
@@ -113,6 +121,7 @@ class ReportTemplate:
         created_by: 创建人。
         is_public: 团队共享。
     """
+
     id: str
     name: str
     description: str = ""
@@ -126,6 +135,7 @@ class ReportTemplate:
 @dataclass
 class SqlResult:
     """SQL 执行结果（轻量元数据；大结果集走 Parquet）。"""
+
     columns: list[str] = field(default_factory=list)
     dtypes: list[str] = field(default_factory=list)
     row_count: int = 0
@@ -137,6 +147,7 @@ class SqlResult:
 @dataclass
 class SandboxResult:
     """Python 沙箱执行结果。"""
+
     ok: bool = True
     out_df_ref: str = ""  # 输出 DataFrame Parquet 路径
     stdout: str = ""
@@ -146,6 +157,7 @@ class SandboxResult:
 
 
 # ---- 工具 --------------------------------------------------------------------
+
 
 def generate_id() -> str:
     """生成 UUID4 hex（32 chars）。"""

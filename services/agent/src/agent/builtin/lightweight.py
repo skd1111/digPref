@@ -15,6 +15,7 @@
     4. 所有输入先做 size 校验（防爆：max_input_chars 64KB）。
     5. 结果统一返回 dict（dispatcher 走 _format_tool_result 序列化）。
 """
+
 from __future__ import annotations
 
 import ast
@@ -27,13 +28,12 @@ from urllib.parse import parse_qsl, urlsplit
 
 from agent.builtin.models import ToolResult
 
-
 # ---- 常量（防爆 + ReDoS 防护）-------------------------------------------------
 
 _MAX_INPUT_CHARS = 64 * 1024  # 64KB（单次调用最大输入）
-_MAX_REGEX_LEN = 1024         # 正则表达式长度上限（防 ReDoS）
-_MAX_TEXT_LEN = 256 * 1024    # regex_match / json_format 输入文本上限
-_MAX_MATCHES = 1000           # regex_match 返回最大匹配数
+_MAX_REGEX_LEN = 1024  # 正则表达式长度上限（防 ReDoS）
+_MAX_TEXT_LEN = 256 * 1024  # regex_match / json_format 输入文本上限
+_MAX_MATCHES = 1000  # regex_match 返回最大匹配数
 
 
 # ---- builtin_calculator ------------------------------------------------------
@@ -151,6 +151,7 @@ def _eval_ast(node: ast.AST) -> int | float:
 
 # ---- builtin_json_parse ------------------------------------------------------
 
+
 def builtin_json_parse(
     text: str,
     *,
@@ -185,8 +186,7 @@ def builtin_json_parse(
         return ToolResult(
             ok=False,
             error=(
-                f"json_decode_error: {exc.msg} "
-                f"(line {exc.lineno}, col {exc.colno}, char {exc.pos})"
+                f"json_decode_error: {exc.msg} (line {exc.lineno}, col {exc.colno}, char {exc.pos})"
             ),
             meta={"lineno": exc.lineno, "colno": exc.colno, "pos": exc.pos},
             risk_level="low",
@@ -201,6 +201,7 @@ def builtin_json_parse(
 
 
 # ---- builtin_json_format -----------------------------------------------------
+
 
 def builtin_json_format(
     value: Any,
@@ -234,7 +235,7 @@ def builtin_json_format(
             sort_keys=sort_keys,
             ensure_ascii=ensure_ascii,
             allow_nan=False,  # NaN/Infinity 抛错，避免跨语言歧义
-            default=str,      # datetime / Path 等常见类型走 str
+            default=str,  # datetime / Path 等常见类型走 str
         )
     except (TypeError, ValueError) as exc:
         return ToolResult(
@@ -257,6 +258,7 @@ def builtin_json_format(
 
 
 # ---- builtin_regex_match -----------------------------------------------------
+
 
 def builtin_regex_match(
     pattern: str,
@@ -335,7 +337,7 @@ def builtin_regex_match(
                 if m.groupdict():
                     entry["named_groups"] = dict(m.groupdict())
             matches.append(entry)
-    except Exception as exc:  # noqa: BLE001 (ReDoS / 极端场景兜底)
+    except Exception as exc:
         return ToolResult(
             ok=False,
             error=f"regex_runtime_error: {type(exc).__name__}: {exc}",
@@ -356,6 +358,7 @@ def builtin_regex_match(
 
 
 # ---- builtin_url_parse -------------------------------------------------------
+
 
 def builtin_url_parse(url: str) -> ToolResult:
     """URL 解析 + 字段提取 + IPv4 主机校验。

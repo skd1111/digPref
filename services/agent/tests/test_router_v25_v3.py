@@ -5,35 +5,39 @@
 - V3-1：L2Cache enable / disable / 精确命中 / 语义命中（mock embed） / TTL 过期 / 红线（_LOCAL_ONLY_TASKS 不写）
 - V3-3 不做单元测试（前端组件，留 smoke）
 """
+
 from __future__ import annotations
 
-import asyncio
 import time
 
 import pytest
-
 from agent.llm.cache_l2 import L2Cache, cosine_sim, mock_embed
 from agent.llm.router import _LOCAL_ONLY_TASKS
 
-
 # ---- V2.5-4 LMRouter 非 spark 路径真委托 engine.route_request ----------------
+
 
 def test_chain_for_uses_engine_route_request_when_available(monkeypatch):
     """LMRouter._chain_for 在 engine 可用时调 engine.route_request 决定顺序。"""
+    from agent.config import settings
     from agent.llm.router import LMRouter
-    from agent.llm.engine import RouterEngine
+
+    # 内网默认已移除（BUGFIX #57）：本断言依赖 private 后端存在，需显式配置
+    monkeypatch.setattr(settings, "private_llm_base_url", "http://private.example.com/v1")
+    monkeypatch.setattr(settings, "private_llm_api_key", "k")
 
     # 构造一个 fake engine：route_request 返回 primary_backend='private'
     class _FakeEngine:
-        _weights = {}
+        _weights = {}  # noqa: RUF012 测试 fake 常量
         _budget = None
         _breakers = None
         _metrics = None
         _spark_enabled = False
-        _failure_count = {}
+        _failure_count = {}  # noqa: RUF012 测试 fake 常量
 
         def route_request(self, *, task_kind, category, sensitivity, request_id, **kwargs):
             from agent.llm.models import RoutingDecision
+
             d = RoutingDecision(
                 request_id=request_id,
                 user_id="test",
@@ -74,7 +78,6 @@ def test_chain_for_intent_uses_ollama_even_when_engine_says_private():
     红线由 engine.route_request:apply_hard_rules 强制；LMRouter._chain_for 直接用 engine 返回值。
     """
     from agent.llm.router import LMRouter
-    from agent.llm.engine import RouterEngine
 
     # Engine 已应用 _LOCAL_ONLY_TASKS hard_rules —— 实际生产中 route_request
     # 对 intent 永远返 primary=ollama（apply_hard_rules 直接过滤私有 LLM）
@@ -82,6 +85,7 @@ def test_chain_for_intent_uses_ollama_even_when_engine_says_private():
     class _FakeEngine:
         def route_request(self, *, task_kind, category, sensitivity, request_id, **kwargs):
             from agent.llm.models import RoutingDecision
+
             d = RoutingDecision(request_id=request_id)
             d.primary_backend = "ollama"
             d.actual_backend = "ollama"
@@ -97,6 +101,7 @@ def test_chain_for_intent_uses_ollama_even_when_engine_says_private():
 
 
 # ---- V3-1 L2 语义缓存 ----------------------------------------------------
+
 
 def test_l2_disabled_always_miss():
     c = L2Cache(enable=False)
@@ -139,11 +144,10 @@ def test_l2_local_only_task_skipped():
 def test_l2_ttl_expired():
     c = L2Cache(enable=True, ttl_sec=0.05)
 
-    t0 = [1000.0]
     c.put("ollama", "查订单", "OK")
 
     # 把 monotonic clock 往前推
-    orig = c._store["查订单".__hash__() and "ollama\x00查订单"][2] if False else None  # 简化
+    c._store["查订单".__hash__() and "ollama\x00查订单"][2] if False else None  # 简化
 
     # 直接模拟过期：clear + 重新 put with expired ttl
     c2 = L2Cache(enable=True, ttl_sec=0.001)

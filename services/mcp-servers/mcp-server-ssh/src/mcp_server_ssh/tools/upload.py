@@ -7,6 +7,7 @@ Hard contract:
     - Every upload is audited.
     - local_path and remote_path are sanitized to prevent path traversal.
 """
+
 from __future__ import annotations
 
 import json
@@ -16,11 +17,19 @@ from pathlib import Path
 from mcp_server_ssh.audit.emitter import audit
 from mcp_server_ssh.client import connect
 
-
 # Remote paths must be under one of these prefixes (defense-in-depth)
 _ALLOWED_REMOTE_PREFIXES = (
-    "/tmp/", "/var/tmp/", "/opt/", "/home/", "/srv/", "/data/",
-    "/etc/", "/usr/local/", "/app/", "/deploy/", "/upload/",
+    "/tmp/",
+    "/var/tmp/",
+    "/opt/",
+    "/home/",
+    "/srv/",
+    "/data/",
+    "/etc/",
+    "/usr/local/",
+    "/app/",
+    "/deploy/",
+    "/upload/",
 )
 
 
@@ -61,14 +70,10 @@ def _sanitize_local_path(path: str) -> str:
 async def run(args: dict) -> dict:
     approval_id = args.get("approval_id")
     if not approval_id:
-        raise ApprovalMissingError(
-            "approval_id is required for ssh.upload (HITL gate)"
-        )
+        raise ApprovalMissingError("approval_id is required for ssh.upload (HITL gate)")
 
     if not _verify_approval(approval_id):
-        raise ApprovalMissingError(
-            f"approval_id {approval_id!r} not found or not approved"
-        )
+        raise ApprovalMissingError(f"approval_id {approval_id!r} not found or not approved")
 
     local_path = _sanitize_local_path(args["local_path"])
     remote_path = _sanitize_remote_path(args["remote_path"])
@@ -77,22 +82,28 @@ async def run(args: dict) -> dict:
         async with await connect(args["host"]) as conn:
             sftp = await conn.start_sftp_client()
             await sftp.put(local_path, remote_path)
-    except Exception as exc:  # noqa: BLE001
-        audit("ssh.upload.error", {
+    except Exception as exc:
+        audit(
+            "ssh.upload.error",
+            {
+                "approval_id": approval_id,
+                "host": args["host"],
+                "local_path": local_path,
+                "remote_path": remote_path,
+                "error": str(exc),
+            },
+        )
+        raise UploadError(f"ssh.upload failed: {exc}") from exc
+
+    audit(
+        "ssh.upload.ok",
+        {
             "approval_id": approval_id,
             "host": args["host"],
             "local_path": local_path,
             "remote_path": remote_path,
-            "error": str(exc),
-        })
-        raise UploadError(f"ssh.upload failed: {exc}") from exc
-
-    audit("ssh.upload.ok", {
-        "approval_id": approval_id,
-        "host": args["host"],
-        "local_path": local_path,
-        "remote_path": remote_path,
-    })
+        },
+    )
 
     return {
         "ok": True,
@@ -123,7 +134,7 @@ def _approval_audit_lookup(approval_id: str) -> bool:
     try:
         # Read from the end (most recent entries first)
         lines = []
-        with open(jsonl_path, "r", encoding="utf-8") as f:
+        with open(jsonl_path, encoding="utf-8") as f:
             lines = f.readlines()
         # Scan in reverse for efficiency — recent approvals come last
         for line in reversed(lines):

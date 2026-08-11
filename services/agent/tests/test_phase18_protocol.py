@@ -4,6 +4,7 @@
 - options / recommendedOptionId / recommendationReason 三字段可序列化往返
 - 不带新字段时保持原有行为（options 默认空列表）
 """
+
 from __future__ import annotations
 
 from protocol.approval import ApprovalOption, ApprovalRequest

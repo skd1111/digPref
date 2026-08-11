@@ -1,4 +1,5 @@
 """Hard hostname whitelist — refuses requests to non-listed hosts."""
+
 from __future__ import annotations
 
 from mcp_server_rest.config import Settings

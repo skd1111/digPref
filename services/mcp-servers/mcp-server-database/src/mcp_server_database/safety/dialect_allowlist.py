@@ -7,14 +7,23 @@ generic validator wouldn't recognise.
 `ansi` is our virtual default — it has no exact sqlglot counterpart, so we
 map it to None and let sqlglot use its built-in default parser.
 """
+
 from __future__ import annotations
 
-
-ALLOWED_DIALECTS: frozenset[str] = frozenset({
-    "ansi",
-    "postgres", "mysql", "sqlite", "tsql",
-    "snowflake", "bigquery", "redshift", "duckdb", "clickhouse",
-})
+ALLOWED_DIALECTS: frozenset[str] = frozenset(
+    {
+        "ansi",
+        "postgres",
+        "mysql",
+        "sqlite",
+        "tsql",
+        "snowflake",
+        "bigquery",
+        "redshift",
+        "duckdb",
+        "clickhouse",
+    }
+)
 
 
 def to_sqlglot_dialect(dialect: str) -> str | None:

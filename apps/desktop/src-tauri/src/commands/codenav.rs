@@ -2,6 +2,7 @@
 
 use tauri::{Emitter, State};
 
+use futures_util::StreamExt;
 use crate::state::AppState;
 
 type CmdResult<T> = Result<T, String>;
@@ -135,6 +136,128 @@ pub async fn code_nav_explain(
         }
     }
     result
+}
+
+#[tauri::command]
+pub async fn code_nav_explain_stream(
+    body: serde_json::Value,
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> CmdResult<serde_json::Value> {
+    let symbol = body.get("symbol").and_then(|v| v.as_str()).unwrap_or("?");
+    let t0 = std::time::Instant::now();
+    // 发「开始解释」log（与旧接口一致，主对话 ExecutionBlock 仍能收到）
+    let _ = app.emit(
+        "agent://log",
+        serde_json::json!({
+            "kind": "log",
+            "line": format!("[codenav.explain] ▶ symbol={symbol} status=running"),
+        }),
+    );
+    let url = agent_url(&state, "/codenav/explain/stream");
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(err)?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let detail = resp
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|j| j.get("detail").and_then(|d| d.as_str()).map(String::from))
+            .unwrap_or_else(|| "unknown error".into());
+        return Err(format!("agent returned {}: {}", status.as_u16(), detail));
+    }
+
+    let mut stream = resp.bytes_stream();
+    let mut buffer = String::new();
+    let mut full_text = String::new();
+    let mut source = "llm".to_string();
+    let mut confidence = 0.85_f64;
+    let mut backend: Option<String> = None;
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(err)?;
+        buffer.push_str(&String::from_utf8_lossy(&chunk));
+        while let Some(pos) = buffer.find('\n') {
+            let line = buffer[..pos].trim().to_string();
+            buffer = buffer[pos + 1..].to_string();
+            if line.is_empty() {
+                continue;
+            }
+            let value: serde_json::Value = match serde_json::from_str(&line) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if let Some(delta) = value.get("delta").and_then(|d| d.as_str()) {
+                if !delta.is_empty() {
+                    full_text.push_str(delta);
+                    // 逐块推给 WebView，前端控制台实时渲染
+                    let _ = app.emit(
+                        "agent://codenav_explain_delta",
+                        serde_json::json!({ "symbol": symbol, "delta": delta }),
+                    );
+                }
+            }
+            if value.get("done").and_then(|d| d.as_bool()).unwrap_or(false) {
+                if let Some(t) = value.get("text").and_then(|t| t.as_str()) {
+                    full_text = t.to_string();
+                }
+                source = value
+                    .get("source")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("llm")
+                    .to_string();
+                confidence = value
+                    .get("confidence")
+                    .and_then(|c| c.as_f64())
+                    .unwrap_or(0.85);
+                backend = value
+                    .get("backend")
+                    .and_then(|b| b.as_str())
+                    .map(String::from);
+            }
+            if let Some(msg) = value.get("error").and_then(|e| e.as_str()) {
+                let _ = app.emit(
+                    "agent://log",
+                    serde_json::json!({
+                        "kind": "log",
+                        "line": format!(
+                            "[codenav.explain] ✗ symbol={symbol} status=err err={msg}"
+                        ),
+                    }),
+                );
+                return Err(format!("codenav explain stream failed: {}", msg));
+            }
+        }
+    }
+
+    let latency_ms = t0.elapsed().as_millis() as u64;
+    let text_preview = full_text
+        .chars()
+        .take(80)
+        .collect::<String>()
+        .replace('\n', " ");
+    let _ = app.emit(
+        "agent://log",
+        serde_json::json!({
+            "kind": "log",
+            "line": format!(
+                "[codenav.explain] ✓ symbol={symbol} status=ok source={source} backend={backend:?} latency_ms={latency_ms} preview=\"{text_preview}…\""
+            ),
+        }),
+    );
+    Ok(serde_json::json!({
+        "symbol": symbol,
+        "text": full_text,
+        "source": source,
+        "confidence": confidence,
+        "backend": backend,
+    }))
 }
 
 #[tauri::command]

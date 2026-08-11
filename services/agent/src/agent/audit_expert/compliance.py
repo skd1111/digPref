@@ -12,11 +12,11 @@ V1 接力：
   - 跨会话规则（合规黑名单）
   - 自动阻断（vs 仅提示）
 """
+
 from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from typing import Any
 
 from agent.audit_expert.models import (
     ComplianceCheck,
@@ -24,7 +24,6 @@ from agent.audit_expert.models import (
     RiskLevel,
     generate_id,
 )
-
 
 # 危险操作正则（DESTRUCTIVE_OP）
 _DESTRUCTIVE_KEYWORDS = re.compile(
@@ -73,73 +72,85 @@ def run_compliance_checks(
 
     # 1. DESTRUCTIVE_OP
     if _DESTRUCTIVE_KEYWORDS.search(tool_name) or _DESTRUCTIVE_KEYWORDS.search(tool_args_str):
-        checks.append(ComplianceCheck(
-            check_id=generate_id(),
-            task_id=task_id,
-            rule_name="DESTRUCTIVE_OP",
-            level=ComplianceLevel.VIOLATION,
-            message=f"危险操作：'{tool_name}' 含 DELETE/DROP/TRUNCATE 等关键字；必须 reject",
-            passed=False,
-            timestamp=datetime.now(timezone.utc).isoformat(),
-        ))
+        checks.append(
+            ComplianceCheck(
+                check_id=generate_id(),
+                task_id=task_id,
+                rule_name="DESTRUCTIVE_OP",
+                level=ComplianceLevel.VIOLATION,
+                message=f"危险操作：'{tool_name}' 含 DELETE/DROP/TRUNCATE 等关键字；必须 reject",
+                passed=False,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+        )
     else:
-        checks.append(ComplianceCheck(
-            check_id=generate_id(),
-            task_id=task_id,
-            rule_name="DESTRUCTIVE_OP",
-            level=ComplianceLevel.INFO,
-            message="无危险操作关键字",
-            passed=True,
-            timestamp=datetime.now(timezone.utc).isoformat(),
-        ))
+        checks.append(
+            ComplianceCheck(
+                check_id=generate_id(),
+                task_id=task_id,
+                rule_name="DESTRUCTIVE_OP",
+                level=ComplianceLevel.INFO,
+                message="无危险操作关键字",
+                passed=True,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+        )
 
     # 2. PROD_ENV_RISK
     if _PROD_ENV_PATTERN.search(tool_name) or _PROD_ENV_PATTERN.search(tool_args_str):
-        checks.append(ComplianceCheck(
-            check_id=generate_id(),
-            task_id=task_id,
-            rule_name="PROD_ENV_RISK",
-            level=ComplianceLevel.WARNING,
-            message="目标可能涉及生产环境；建议双人复核 + MFA 强制",
-            passed=True,  # 警告通过，但提示用户
-            timestamp=datetime.now(timezone.utc).isoformat(),
-        ))
+        checks.append(
+            ComplianceCheck(
+                check_id=generate_id(),
+                task_id=task_id,
+                rule_name="PROD_ENV_RISK",
+                level=ComplianceLevel.WARNING,
+                message="目标可能涉及生产环境；建议双人复核 + MFA 强制",
+                passed=True,  # 警告通过，但提示用户
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+        )
 
     # 3. OFF_HOURS
     hour = _now_utc_hour()
     if hour < _WORK_HOURS_START or hour >= _WORK_HOURS_END:
-        checks.append(ComplianceCheck(
-            check_id=generate_id(),
-            task_id=task_id,
-            rule_name="OFF_HOURS",
-            level=ComplianceLevel.INFO,
-            message=f"非工作时间操作（当前 {hour}:xx UTC+8）；建议延后或加批注",
-            passed=True,
-            timestamp=datetime.now(timezone.utc).isoformat(),
-        ))
+        checks.append(
+            ComplianceCheck(
+                check_id=generate_id(),
+                task_id=task_id,
+                rule_name="OFF_HOURS",
+                level=ComplianceLevel.INFO,
+                message=f"非工作时间操作（当前 {hour}:xx UTC+8）；建议延后或加批注",
+                passed=True,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+        )
 
     # 4. MISSING_EVIDENCE
     if evidence_count < 2:
-        checks.append(ComplianceCheck(
-            check_id=generate_id(),
-            task_id=task_id,
-            rule_name="MISSING_EVIDENCE",
-            level=ComplianceLevel.WARNING,
-            message=f"证据数不足（{evidence_count} < 2）；建议补充操作目的 / 影响范围",
-            passed=False,
-            timestamp=datetime.now(timezone.utc).isoformat(),
-        ))
+        checks.append(
+            ComplianceCheck(
+                check_id=generate_id(),
+                task_id=task_id,
+                rule_name="MISSING_EVIDENCE",
+                level=ComplianceLevel.WARNING,
+                message=f"证据数不足（{evidence_count} < 2）；建议补充操作目的 / 影响范围",
+                passed=False,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+        )
 
     # 5. HIGH_RISK_NO_MFA
     if risk_level in (RiskLevel.HIGH, RiskLevel.CRITICAL) and not mfa_configured:
-        checks.append(ComplianceCheck(
-            check_id=generate_id(),
-            task_id=task_id,
-            rule_name="HIGH_RISK_NO_MFA",
-            level=ComplianceLevel.VIOLATION,
-            message=f"{risk_level.value} 风险任务但用户未配置 MFA；必须 reject",
-            passed=False,
-            timestamp=datetime.now(timezone.utc).isoformat(),
-        ))
+        checks.append(
+            ComplianceCheck(
+                check_id=generate_id(),
+                task_id=task_id,
+                rule_name="HIGH_RISK_NO_MFA",
+                level=ComplianceLevel.VIOLATION,
+                message=f"{risk_level.value} 风险任务但用户未配置 MFA；必须 reject",
+                passed=False,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+        )
 
     return checks

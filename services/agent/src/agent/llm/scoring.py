@@ -7,10 +7,10 @@ V1 改成可配置权重 + 用户面板可调）。
 
 CLAUDE.md 红线：评分仅用于选择后端；**不能**推翻硬规则。
 """
+
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from agent.llm.models import LLMBackend, ScoreBreakdown, TaskCategory
 
@@ -23,7 +23,7 @@ def _capability_score(backend: LLMBackend, category: TaskCategory) -> float:
     V0 简化：根据后端类型 + category 简单映射。
     V1 升级：从 LLM benchmark 历史数据加权。
     """
-    caps = set(backend.capabilities or [])
+    set(backend.capabilities or [])
     # 简化：local 后端适合 SIMPLE，private 适合 MEDIUM，cloud 适合 COMPLEX
     if backend.type == "local" and category == TaskCategory.SIMPLE:
         return 0.9
@@ -64,9 +64,9 @@ def _latency_score(backend: LLMBackend) -> float:
 def _compliance_score(backend: LLMBackend) -> float:
     """合规分：data_residency 越严分越高。V0 简单映射。"""
     return {
-        "local": 1.0,    # 完全本地，最高
+        "local": 1.0,  # 完全本地，最高
         "private": 0.85,  # 私有化部署
-        "cloud": 0.4,     # 云端，最低
+        "cloud": 0.4,  # 云端，最低
     }.get(backend.data_residency, 0.5)
 
 
@@ -106,6 +106,8 @@ def score_backend(
     )
     logger.debug(
         "score_backend %s category=%s total=%.3f",
-        backend.name, category.value, s.total,
+        backend.name,
+        category.value,
+        s.total,
     )
     return s

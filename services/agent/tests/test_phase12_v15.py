@@ -13,14 +13,10 @@
 - orchestrator V1.5：dispatch → enqueue → run_until_drained → 落库 → SSE emit
 - api：路由顺序（list / dlq / metrics / queue / tree 在通配符前）
 """
+
 from __future__ import annotations
 
 import asyncio
-import json
-import logging
-import os
-from pathlib import Path
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -30,6 +26,7 @@ import pytest
 
 def test_events_emit_and_consume():
     from agent.orchestrator import events as evt
+
     evt.flush_orchestrator_events()
     evt.emit_orchestrator_event(evt.EVT_SUB_AGENT_SPAWN, {"sub_agent_id": "s1"})
     evt.emit_orchestrator_event(evt.EVT_SUB_AGENT_PROGRESS, {"sub_agent_id": "s1", "attempt": 1})
@@ -38,6 +35,7 @@ def test_events_emit_and_consume():
     async def run():
         out = await evt.consume_orchestrator_events()
         return out
+
     items = asyncio.run(run())
     assert len(items) == 3
     kinds = [k for k, _ in items]
@@ -47,6 +45,7 @@ def test_events_emit_and_consume():
 
 def test_events_reject_unknown_kind():
     from agent.orchestrator.events import emit_orchestrator_event
+
     with pytest.raises(ValueError, match="未知"):
         emit_orchestrator_event("totally_bogus", {})
 
@@ -56,6 +55,7 @@ def test_events_reject_unknown_kind():
 
 def test_sensitive_pii_in_text():
     from agent.orchestrator.sensitive import prompt_safe_for_remote
+
     safe, hits = prompt_safe_for_remote("用户电话 13800001111 已加白名单")
     assert not safe
     assert any(h.startswith("pii:phone") for h in hits)
@@ -63,25 +63,29 @@ def test_sensitive_pii_in_text():
 
 def test_sensitive_db_credential_in_payload():
     from agent.orchestrator.sensitive import prompt_safe_for_remote
+
     safe, _ = prompt_safe_for_remote("", {"password": "hunter2", "user": "root"})
     assert not safe
 
 
 def test_sensitive_oracle_error():
     from agent.orchestrator.sensitive import prompt_safe_for_remote
+
     safe, hits = prompt_safe_for_remote("ORA-00904: invalid column name")
     assert not safe
-    assert any("sql_error:oracle_error" == h for h in hits)
+    assert any(h == "sql_error:oracle_error" for h in hits)
 
 
 def test_sensitive_select_from_resultset():
     from agent.orchestrator.sensitive import prompt_safe_for_remote
+
     safe, _ = prompt_safe_for_remote("SELECT * FROM orders WHERE id = ?")
     assert not safe
 
 
 def test_sensitive_clean_text():
     from agent.orchestrator.sensitive import prompt_safe_for_remote
+
     safe, hits = prompt_safe_for_remote("请帮我总结本月 OKR")
     assert safe
     assert hits == []
@@ -90,13 +94,17 @@ def test_sensitive_clean_text():
 def test_sensitive_classify_spec_local_only_task():
     from agent.orchestrator.sensitive import classify_spec
     from agent.orchestrator.spec import SubAgentSpec
+
     spec = SubAgentSpec(
-        sub_agent_id="s", parent_run_id="r", depth=1,
-        task_type="intent", task_description="识别意图",
+        sub_agent_id="s",
+        parent_run_id="r",
+        depth=1,
+        task_type="intent",
+        task_description="识别意图",
     )
     v = classify_spec(spec, "")
     assert v.local_only is True
-    assert any("local_only_task:intent" == r for r in v.reasons)
+    assert any(r == "local_only_task:intent" for r in v.reasons)
 
 
 # ---- context_strategy -----------------------------------------------------
@@ -104,10 +112,14 @@ def test_sensitive_classify_spec_local_only_task():
 
 def test_context_strategy_passthrough_simple():
     from agent.orchestrator.context_strategy import build_context
-    from agent.orchestrator.spec import SubAgentSpec, ContextPolicy
+    from agent.orchestrator.spec import ContextPolicy, SubAgentSpec
+
     spec = SubAgentSpec(
-        sub_agent_id="s", parent_run_id="r", depth=1,
-        task_type="plan", task_description="改个 bug",
+        sub_agent_id="s",
+        parent_run_id="r",
+        depth=1,
+        task_type="plan",
+        task_description="改个 bug",
         input_payload={"file": "a.py", "line": 42},
         context_policy=ContextPolicy(strategy="passthrough"),
     )
@@ -120,10 +132,14 @@ def test_context_strategy_passthrough_simple():
 
 def test_context_strategy_required_fields_kept():
     from agent.orchestrator.context_strategy import build_context
-    from agent.orchestrator.spec import SubAgentSpec, ContextPolicy
+    from agent.orchestrator.spec import ContextPolicy, SubAgentSpec
+
     spec = SubAgentSpec(
-        sub_agent_id="s", parent_run_id="r", depth=1,
-        task_type="plan", task_description="改 bug",
+        sub_agent_id="s",
+        parent_run_id="r",
+        depth=1,
+        task_type="plan",
+        task_description="改 bug",
         input_payload={
             "error_code": "ORA-00904",
             "status_code": 500,
@@ -144,9 +160,13 @@ def test_context_strategy_required_fields_kept():
 def test_context_strategy_auto_pick_incremental_for_long():
     from agent.orchestrator.context_strategy import select_strategy
     from agent.orchestrator.spec import SubAgentSpec
+
     spec = SubAgentSpec(
-        sub_agent_id="s", parent_run_id="r", depth=1,
-        task_type="plan", task_description="x",
+        sub_agent_id="s",
+        parent_run_id="r",
+        depth=1,
+        task_type="plan",
+        task_description="x",
         input_payload={"x": "y" * 20000},
     )
     assert select_strategy(spec) == "incremental_summary"
@@ -154,14 +174,19 @@ def test_context_strategy_auto_pick_incremental_for_long():
 
 def test_context_strategy_shared_memory_pool_roundtrip():
     from agent.orchestrator.context_strategy import (
-        SharedMemoryPool, build_context,
+        SharedMemoryPool,
+        build_context,
     )
-    from agent.orchestrator.spec import SubAgentSpec, ContextPolicy
+    from agent.orchestrator.spec import ContextPolicy, SubAgentSpec
+
     pool = SharedMemoryPool()
     pool.set_fact("run-1", "sql_schema", {"tables": ["orders", "users"]})
     spec = SubAgentSpec(
-        sub_agent_id="s", parent_run_id="run-1", depth=1,
-        task_type="plan", task_description="使用共享池",
+        sub_agent_id="s",
+        parent_run_id="run-1",
+        depth=1,
+        task_type="plan",
+        task_description="使用共享池",
         input_payload={"hint": "no data"},
         context_policy=ContextPolicy(
             strategy="shared_memory_pool",
@@ -176,6 +201,7 @@ def test_context_strategy_shared_memory_pool_roundtrip():
 
 def test_context_strategy_estimate_tokens_cjk_and_ascii():
     from agent.orchestrator.context_strategy import estimate_tokens
+
     assert estimate_tokens("") == 0
     # 全 ASCII：约 4 字符 / token
     assert 1 <= estimate_tokens("hi") <= 5
@@ -185,10 +211,14 @@ def test_context_strategy_estimate_tokens_cjk_and_ascii():
 
 def test_context_strategy_overflow_value_externalized():
     from agent.orchestrator.context_strategy import build_context
-    from agent.orchestrator.spec import SubAgentSpec, ContextPolicy
+    from agent.orchestrator.spec import SubAgentSpec
+
     spec = SubAgentSpec(
-        sub_agent_id="s", parent_run_id="r", depth=1,
-        task_type="plan", task_description="x",
+        sub_agent_id="s",
+        parent_run_id="r",
+        depth=1,
+        task_type="plan",
+        task_description="x",
         input_payload={"huge": "Y" * 5000},  # 远超 400 inline 限额
     )
     ctx = build_context(spec)
@@ -202,40 +232,65 @@ def test_context_strategy_overflow_value_externalized():
 @pytest.mark.asyncio
 async def test_state_repo_cas_conflict():
     from agent.orchestrator.state_repo import (
-        StateRepo, StateVersionConflict, reset_default_repo,
+        StateVersionConflict,
+        reset_default_repo,
     )
+
     repo = reset_default_repo()
     await repo.save_task(
-        task_id="t1", parent_run_id="r1", parent_task_id=None,
-        correlation_id="c1", idempotency_token="idem-1", depth=1,
-        task_type="plan", priority="normal",
-        spec={"x": 1}, status="pending",
+        task_id="t1",
+        parent_run_id="r1",
+        parent_task_id=None,
+        correlation_id="c1",
+        idempotency_token="idem-1",
+        depth=1,
+        task_type="plan",
+        priority="normal",
+        spec={"x": 1},
+        status="pending",
     )
     new_v = await repo.update_status_cas(
-        task_id="t1", expected_version=1, status="running",
+        task_id="t1",
+        expected_version=1,
+        status="running",
     )
     assert new_v == 2
     with pytest.raises(StateVersionConflict):
         await repo.update_status_cas(
-            task_id="t1", expected_version=1, status="ok",
+            task_id="t1",
+            expected_version=1,
+            status="ok",
         )
 
 
 @pytest.mark.asyncio
 async def test_state_repo_idempotency():
     from agent.orchestrator.state_repo import reset_default_repo
+
     repo = reset_default_repo()
     row1 = await repo.save_task(
-        task_id="t1", parent_run_id="r1", parent_task_id=None,
-        correlation_id="c1", idempotency_token="idem-1", depth=1,
-        task_type="plan", priority="normal",
-        spec={"x": 1}, status="pending",
+        task_id="t1",
+        parent_run_id="r1",
+        parent_task_id=None,
+        correlation_id="c1",
+        idempotency_token="idem-1",
+        depth=1,
+        task_type="plan",
+        priority="normal",
+        spec={"x": 1},
+        status="pending",
     )
     row2 = await repo.save_task(
-        task_id="t1", parent_run_id="r1", parent_task_id=None,
-        correlation_id="c1", idempotency_token="idem-1", depth=1,
-        task_type="plan", priority="normal",
-        spec={"x": 1}, status="pending",
+        task_id="t1",
+        parent_run_id="r1",
+        parent_task_id=None,
+        correlation_id="c1",
+        idempotency_token="idem-1",
+        depth=1,
+        task_type="plan",
+        priority="normal",
+        spec={"x": 1},
+        status="pending",
     )
     assert row1["task_id"] == row2["task_id"]
 
@@ -243,11 +298,15 @@ async def test_state_repo_idempotency():
 @pytest.mark.asyncio
 async def test_state_repo_dlq_lifecycle():
     from agent.orchestrator.state_repo import reset_default_repo
+
     repo = reset_default_repo()
     await repo.push_dlq(
-        task_id="t1", correlation_id="c1",
+        task_id="t1",
+        correlation_id="c1",
         idempotency_token="idem-1",
-        payload={"x": 1}, last_error="nope", attempts=3,
+        payload={"x": 1},
+        last_error="nope",
+        attempts=3,
     )
     open_items = await repo.list_dlq(state="open")
     assert len(open_items) == 1
@@ -260,6 +319,7 @@ async def test_state_repo_dlq_lifecycle():
 @pytest.mark.asyncio
 async def test_state_repo_metrics_summary():
     from agent.orchestrator.state_repo import reset_default_repo
+
     repo = reset_default_repo()
     await repo.record_metric(metric="latency_ms", value=100, task_id="t")
     await repo.record_metric(metric="latency_ms", value=200, task_id="t")
@@ -274,6 +334,7 @@ async def test_state_repo_metrics_summary():
 @pytest.mark.asyncio
 async def test_queue_priority_order():
     from agent.orchestrator.queue import reset_default_queue
+
     q = reset_default_queue()
     await q.enqueue(task_id="low1", idempotency_token="l1", payload={}, priority="low")
     await q.enqueue(task_id="n1", idempotency_token="n1", payload={}, priority="normal")
@@ -287,6 +348,7 @@ async def test_queue_priority_order():
 @pytest.mark.asyncio
 async def test_queue_idempotency_dedup():
     from agent.orchestrator.queue import reset_default_queue
+
     q = reset_default_queue()
     a = await q.enqueue(task_id="t1", idempotency_token="idem", payload={})
     b = await q.enqueue(task_id="t1", idempotency_token="idem", payload={})
@@ -297,10 +359,12 @@ async def test_queue_idempotency_dedup():
 @pytest.mark.asyncio
 async def test_queue_close_wakes_waiter():
     from agent.orchestrator.queue import reset_default_queue
+
     q = reset_default_queue()
 
     async def waiter():
         return await q.dequeue(timeout=2.0)
+
     task = asyncio.create_task(waiter())
     await asyncio.sleep(0.05)
     await q.close()
@@ -311,6 +375,7 @@ async def test_queue_close_wakes_waiter():
 @pytest.mark.asyncio
 async def test_queue_reopen_and_forget():
     from agent.orchestrator.queue import reset_default_queue
+
     q = reset_default_queue()
     await q.enqueue(task_id="t", idempotency_token="x", payload={})
     q.forget("x")
@@ -329,13 +394,21 @@ async def test_audit_bridge_log_and_replay(tmp_path, monkeypatch):
     audit_path = tmp_path / "audit.sqlite"
     monkeypatch.setenv("EAIDE_AUDIT_DB_PATH", str(audit_path))
     from agent.config import settings
+
     monkeypatch.setattr(settings, "audit_db_path", str(audit_path))
     from agent.audit import store as audit_store_mod
     from agent.orchestrator import audit_bridge
+
     await audit_store_mod.audit(
-        "noop", {}, run_id="r1", correlation_id="c1",
-        actor_type="sub_agent", event_type="sub_agent_spawn",
-        task_id="t1", parent_task_id=None, db_path=str(audit_path),
+        "noop",
+        {},
+        run_id="r1",
+        correlation_id="c1",
+        actor_type="sub_agent",
+        event_type="sub_agent_spawn",
+        task_id="t1",
+        parent_task_id=None,
+        db_path=str(audit_path),
     )
     events = await audit_bridge.replay_tree("c1", db_path=str(audit_path))
     assert len(events) == 1
@@ -345,6 +418,7 @@ async def test_audit_bridge_log_and_replay(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_audit_bridge_build_tree_parent_child():
     from agent.orchestrator.audit_bridge import build_tree
+
     events = [
         {"task_id": "p1", "parent_task_id": None, "event_type": "spawn", "payload": {}},
         {"task_id": "c1", "parent_task_id": "p1", "event_type": "spawn", "payload": {}},
@@ -363,6 +437,7 @@ async def test_audit_bridge_build_tree_parent_child():
 
 def test_eval_collector_record_and_snapshot():
     from agent.orchestrator.eval_collector import EvalCollector
+
     c = EvalCollector()
     c.record_dispatch(local_only=True)
     c.record_context(compression_ratio=0.6, required_kept=True)
@@ -379,6 +454,7 @@ def test_eval_collector_record_and_snapshot():
 
 def test_eval_collector_violations_below_threshold():
     from agent.orchestrator.eval_collector import EvalCollector
+
     c = EvalCollector()
     c.record_dispatch()
     c.record_validation(ok=False)  # 让 validation_pass_rate < 0.95
@@ -388,6 +464,7 @@ def test_eval_collector_violations_below_threshold():
 
 def test_eval_collector_judge_sampling_deterministic():
     from agent.orchestrator.eval_collector import EvalCollector
+
     c = EvalCollector()
     rate = 0.1
     hits = [c.should_judge(sample_rate=rate) for _ in range(20)]
@@ -399,6 +476,7 @@ def test_eval_collector_judge_sampling_deterministic():
 
 def test_eval_collector_judge_parse_json_and_regex():
     from agent.orchestrator.eval_collector import _parse_judge_output
+
     score, _ = _parse_judge_output('{"score": 4, "reason": "ok"}')
     assert score == 4
     score, _ = _parse_judge_output("看了一下，给 3 分")
@@ -411,9 +489,12 @@ def test_eval_collector_judge_parse_json_and_regex():
 @pytest.mark.asyncio
 async def test_eval_collector_judge_report_no_caller():
     from agent.orchestrator.eval_collector import judge_report
+
     v = await judge_report(
-        task_id="t", task_type="plan",
-        task_description="x", summary="y",
+        task_id="t",
+        task_type="plan",
+        task_description="x",
+        summary="y",
     )
     assert v.sampled is False
     assert v.error == "no judge_caller"
@@ -421,15 +502,20 @@ async def test_eval_collector_judge_report_no_caller():
 
 @pytest.mark.asyncio
 async def test_eval_collector_judge_report_with_caller():
-    from agent.orchestrator.eval_collector import judge_report, EvalCollector
+    from agent.orchestrator.eval_collector import EvalCollector, judge_report
+
     c = EvalCollector()
 
     async def fake_caller(prompt: str) -> str:
         return '{"score": 5, "reason": "ok"}'
+
     v = await judge_report(
-        task_id="t", task_type="plan",
-        task_description="x", summary="y",
-        judge_caller=fake_caller, collector=c,
+        task_id="t",
+        task_type="plan",
+        task_description="x",
+        summary="y",
+        judge_caller=fake_caller,
+        collector=c,
     )
     assert v.sampled is True and v.score == 5
     assert c.snapshot()["judge"]["samples"] == 1
@@ -441,25 +527,33 @@ async def test_eval_collector_judge_report_with_caller():
 @pytest.mark.asyncio
 async def test_hitl_bridge_wait_for_user_approve(monkeypatch):
     from agent.orchestrator import hitl_bridge as hb
+
     hb.reset_default_hitl_bridge()
 
     # fake start_approval + check_decision
     async def fake_start(approval_id, plan, timeout_sec):
         return None
+
     async def fake_check(approval_id):
         return "approve"
+
     async def fake_cleanup(approval_id):
         return None
 
     import agent.graph.interrupt as gi
+
     monkeypatch.setattr(gi, "start_approval", fake_start)
     monkeypatch.setattr(gi, "check_decision", fake_check)
     monkeypatch.setattr(gi, "cleanup_approval", fake_cleanup)
 
     decision = await hb.get_default_hitl_bridge().request_approval(
-        sub_agent_id="s", parent_run_id="r",
-        operation="UPDATE x SET a=1", target="db",
-        risk_level="high", wait_for_user=True, timeout_sec=2,
+        sub_agent_id="s",
+        parent_run_id="r",
+        operation="UPDATE x SET a=1",
+        target="db",
+        risk_level="high",
+        wait_for_user=True,
+        timeout_sec=2,
     )
     assert decision.approved is True
     assert decision.decided_by == "user"
@@ -468,13 +562,16 @@ async def test_hitl_bridge_wait_for_user_approve(monkeypatch):
 @pytest.mark.asyncio
 async def test_hitl_bridge_wait_for_user_timeout(monkeypatch):
     from agent.orchestrator import hitl_bridge as hb
+
     hb.reset_default_hitl_bridge()
     import agent.graph.interrupt as gi
 
     async def fake_start(approval_id, plan, timeout_sec):
         return None
+
     async def fake_check(approval_id):
         return None  # 永远没决策
+
     async def fake_cleanup(approval_id):
         return None
 
@@ -483,9 +580,13 @@ async def test_hitl_bridge_wait_for_user_timeout(monkeypatch):
     monkeypatch.setattr(gi, "cleanup_approval", fake_cleanup)
 
     decision = await hb.get_default_hitl_bridge().request_approval(
-        sub_agent_id="s", parent_run_id="r",
-        operation="DROP TABLE x", target="db",
-        risk_level="critical", wait_for_user=True, timeout_sec=0.2,
+        sub_agent_id="s",
+        parent_run_id="r",
+        operation="DROP TABLE x",
+        target="db",
+        risk_level="critical",
+        wait_for_user=True,
+        timeout_sec=0.2,
     )
     assert decision.decision == "reject"
     assert decision.timed_out is True
@@ -494,16 +595,19 @@ async def test_hitl_bridge_wait_for_user_timeout(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_hitl_bridge_emit_approval_event(monkeypatch):
-    from agent.orchestrator import hitl_bridge as hb
     from agent.orchestrator import events as evt
+    from agent.orchestrator import hitl_bridge as hb
+
     evt.flush_orchestrator_events()
     hb.reset_default_hitl_bridge()
     import agent.graph.interrupt as gi
 
     async def fake_start(approval_id, plan, timeout_sec):
         return None
+
     async def fake_check(approval_id):
         return "approve"
+
     async def fake_cleanup(approval_id):
         return None
 
@@ -512,9 +616,13 @@ async def test_hitl_bridge_emit_approval_event(monkeypatch):
     monkeypatch.setattr(gi, "cleanup_approval", fake_cleanup)
 
     await hb.get_default_hitl_bridge().request_approval(
-        sub_agent_id="s", parent_run_id="r",
-        operation="UPDATE y", target="db",
-        risk_level="medium", wait_for_user=True, timeout_sec=2,
+        sub_agent_id="s",
+        parent_run_id="r",
+        operation="UPDATE y",
+        target="db",
+        risk_level="medium",
+        wait_for_user=True,
+        timeout_sec=2,
     )
     evs = await evt.consume_orchestrator_events()
     kinds = [k for k, _ in evs]
@@ -527,18 +635,20 @@ async def test_hitl_bridge_emit_approval_event(monkeypatch):
 @pytest.mark.asyncio
 async def test_observability_scrub_pii(tmp_path):
     from agent.orchestrator.observability import (
-        reset_default_logger, _scrub_value,
+        reset_default_logger,
     )
+
     reset_default_logger(log_dir=tmp_path)
     from agent.orchestrator.observability import get_default_logger
+
     logger = get_default_logger()
     await logger.log_event(
         event_type="sub_agent_spawn",
         correlation_id="c1",
         task_id="t1",
         payload={
-            "password": "hunter2",          # 字段脱敏
-            "phone": "13800001111",         # 正则脱敏
+            "password": "hunter2",  # 字段脱敏
+            "phone": "13800001111",  # 正则脱敏
             "ok": "hi",
         },
     )
@@ -555,12 +665,12 @@ async def test_observability_scrub_pii(tmp_path):
 
 @pytest.mark.asyncio
 async def test_orchestrator_dispatch_and_run():
+    from agent.orchestrator.context_strategy import reset_default_pool
+    from agent.orchestrator.eval_collector import reset_default_collector
     from agent.orchestrator.orchestrator import Orchestrator
+    from agent.orchestrator.queue import reset_default_queue
     from agent.orchestrator.spec import SubAgentSpec
     from agent.orchestrator.state_repo import reset_default_repo
-    from agent.orchestrator.queue import reset_default_queue
-    from agent.orchestrator.eval_collector import reset_default_collector
-    from agent.orchestrator.context_strategy import reset_default_pool
 
     reset_default_repo()
     reset_default_queue()
@@ -574,8 +684,11 @@ async def test_orchestrator_dispatch_and_run():
     orch.set_tenant("t-test")
 
     spec = SubAgentSpec(
-        sub_agent_id="sub-v15-1", parent_run_id="run-v15-1", depth=1,
-        task_type="plan", task_description="请总结本月 OKR",
+        sub_agent_id="sub-v15-1",
+        parent_run_id="run-v15-1",
+        depth=1,
+        task_type="plan",
+        task_description="请总结本月 OKR",
         input_payload={
             "file": "okr.md",
             "idempotency_token": "idem-v15-1",
@@ -601,12 +714,12 @@ async def test_orchestrator_dispatch_and_run():
 
 @pytest.mark.asyncio
 async def test_orchestrator_dlq_on_repeated_failure():
+    from agent.orchestrator.context_strategy import reset_default_pool
+    from agent.orchestrator.eval_collector import reset_default_collector
     from agent.orchestrator.orchestrator import Orchestrator
+    from agent.orchestrator.queue import reset_default_queue
     from agent.orchestrator.spec import SubAgentSpec
     from agent.orchestrator.state_repo import reset_default_repo
-    from agent.orchestrator.queue import reset_default_queue
-    from agent.orchestrator.eval_collector import reset_default_collector
-    from agent.orchestrator.context_strategy import reset_default_pool
     from agent.orchestrator.worker_pool import WorkerPool
 
     reset_default_repo()
@@ -622,8 +735,11 @@ async def test_orchestrator_dlq_on_repeated_failure():
     orch.set_tenant("t-test")
 
     spec = SubAgentSpec(
-        sub_agent_id="sub-v15-2", parent_run_id="run-v15-2", depth=1,
-        task_type="plan", task_description="失败",
+        sub_agent_id="sub-v15-2",
+        parent_run_id="run-v15-2",
+        depth=1,
+        task_type="plan",
+        task_description="失败",
         input_payload={"idempotency_token": "idem-v15-2"},
     )
     await orch.dispatch(spec)
@@ -637,13 +753,14 @@ async def test_orchestrator_dlq_on_repeated_failure():
 @pytest.mark.asyncio
 async def test_orchestrator_cancel_all_drains_within_1s():
     """cancel_all ≤ 1s 内能通知 worker 停。"""
+    import time
+
+    from agent.orchestrator.context_strategy import reset_default_pool
+    from agent.orchestrator.eval_collector import reset_default_collector
     from agent.orchestrator.orchestrator import Orchestrator
+    from agent.orchestrator.queue import reset_default_queue
     from agent.orchestrator.spec import SubAgentSpec
     from agent.orchestrator.state_repo import reset_default_repo
-    from agent.orchestrator.queue import reset_default_queue
-    from agent.orchestrator.eval_collector import reset_default_collector
-    from agent.orchestrator.context_strategy import reset_default_pool
-    import time
 
     reset_default_repo()
     reset_default_queue()
@@ -663,8 +780,11 @@ async def test_orchestrator_cancel_all_drains_within_1s():
 
     for i in range(3):
         spec = SubAgentSpec(
-            sub_agent_id=f"sub-cancel-{i}", parent_run_id="run-cancel", depth=1,
-            task_type="plan", task_description="x",
+            sub_agent_id=f"sub-cancel-{i}",
+            parent_run_id="run-cancel",
+            depth=1,
+            task_type="plan",
+            task_description="x",
             input_payload={"idempotency_token": f"cancel-{i}"},
         )
         await orch.dispatch(spec)
@@ -687,12 +807,14 @@ async def test_orchestrator_cancel_all_drains_within_1s():
 
 @pytest.mark.asyncio
 async def test_api_metrics_endpoint():
-    from fastapi.testclient import TestClient
     from agent.orchestrator import api as api_mod
     from agent.orchestrator.orchestrator import get_orchestrator
+    from fastapi.testclient import TestClient
+
     get_orchestrator()  # 触发单例初始化
 
     from fastapi import FastAPI
+
     app = FastAPI()
     app.include_router(api_mod.router)
     client = TestClient(app)
@@ -706,9 +828,10 @@ async def test_api_metrics_endpoint():
 
 @pytest.mark.asyncio
 async def test_api_tree_stats():
-    from fastapi.testclient import TestClient
     from agent.orchestrator import api as api_mod
     from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
     app = FastAPI()
     app.include_router(api_mod.router)
     client = TestClient(app)
@@ -721,9 +844,10 @@ async def test_api_tree_stats():
 
 @pytest.mark.asyncio
 async def test_api_queue_stats():
-    from fastapi.testclient import TestClient
     from agent.orchestrator import api as api_mod
     from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
     app = FastAPI()
     app.include_router(api_mod.router)
     client = TestClient(app)
@@ -736,9 +860,10 @@ async def test_api_queue_stats():
 @pytest.mark.asyncio
 async def test_api_dlq_and_routes_in_correct_order():
     """字面量路径必须在 /{sub_agent_id} 通配符之前。"""
-    from fastapi.testclient import TestClient
     from agent.orchestrator import api as api_mod
     from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
     app = FastAPI()
     app.include_router(api_mod.router)
     client = TestClient(app)

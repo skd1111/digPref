@@ -521,15 +521,15 @@ impl TaskEntry {
 /// (only `Running` may).
 fn require_transition(from: TaskStatus, to: TaskStatus) -> AppResult<()> {
     use TaskStatus::*;
-    let ok = match (from, to) {
-        (Queued, Running) => true,
-        (Running, Completed) => true,
-        (Running, Failed) => true,
-        (Queued, Failed) => true,
-        (Running, Cancelled) => true,
-        (Queued, Cancelled) => true,
-        _ => false,
-    };
+    let ok = matches!(
+        (from, to),
+        (Queued, Running)
+            | (Running, Completed)
+            | (Running, Failed)
+            | (Queued, Failed)
+            | (Running, Cancelled)
+            | (Queued, Cancelled)
+    );
     if ok {
         Ok(())
     } else {
@@ -557,7 +557,7 @@ fn canonicalize_or_self(path: &Path) -> Option<PathBuf> {
 ///   * Windows: `%APPDATA%\eaide\log_index.db`
 ///   * macOS:   `$HOME/Library/Application Support/eaide/log_index.db`
 ///   * Linux:   `$XDG_DATA_HOME/eaide/log_index.db` (or
-///              `$HOME/.local/share/eaide/log_index.db`)
+///     `$HOME/.local/share/eaide/log_index.db`)
 ///
 /// Falls back to `log_index.db` in the current directory when none of
 /// the platform-specific environment variables are set — this keeps
@@ -921,7 +921,7 @@ mod tests {
         let via_dir = dir.join("sub").join("target.log");
 
         let state = LogViewerState::new();
-        let first = state
+        let _first = state
             .submit_index(&target)
             .expect("first submit via canonical spelling");
         let dup = state

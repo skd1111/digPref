@@ -1,6 +1,6 @@
 """Router 单元测试。"""
-import pytest
 
+import pytest
 from agent.skills.loader import SkillLoader
 from agent.skills.models import Skill
 from agent.skills.router import SkillRouter
@@ -11,25 +11,34 @@ def router(tmp_path):
     """Loader + 3 skills：order / user / ssh，order 关键词命中 2 个，user 1 个。"""
     d = tmp_path / "skills"
     d.mkdir()
-    (d / "order.yaml").write_text("""
+    (d / "order.yaml").write_text(
+        """
 schema_version: "1.0"
 id: db_query_order
 name: 订单
 trigger_keywords: [订单, order]
-""", encoding="utf-8")
-    (d / "user.yaml").write_text("""
+""",
+        encoding="utf-8",
+    )
+    (d / "user.yaml").write_text(
+        """
 schema_version: "1.0"
 id: db_query_user
 name: 用户
 trigger_keywords: [用户, user]
-""", encoding="utf-8")
-    (d / "ssh.yaml").write_text("""
+""",
+        encoding="utf-8",
+    )
+    (d / "ssh.yaml").write_text(
+        """
 schema_version: "1.0"
 id: ssh_diagnostic
 name: SSH
 trigger_keywords: [ssh, 远程]
 enabled: false
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
     loader = SkillLoader(d)
     loader.load_all()
     return SkillRouter(loader)
@@ -83,3 +92,33 @@ def test_build_system_prompt_with_skill(router):
     assert "base" in out
     assert "订单" in out
     assert "## 当前技能" in out
+
+
+def test_classify_with_llm_fenced_json(monkeypatch):
+    """围栏 JSON 仍可解析，null skill 也正常（spec §4.5 第三层）。"""
+    import asyncio
+
+    import httpx
+    from agent.skills.intent_classifier import classify_with_llm
+
+    async def fake_post(*a, **k):
+        class R:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {
+                    "message": {
+                        "content": (
+                            '```json\n{"skill_id": null, "confidence": 0, '
+                            '"reasoning": "no match"}\n```'
+                        )
+                    }
+                }
+
+        return R()
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    skills = [Skill(id="db", name="数据库", description="d", trigger_keywords=["查表"])]
+    result = asyncio.run(classify_with_llm("你好", skills))
+    assert result is not None and result.skill_id is None

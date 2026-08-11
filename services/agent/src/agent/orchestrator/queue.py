@@ -11,6 +11,7 @@ V1.5 用 **进程内 deque + asyncio.Condition** 实现同语义，权威状态�
     - `close()` 唤醒所有等待者（取消传播 ≤ 1s，铁律 8）
     - `stats()` 暴露堆积长度（监控阈值：单队列 > 100 告警）
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -18,7 +19,7 @@ import logging
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ class QueueClosed(RuntimeError):
 @dataclass
 class QueueItem:
     """队列中的一个待派发任务。"""
+
     task_id: str
     idempotency_token: str
     payload: Any
@@ -77,9 +79,7 @@ class PriorityTaskQueue:
             "enqueued_total": self._enqueued_total,
             "dequeued_total": self._dequeued_total,
             "dedup_hits": self._dedup_hits,
-            "backlog_alert": any(
-                n > BACKLOG_ALERT_THRESHOLD for n in by_priority.values()
-            ),
+            "backlog_alert": any(n > BACKLOG_ALERT_THRESHOLD for n in by_priority.values()),
         }
 
     # ---- 入队 / 出队 -----------------------------------------------------
@@ -115,13 +115,13 @@ class PriorityTaskQueue:
             self._cond.notify()
         return True
 
-    def _pop_ready(self) -> Optional[QueueItem]:
+    def _pop_ready(self) -> QueueItem | None:
         for p in PRIORITIES:
             if self._queues[p]:
                 return self._queues[p].popleft()
         return None
 
-    async def dequeue(self, timeout: float | None = None) -> Optional[QueueItem]:
+    async def dequeue(self, timeout: float | None = None) -> QueueItem | None:
         """按 high → normal → low 顺序取一个任务。
 
         Returns:
@@ -192,11 +192,11 @@ def reset_default_queue() -> PriorityTaskQueue:
 
 
 __all__ = [
-    "PriorityTaskQueue",
-    "QueueItem",
-    "QueueClosed",
-    "PRIORITIES",
     "BACKLOG_ALERT_THRESHOLD",
+    "PRIORITIES",
+    "PriorityTaskQueue",
+    "QueueClosed",
+    "QueueItem",
     "get_default_queue",
     "reset_default_queue",
 ]

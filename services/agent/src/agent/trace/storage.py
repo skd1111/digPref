@@ -6,6 +6,7 @@ decision / tokens_used / latency_ms / created_at。
 
 只追加不删改（金融合规审计红线，架构师忠告 6）。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -155,10 +156,7 @@ async def recent_sessions(limit: int = 20, db_path: str | None = None) -> list[d
             (limit,),
         )
         rows = await cur.fetchall()
-    return [
-        {"session_id": r[0], "steps": int(r[1]), "last_ts": int(r[2] or 0)}
-        for r in rows
-    ]
+    return [{"session_id": r[0], "steps": int(r[1]), "last_ts": int(r[2] or 0)} for r in rows]
 
 
 def _row_to_step(row: tuple) -> ThinkingStep:

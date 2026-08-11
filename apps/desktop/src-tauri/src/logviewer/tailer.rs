@@ -43,7 +43,7 @@ const MAX_TAIL_LINES_PER_FLUSH: usize = 500;
 /// notify 轮询间隔（毫秒）。
 const WATCHER_POLL_MS: u64 = 100;
 
-/// ---- 公开数据结构 -------------------------------------------------------
+// ---- 公开数据结构 -------------------------------------------------------
 
 /// 前端收到的单行 tail 事件 payload。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,7 +64,7 @@ pub struct TailSessionInfo {
     pub lines_read: u64,
 }
 
-/// ---- 内部会话 -----------------------------------------------------------
+// ---- 内部会话 -----------------------------------------------------------
 
 struct TailSession {
     path: PathBuf,
@@ -73,7 +73,7 @@ struct TailSession {
     lines_read: u64,
 }
 
-/// ---- Tail 管理器 ---------------------------------------------------------
+// ---- Tail 管理器 ---------------------------------------------------------
 
 pub struct TailManager {
     sessions: Arc<Mutex<HashMap<TailSessionId, TailSession>>>,
@@ -190,7 +190,7 @@ impl TailManager {
     }
 }
 
-/// ---- 核心 tail 循环 ------------------------------------------------------
+// ---- 核心 tail 循环 ------------------------------------------------------
 
 fn run_tail(
     path: &std::path::Path,
@@ -266,7 +266,6 @@ fn run_tail(
             let file = File::open(path).map_err(|e| format!("tail: reopen: {}", e))?;
             reader = BufReader::new(file);
             reader.seek(SeekFrom::Start(0)).map_err(|e| format!("tail: reseek: {}", e))?;
-            last_size = 0;
             total_bytes = 0;
             total_lines = 0;
         }
@@ -320,7 +319,7 @@ fn run_tail(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    
 
     #[test]
     fn tail_manager_start_stop() {
@@ -369,7 +368,7 @@ mod tests {
         assert_eq!(mgr.stop_all(), 1);
         // stop_all 不清除，仅设 cancel → 会话保留但 active=false
         assert_eq!(mgr.list().len(), 1);
-        assert_eq!(mgr.list()[0].active, false);
+        assert!(!mgr.list()[0].active);
     }
 
     #[test]
@@ -401,10 +400,7 @@ mod tests {
         assert_eq!(json["byte_offset"], 2048);
     }
 
-    #[test]
-    fn max_tail_lines_per_flush_is_reasonable() {
-        // 确保常量值在合理范围（不炸 IPC 也不丢行）
-        assert!(MAX_TAIL_LINES_PER_FLUSH >= 50);
-        assert!(MAX_TAIL_LINES_PER_FLUSH <= 2000);
-    }
+    // 编译期断言：常量值在合理范围（不炸 IPC 也不丢行）
+    const _: () = assert!(MAX_TAIL_LINES_PER_FLUSH >= 50);
+    const _: () = assert!(MAX_TAIL_LINES_PER_FLUSH <= 2000);
 }

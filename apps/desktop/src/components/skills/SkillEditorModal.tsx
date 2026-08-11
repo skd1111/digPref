@@ -10,6 +10,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Editor from '@monaco-editor/react';
 import { useSkillsStore } from '@/store/skillsStore';
+import { useExpertTeamStore } from '@/store/expertTeamStore';
 import type { Skill } from '@/types/skill';
 
 type TabId = 'form' | 'yaml';
@@ -35,6 +36,12 @@ function skillToYaml(s: Skill): string {
   for (const line of s.system_prompt.split('\n')) {
     lines.push(`  ${line}`);
   }
+  lines.push(`required_expert_team_ids:`);
+  for (const id of s.required_expert_team_ids) lines.push(`  - "${id}"`);
+  lines.push(`materials:`);
+  for (const m of s.materials) lines.push(`  - "${m}"`);
+  lines.push(`deliverables:`);
+  for (const d of s.deliverables) lines.push(`  - "${d}"`);
   return lines.join('\n');
 }
 
@@ -48,6 +55,8 @@ export function SkillEditorModal(): JSX.Element | null {
   const skill = useSkillsStore((s) =>
     selectedSkillId ? s.skills.find((sk) => sk.id === selectedSkillId) ?? null : null
   );
+  // 专家团预设编辑区：候选专家团下拉（后端旧数据可能缺三字段，下方 draft 归一化兑底）
+  const expertTeams = useExpertTeamStore((s) => s.teams);
 
   const [tab, setTab] = useState<TabId>('form');
   const [draft, setDraft] = useState<Skill | null>(null);
@@ -55,7 +64,13 @@ export function SkillEditorModal(): JSX.Element | null {
 
   useEffect(() => {
     if (editorOpen && skill) {
-      setDraft({ ...skill });
+      // 专家团三字段归一化：后端旧数据经 cast 进来时运行时可能缺字段
+      setDraft({
+        ...skill,
+        required_expert_team_ids: skill.required_expert_team_ids ?? [],
+        materials: skill.materials ?? [],
+        deliverables: skill.deliverables ?? [],
+      });
       setDirty(false);
       setTab('form');
     } else if (!editorOpen) {
@@ -229,6 +244,98 @@ export function SkillEditorModal(): JSX.Element | null {
               >
                 + 增加关键词
               </button>
+            </div>
+
+            <h4 className="mb-2 text-2xs font-semibold uppercase tracking-wider" style={{ color: '#0b6bcb' }}>
+              专家团预设（运营工作台自动选择依据）
+            </h4>
+            <div className="mb-3 space-y-2">
+              <div>
+                <label className="mb-0.5 block text-2xs" style={{ color: '#616161' }}>
+                  默认专家团（选中业务时自动注入；空则走 AI 推荐）
+                </label>
+                {draft.required_expert_team_ids.map((tid, i) => (
+                  <div key={i} className="mb-1 flex items-center gap-1">
+                    <select
+                      value={tid}
+                      onChange={(e) => {
+                        const arr = [...draft.required_expert_team_ids];
+                        arr[i] = e.target.value;
+                        setField('required_expert_team_ids', arr);
+                      }}
+                      className="flex-1 rounded border px-2 py-0.5 text-2xs"
+                      style={{ backgroundColor: '#f3f3f3', borderColor: '#d4d4d4', color: '#1f1f1f' }}
+                    >
+                      <option value="">（选择专家团）</option>
+                      {expertTeams.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name}（{t.id}）
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setField(
+                          'required_expert_team_ids',
+                          draft.required_expert_team_ids.filter((_, idx) => idx !== i),
+                        )
+                      }
+                      className="rounded px-1 text-2xs"
+                      style={{ color: '#cd3131' }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setField('required_expert_team_ids', [...draft.required_expert_team_ids, ''])}
+                  className="rounded px-2 py-0.5 text-2xs"
+                  style={{ backgroundColor: '#0e639c20', color: '#0451a5', border: '1px dashed #0e639c' }}
+                >
+                  + 增加专家团
+                </button>
+                {expertTeams.length === 0 && (
+                  <span className="ml-2 text-[10px]" style={{ color: '#795e26' }}>
+                    还没有专家团，请到 设置 → 专家团 创建/导入
+                  </span>
+                )}
+              </div>
+              <div>
+                <label className="mb-0.5 block text-2xs" style={{ color: '#616161' }}>
+                  办理材料清单（逗号分隔；注入上下文供模型判断）
+                </label>
+                <input
+                  value={draft.materials.join('，')}
+                  onChange={(e) =>
+                    setField(
+                      'materials',
+                      e.target.value.split(/[,，;；]/).map((x) => x.trim()).filter(Boolean),
+                    )
+                  }
+                  placeholder="如：营业执照、法人身份证、近6个月银行流水"
+                  className="w-full rounded border px-2 py-1 text-2xs"
+                  style={{ backgroundColor: '#f3f3f3', borderColor: '#d4d4d4', color: '#1f1f1f' }}
+                />
+              </div>
+              <div>
+                <label className="mb-0.5 block text-2xs" style={{ color: '#616161' }}>
+                  最终交付物（逗号分隔）
+                </label>
+                <input
+                  value={draft.deliverables.join('，')}
+                  onChange={(e) =>
+                    setField(
+                      'deliverables',
+                      e.target.value.split(/[,，;；]/).map((x) => x.trim()).filter(Boolean),
+                    )
+                  }
+                  placeholder="如：尽调报告初稿、风险清单、人工核实清单"
+                  className="w-full rounded border px-2 py-1 text-2xs"
+                  style={{ backgroundColor: '#f3f3f3', borderColor: '#d4d4d4', color: '#1f1f1f' }}
+                />
+              </div>
             </div>
 
             <h4 className="mb-2 text-2xs font-semibold uppercase tracking-wider" style={{ color: '#0b6bcb' }}>

@@ -13,14 +13,21 @@ import { useBiznavStore } from '@/store/biznavStore';
 
 export function ContextChip(): JSX.Element | null {
   const ctx = useChatStore((s) => s.selectedFeatureContext);
+  const opsCtx = useChatStore((s) => s.opsNavContext);
   const setFeatureContext = useChatStore((s) => s.setFeatureContext);
+  const setOpsNavContext = useChatStore((s) => s.setOpsNavContext);
   const closeDrawer = useBiznavStore((s) => s.closeDrawer);
 
-  if (!ctx) return null;
+  const active = opsCtx ?? ctx;
+  if (!active) return null;
 
   const handleClose = (): void => {
-    setFeatureContext(null);
-    closeDrawer();
+    if (opsCtx) {
+      setOpsNavContext(null);
+    } else {
+      setFeatureContext(null);
+      closeDrawer();
+    }
   };
 
   return (
@@ -31,11 +38,11 @@ export function ContextChip(): JSX.Element | null {
         border: '1px solid #0e639c',
         color: '#0b6bcb',
       }}
-      title={ctx.feature_description.slice(0, 80)}
+      title={active.feature_description.slice(0, 80)}
     >
       <span>🧩</span>
       <span className="flex-1 truncate">
-        当前上下文：<strong style={{ color: '#1f1f1f' }}>{ctx.feature_name}</strong>
+        当前上下文：<strong style={{ color: '#1f1f1f' }}>{active.feature_name}</strong>
       </span>
       <button
         type="button"

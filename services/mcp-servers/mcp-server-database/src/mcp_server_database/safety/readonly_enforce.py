@@ -10,6 +10,7 @@ Strategy by driver:
 This is belt-and-braces: even if a write somehow slips past the validator,
 the connection itself refuses it.
 """
+
 from __future__ import annotations
 
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -20,6 +21,7 @@ class ReadOnlyViolationError(Exception):
 
 
 # ---- Driver-specific wrappers ---------------------------------------------
+
 
 def wrap_readonly(dsn: str, sql: str, dialect: str) -> str:
     """Return `sql` with the necessary session-level guards prepended."""
@@ -38,9 +40,7 @@ def wrap_readonly(dsn: str, sql: str, dialect: str) -> str:
 
 def assert_mysql_readonly(dsn: str) -> None:
     if "readonly=1" not in dsn.lower():
-        raise ReadOnlyViolationError(
-            "mysql DSN must include 'readonly=1' for query operations"
-        )
+        raise ReadOnlyViolationError("mysql DSN must include 'readonly=1' for query operations")
 
 
 def assert_sqlite_readonly(dsn: str) -> None:
@@ -63,6 +63,7 @@ def _wrap_postgres(sql: str) -> str:
 
 
 # ---- DSN rewriting utilities (for drivers that open from a DSN) ------------
+
 
 def force_readonly_dsn(dsn: str, dialect: str) -> str:
     """Return a new DSN with read-only flags forced on (where supported)."""

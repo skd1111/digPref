@@ -10,11 +10,11 @@ V1 RSA 签名（2048 bit）才满足金融审计要求（不可伪造 + 公网�
 
 依赖：cryptography >= 41
 """
+
 from __future__ import annotations
 
 import base64
 import logging
-from datetime import datetime, timezone
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -22,7 +22,6 @@ from cryptography.hazmat.primitives.asymmetric.rsa import (
     RSAPrivateKey,
     RSAPublicKey,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -49,15 +48,14 @@ def _load_or_generate_signing_key() -> RSAPrivateKey:
 
     try:
         import keyring  # type: ignore
+
         pem_str = keyring.get_password(KEYRING_SERVICE, KEYRING_USER_SIGNING)
     except Exception:
         pem_str = None
 
     if pem_str:
         try:
-            private_key = serialization.load_pem_private_key(
-                pem_str.encode("utf-8"), password=None
-            )
+            private_key = serialization.load_pem_private_key(pem_str.encode("utf-8"), password=None)
             if isinstance(private_key, RSAPrivateKey):
                 _signing_key_cache = private_key
                 return private_key
@@ -73,6 +71,7 @@ def _load_or_generate_signing_key() -> RSAPrivateKey:
     ).decode("utf-8")
     try:
         import keyring  # type: ignore
+
         keyring.set_password(KEYRING_SERVICE, KEYRING_USER_SIGNING, pem)
     except Exception as exc:
         logger.warning("audit_signing_key_save_failed: %s", exc)

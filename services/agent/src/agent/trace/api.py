@@ -6,6 +6,7 @@
     GET /trace/step/{step_id}                —— 单步详情
     GET /trace/file-diff/{step_id}/{idx}     —— 某步第 idx 个文件操作的完整 diff
 """
+
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query

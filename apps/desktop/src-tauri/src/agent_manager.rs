@@ -171,7 +171,7 @@ fn attach_to_job(child: &Child) {
 
 impl AgentManager {
     /// 启动 Agent 子进程。**绝不会返回 Err** —— 失败只记日志。
-    pub fn start(config: &AppConfig) -> Self {
+    pub fn start(_config: &AppConfig) -> Self {
         let auto_start = std::env::var("EAIDE_AGENT_AUTO_START")
             .unwrap_or_else(|_| "1".into())
             == "1";
@@ -343,7 +343,7 @@ impl AgentManager {
                 let health_url = format!("http://{}:{}/health", host, port);
                 // 用 tauri::async_runtime::spawn —— 不依赖外部 Tokio runtime，
                 // 避免同步 setup 回调里 `Handle::current()` 出现 "no reactor" panic
-                let _ = tauri::async_runtime::spawn(async move {
+                tauri::async_runtime::spawn(async move {
                     for i in 0..60 {
                         tokio::time::sleep(Duration::from_millis(500)).await;
                         // 用非阻塞 reqwest 客户端，避免在 async 上下文中再开一个 runtime
@@ -651,7 +651,7 @@ pub fn restart_agent_process() {
             let host = std::env::var("EAIDE_AGENT_HOST").unwrap_or_else(|_| "127.0.0.1".into());
             let port = std::env::var("EAIDE_AGENT_PORT").unwrap_or_else(|_| "8765".into());
             let health_url = format!("http://{}:{}/health", host, port);
-            let _ = tauri::async_runtime::spawn(async move {
+            tauri::async_runtime::spawn(async move {
                 for i in 0..60 {
                     tokio::time::sleep(Duration::from_millis(500)).await;
                     match reqwest::Client::new()
@@ -678,38 +678,38 @@ pub fn restart_agent_process() {
     }
 }
 
-/// 从 `%APPDATA%/eaide/llm-config.json` 读出 env vars。
+/// 从 `<安装目录>/config/llm-config.json` 读出 env vars（遗留邮箱，兼容旧安装）。
 ///
-/// 返回的 Vec 每个元素是 (KEY, value)：
-///   - "mock"  → EAIDE_LLM_BACKEND=mock
-///   - "ollama" → EAIDE_LLM_BACKEND=ollama + 不设 EAIDE_PRIVATE_*
-///   - "private" → EAIDE_LLM_BACKEND=private + EAIDE_PRIVATE_LLM_BASE_URL/API_KEY/MODEL
-///   - "custom" → 类似
-/// 读不到文件 → 走默认（mock）。
+/// 双轨制统一后：active 配置的长期事实源是 router.db llm_kv（Python 侧
+/// active_config 启动时解析/迁移）。本函数只负责把 json 镜像转 env；
+/// json 不存在/解析失败时不再默认 mock，而是返空 —— 由 Python 侧
+/// 按 env > db > 默认 ollama 解析，避免"模型已注册却静默走 mock"。
 fn read_llm_env() -> Vec<(String, String)> {
-    let path = std::env::var("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("eaide")
-        .join("llm-config.json");
+    let path = llm_config_file_path();
 
     let raw = match std::fs::read_to_string(&path) {
         Ok(s) => s,
         Err(e) => {
-            app_log(&format!("[agent_manager] read_llm_env: 读取 {} 失败: {} → 用默认 mock", path.display(), e));
-            return vec![("EAIDE_LLM_BACKEND".into(), "mock".into())];
+            app_log(&format!(
+                "[agent_manager] read_llm_env: 读取 {} 失败: {} → 交由 Python 侧解析（db/默认 ollama）",
+                path.display(), e
+            ));
+            return vec![];
         }
     };
 
     let v: serde_json::Value = match serde_json::from_str(&raw) {
         Ok(v) => v,
         Err(e) => {
-            app_log(&format!("[agent_manager] read_llm_env: JSON 解析失败: {} → 用默认 mock", e));
-            return vec![("EAIDE_LLM_BACKEND".into(), "mock".into())];
+            app_log(&format!(
+                "[agent_manager] read_llm_env: JSON 解析失败: {} → 交由 Python 侧解析（db/默认 ollama）",
+                e
+            ));
+            return vec![];
         }
     };
 
-    let active = v.get("active").and_then(|x| x.as_str()).unwrap_or("mock");
+    let active = v.get("active").and_then(|x| x.as_str()).unwrap_or("ollama");
     let mut envs: Vec<(String, String)> = vec![("EAIDE_LLM_BACKEND".into(), active.into())];
 
     match active {
@@ -838,6 +838,14 @@ fn write_log(file_name: &str, msg: &str) {
 }
 
 pub(crate) fn get_app_data_dir() -> PathBuf {
+    // 用户要求：所有运行时文件都在安装目录内（不用 %LOCALAPPDATA%）。
+    // 优先 exe 所在目录（= 安装目录）；拿不到时回退用户目录兼容开发场景。
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let _ = std::fs::create_dir_all(dir);
+            return dir.to_path_buf();
+        }
+    }
     #[cfg(target_os = "windows")]
     let dir = {
         std::env::var("LOCALAPPDATA")
@@ -854,6 +862,12 @@ pub(crate) fn get_app_data_dir() -> PathBuf {
     // 容错：首次启动 / 父目录未建也能写
     let _ = std::fs::create_dir_all(&dir);
     dir
+}
+
+/// LLM active 配置 json 镜像路径：<安装目录>/config/llm-config.json
+/// （与 EAIDE_CONFIG_DIR 约定一致；长期事实源仍是 router.db llm_kv）。
+pub(crate) fn llm_config_file_path() -> PathBuf {
+    get_app_data_dir().join("config").join("llm-config.json")
 }
 
 /// 日志子目录：所有运行时日志都进这里，方便集中排查。

@@ -30,6 +30,12 @@ export interface Skill {
   system_prompt: string;
   few_shot_examples: FewShotExample[];
 
+  /** 专家团预设（与后端 models.py 镜像，旧数据缺省空数组）：
+   * 本业务默认专家团 / 办理材料清单 / 最终交付物清单 */
+  required_expert_team_ids: string[];
+  materials: string[];
+  deliverables: string[];
+
   source_path: string;
   loaded_at: number;
   validation_errors: string[];

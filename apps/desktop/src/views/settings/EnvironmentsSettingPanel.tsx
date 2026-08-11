@@ -411,7 +411,7 @@ export function EnvironmentsSettingPanel(): JSX.Element {
 
 // env 名服务端校验规则（与后端 Environment._ENV_PATTERN 保持一致）：
 //   ^[^\W\d][\w.\-]{0,62}$   开头为字母（unicode），后跟字母/数字/. _ -
-const ENV_NAME_RE = /^[^\W\d][\w.\-]{0,62}$/u;
+const ENV_NAME_RE = /^[^\W\d][\w.-]{0,62}$/u;
 
 function CreateEnvModal({
   onCancel,

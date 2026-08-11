@@ -13,6 +13,7 @@
     在单进程内有 Lock 保护已经够了，不再需要 .tmp + rename。
     老 layout (envs/*.json + index.json) 启动时一次性迁过来。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -22,7 +23,6 @@ import os
 import platform
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -33,7 +33,7 @@ log = logging.getLogger("agent.envconfig.storage")
 
 try:
     from agent.audit.store import app_log  # type: ignore
-except Exception:  # noqa: BLE001
+except Exception:
 
     def app_log(msg: str) -> None:  # type: ignore
         log.info(msg)
@@ -171,7 +171,7 @@ def _read_environments() -> Environments:
         return _seed_defaults()
     try:
         envs = Environments.model_validate(raw)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         log.warning("environments.json schema 校验失败（%s），重新 seed", e)
         return _seed_defaults()
     return envs
@@ -243,9 +243,7 @@ def _migrate_legacy_if_pending() -> None:
     if not (has_envs or has_index):
         return
 
-    app_log(
-        f"[storage] 检测到老 layout（{legacy_dir}），开始一次性迁移到 {p}"
-    )
+    app_log(f"[storage] 检测到老 layout（{legacy_dir}），开始一次性迁移到 {p}")
     envs = Environments()
 
     # 1. 读 index.json → 拿 active 标记 + label / description
@@ -270,7 +268,7 @@ def _migrate_legacy_if_pending() -> None:
                         description=item.get("description", ""),
                     )
                 )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.warning("老 index.json 解析失败：%s", e)
 
     # 2. 逐个读 envs/*.json，把 databases / api_gateways / mcp_servers / target_servers 合并
@@ -284,7 +282,7 @@ def _migrate_legacy_if_pending() -> None:
                 raw = json.loads(f.read_text(encoding="utf-8"))
                 cfg_dict = raw.get("config") or raw
                 cfg = EnvConfig.model_validate(cfg_dict)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 log.warning("老 env 文件 %s 解析失败：%s", f, e)
                 continue
             # 已存在的同名 env 合并（index 提供的 label 优先）
@@ -295,8 +293,7 @@ def _migrate_legacy_if_pending() -> None:
             if existing is not None:
                 # 用磁盘的完整配置覆盖 index 的占位项
                 envs.environments = [
-                    cfg if c.environment == env_name else c
-                    for c in envs.environments
+                    cfg if c.environment == env_name else c for c in envs.environments
                 ]
             else:
                 envs.environments.append(cfg)

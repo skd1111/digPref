@@ -1,12 +1,10 @@
 """test_codenav_api.py —— FastAPI 路由 + mcp_tools 测试。"""
+
 from __future__ import annotations
 
 import asyncio
-import os
-from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
 
 @pytest.fixture
@@ -23,7 +21,9 @@ def env_isolated(tmp_path, monkeypatch):
 def client(env_isolated):
     # 测试时直接重新 import api 模块以触发单例初始化
     import importlib
+
     from agent.codenav import api as codenav_api
+
     importlib.reload(codenav_api)
     # 准备测试文件
     (env_isolated / "src" / "A.java").write_text(
@@ -35,18 +35,21 @@ def client(env_isolated):
 
 def test_jump_local_hit(client):
     """本地索引命中 → source='local_index', confidence=1.0"""
-    import asyncio
     asyncio.run(client._get_indexer().full_scan())
 
-    from fastapi.testclient import TestClient as TC
+    from fastapi.testclient import TestClient
+
     app = __import__("agent.main", fromlist=["create_app"]).create_app()
-    c = TC(app)
-    resp = c.post("/codenav/jump", json={
-        "symbol": "HelloWorld",
-        "current_file": str(client._get_indexer()._db_path),
-        "context": "",
-        "line": 0,
-    })
+    c = TestClient(app)
+    resp = c.post(
+        "/codenav/jump",
+        json={
+            "symbol": "HelloWorld",
+            "current_file": str(client._get_indexer()._db_path),
+            "context": "",
+            "line": 0,
+        },
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["source"] == "local_index"
@@ -56,18 +59,21 @@ def test_jump_local_hit(client):
 
 def test_jump_not_found(client):
     """V1：未命中 → source='not_found'，不跳不调 LLM（避免幻觉）"""
-    import asyncio
     asyncio.run(client._get_indexer().full_scan())
 
-    from fastapi.testclient import TestClient as TC
+    from fastapi.testclient import TestClient
+
     app = __import__("agent.main", fromlist=["create_app"]).create_app()
-    c = TC(app)
-    resp = c.post("/codenav/jump", json={
-        "symbol": "NonExistent",
-        "current_file": str(client._get_indexer()._db_path),
-        "context": "ctx",
-        "line": 0,
-    })
+    c = TestClient(app)
+    resp = c.post(
+        "/codenav/jump",
+        json={
+            "symbol": "NonExistent",
+            "current_file": str(client._get_indexer()._db_path),
+            "context": "ctx",
+            "line": 0,
+        },
+    )
     assert resp.status_code == 200
     body = resp.json()
     # V1：纯索引，未命中就 not_found
@@ -77,10 +83,10 @@ def test_jump_not_found(client):
 
 
 def test_index_and_status(client):
-    import asyncio
-    from fastapi.testclient import TestClient as TC
+    from fastapi.testclient import TestClient
+
     app = __import__("agent.main", fromlist=["create_app"]).create_app()
-    c = TC(app)
+    c = TestClient(app)
     # 先索引
     resp = c.post("/codenav/index", json={"root_paths": None})
     assert resp.status_code == 200
@@ -96,12 +102,12 @@ def test_index_and_status(client):
 
 
 def test_list_symbols(client):
-    import asyncio
     asyncio.run(client._get_indexer().full_scan())
 
-    from fastapi.testclient import TestClient as TC
+    from fastapi.testclient import TestClient
+
     app = __import__("agent.main", fromlist=["create_app"]).create_app()
-    c = TC(app)
+    c = TestClient(app)
     resp = c.get("/codenav/symbols?name=HelloWorld")
     assert resp.status_code == 200
     list_ = resp.json()

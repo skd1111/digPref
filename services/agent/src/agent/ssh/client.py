@@ -10,6 +10,7 @@
 依赖：
   - asyncssh >= 2.14（已安装 2.24.0）
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -26,19 +27,17 @@ from agent.ssh.models import (
     SshAuthError,
     SshConnectionError,
     SshExecResponse,
-    SshSession,
-    check_session_limit,
     sanitize_command,
     sanitize_host,
     sanitize_path,
     sanitize_user,
 )
 
-
 logger = logging.getLogger(__name__)
 
 
 # ---- 异步 SSH 客户端包装 -----------------------------------------------------
+
 
 class SshClient:
     """单个 SSH 会话的客户端（V0 PoC）。
@@ -124,7 +123,9 @@ class SshClient:
             else:
                 raise ValueError(f"unknown auth_method: {self._auth_method}")
             self._status = ConnectionStatus.CONNECTED
-            logger.info("ssh_connected host=%s port=%d user=%s", self._host, self._port, self._username)
+            logger.info(
+                "ssh_connected host=%s port=%d user=%s", self._host, self._port, self._username
+            )
         except asyncio.TimeoutError as exc:
             self._status = ConnectionStatus.ERROR
             raise SshConnectionError(f"connection timeout after {self._connect_timeout}s") from exc
@@ -134,7 +135,7 @@ class SshClient:
         except asyncssh.Error as exc:
             self._status = ConnectionStatus.ERROR
             raise SshConnectionError(f"SSH error: {exc}") from exc
-        except (OSError, asyncio.TimeoutError) as exc:
+        except OSError as exc:
             self._status = ConnectionStatus.ERROR
             raise SshConnectionError(f"connection failed: {type(exc).__name__}: {exc}") from exc
 
@@ -178,14 +179,20 @@ class SshClient:
                 timeout=timeout_sec,
             )
             elapsed_ms = int((time.monotonic() - started) * 1000)
-            stdout = result.stdout if isinstance(result.stdout, str) else (
-                result.stdout.decode("utf-8", errors="replace") if result.stdout else ""
+            stdout = (
+                result.stdout
+                if isinstance(result.stdout, str)
+                else (result.stdout.decode("utf-8", errors="replace") if result.stdout else "")
             )
-            stderr = result.stderr if isinstance(result.stderr, str) else (
-                result.stderr.decode("utf-8", errors="replace") if result.stderr else ""
+            stderr = (
+                result.stderr
+                if isinstance(result.stderr, str)
+                else (result.stderr.decode("utf-8", errors="replace") if result.stderr else "")
             )
-            exit_code = result.exit_status if hasattr(result, "exit_status") else (
-                result.returncode if hasattr(result, "returncode") else None
+            exit_code = (
+                result.exit_status
+                if hasattr(result, "exit_status")
+                else (result.returncode if hasattr(result, "returncode") else None)
             )
             return SshExecResponse(
                 session_id="",  # 实际 session_id 由调用方填充
@@ -196,7 +203,7 @@ class SshClient:
                 elapsed_ms=elapsed_ms,
                 ok=exit_code == 0,
             )
-        except asyncio.TimeoutError as exc:
+        except asyncio.TimeoutError:
             elapsed_ms = int((time.monotonic() - started) * 1000)
             return SshExecResponse(
                 session_id="",
@@ -220,19 +227,22 @@ class SshClient:
             raise SshConnectionError("not connected")
         path = sanitize_path(path)
         if self._sftp is None:
-            import asyncssh
             self._sftp = await self._conn.start_sftp_client()
         entries: list[SftpEntry] = []
         async for entry in self._sftp.scandir(path):
             attrs = entry.attrs
-            entries.append(SftpEntry(
-                path=f"{path.rstrip('/')}/{entry.name}",
-                name=entry.name,
-                is_dir=attrs.permissions is not None and (attrs.permissions & 0o40000) != 0,
-                size=attrs.size if not (attrs.permissions and (attrs.permissions & 0o40000)) else None,
-                mtime=int(attrs.mtime) if attrs.mtime else None,
-                permissions=attrs.permissions,
-            ))
+            entries.append(
+                SftpEntry(
+                    path=f"{path.rstrip('/')}/{entry.name}",
+                    name=entry.name,
+                    is_dir=attrs.permissions is not None and (attrs.permissions & 0o40000) != 0,
+                    size=attrs.size
+                    if not (attrs.permissions and (attrs.permissions & 0o40000))
+                    else None,
+                    mtime=int(attrs.mtime) if attrs.mtime else None,
+                    permissions=attrs.permissions,
+                )
+            )
         return entries
 
     async def sftp_get(self, remote_path: str, local_path: str) -> int:
@@ -245,7 +255,6 @@ class SshClient:
             raise SshConnectionError("not connected")
         remote_path = sanitize_path(remote_path)
         if self._sftp is None:
-            import asyncssh
             self._sftp = await self._conn.start_sftp_client()
         Path(local_path).parent.mkdir(parents=True, exist_ok=True)
         async with self._sftp.open(remote_path, "rb") as src:
@@ -253,8 +262,18 @@ class SshClient:
         Path(local_path).write_bytes(data)
         return len(data)
 
+    # ---- 异步上下文管理器支持 ---------------------------------------------------
+
+    async def __aenter__(self) -> SshClient:
+        await self.connect()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        await self.disconnect()
+
 
 # ---- 辅助：脱敏密码用于审计日志 ----------------------------------------------
+
 
 def _scrub_password(args: dict) -> dict:
     """脱敏：password 字段只保留长度，不保留原值。"""
@@ -262,13 +281,3 @@ def _scrub_password(args: dict) -> dict:
     if "password" in scrubbed and isinstance(scrubbed["password"], str):
         scrubbed["password"] = {"length": len(scrubbed["password"])}
     return scrubbed
-
-
-    # ---- 异步上下文管理器支持 ---------------------------------------------------
-
-    async def __aenter__(self) -> "SshClient":
-        await self.connect()
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
-        await self.disconnect()

@@ -12,6 +12,7 @@
 未知 risk/autonomy 值一律保守：risk 按 medium 处理、autonomy 按 interactive。
 红线：本表不感知工具语义；硬阻断判定由 is_hard_blocked 单独负责。
 """
+
 from __future__ import annotations
 
 import re

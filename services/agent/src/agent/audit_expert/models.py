@@ -10,21 +10,21 @@ V1 接力：
   - TOTP MFA 真集成
   - OA/IM 集成
 """
+
 from __future__ import annotations
 
 import hashlib
-import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Literal
-
 
 # ---- 枚举 -------------------------------------------------------------------
 
+
 class RiskLevel(str, Enum):
     """风险等级（与 builtin dispatcher TOOL_RISK_LEVEL 对齐）。"""
+
     READ = "read"
     LOW = "low"
     MEDIUM = "medium"
@@ -34,6 +34,7 @@ class RiskLevel(str, Enum):
 
 class ApprovalStatus(str, Enum):
     """审批任务状态。"""
+
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"
@@ -44,22 +45,25 @@ class ApprovalStatus(str, Enum):
 
 class ActionType(str, Enum):
     """审批动作类型。"""
+
     APPROVE = "approve"
     REJECT = "reject"
     DELEGATE = "delegate"
-    INQUIRE = "inquire"   # 询问 / 要求补充信息
+    INQUIRE = "inquire"  # 询问 / 要求补充信息
     WITHDRAW = "withdraw"
 
 
 class ComplianceLevel(str, Enum):
     """合规检查级别。"""
-    INFO = "info"               # 信息性提示
-    WARNING = "warning"         # 警告（建议关注）
-    VIOLATION = "violation"     # 违规（必须修复）
+
+    INFO = "info"  # 信息性提示
+    WARNING = "warning"  # 警告（建议关注）
+    VIOLATION = "violation"  # 违规（必须修复）
 
 
 class EvidenceType(str, Enum):
     """证据类型。"""
+
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
     HITL_PROMPT = "hitl_prompt"
@@ -70,6 +74,7 @@ class EvidenceType(str, Enum):
 
 
 # ---- 数据类 -----------------------------------------------------------------
+
 
 @dataclass
 class ApprovalTask:
@@ -98,6 +103,7 @@ class ApprovalTask:
         first_approver_signed_at: 第一审批时间。
         second_approver_signed_at: 第二审批时间。
     """
+
     task_id: str
     run_id: str
     title: str
@@ -136,6 +142,7 @@ class ApprovalAction:
         prev_hash: 上一个 action 的 hash（链式签名）。
         signature_hash: 当前 action 的 hash（含 prev_hash）。
     """
+
     action_id: str
     task_id: str
     action_type: ActionType
@@ -161,6 +168,7 @@ class EvidenceEntry:
         timestamp: 时间。
         hash: 内容 SHA-256 hash（防篡改）。
     """
+
     evidence_id: str
     task_id: str
     evidence_type: EvidenceType
@@ -183,6 +191,7 @@ class ComplianceCheck:
         message: 检查消息。
         passed: 是否通过。
     """
+
     check_id: str
     task_id: str
     rule_name: str
@@ -193,6 +202,7 @@ class ComplianceCheck:
 
 
 # ---- 签名链（V0 SHA-256，V1 接力 RSA）-----------------------------------------
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -216,16 +226,18 @@ def compute_signature(action: ApprovalAction, prev_hash: str = "") -> str:
         action.timestamp = _now_iso()
     if not action.prev_hash and prev_hash:
         action.prev_hash = prev_hash
-    payload = "|".join([
-        action.action_id,
-        action.task_id,
-        action.action_type.value,
-        action.actor,
-        action.reason or "",
-        "1" if action.mfa_verified else "0",
-        action.timestamp,
-        action.prev_hash or "",
-    ])
+    payload = "|".join(
+        [
+            action.action_id,
+            action.task_id,
+            action.action_type.value,
+            action.actor,
+            action.reason or "",
+            "1" if action.mfa_verified else "0",
+            action.timestamp,
+            action.prev_hash or "",
+        ]
+    )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -254,6 +266,7 @@ def generate_id() -> str:
 
 
 # ---- 工具 --------------------------------------------------------------------
+
 
 def check_decision_required_fields(action: ApprovalAction) -> list[str]:
     """校验决策动作的必填字段。返缺失字段列表。

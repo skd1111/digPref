@@ -75,7 +75,7 @@ impl AppConfig {
             .ok()
             .and_then(|v| parse_bool(&v))
             .or(yaml_cfg.devtools)
-            .unwrap_or_else(|| cfg!(debug_assertions));
+            .unwrap_or(cfg!(debug_assertions));
 
         Ok(Self {
             agent_base_url,

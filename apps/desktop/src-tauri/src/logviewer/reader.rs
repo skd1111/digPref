@@ -34,8 +34,8 @@
 //!   read is rejected (caller should re-index).
 //! - **Error mapping**:
 //!   - missing index row  -> `AppError::NotFound`
-//!   - out-of-range / inverted / fingerprint mismatch / blob decode error
-//!                         -> `AppError::Validation`
+//!   - out-of-range / inverted / fingerprint mismatch / blob decode error ->
+//!     `AppError::Validation`
 //!   - I/O failures       -> underlying `AppError::Io` / `AppError::Internal`
 //!
 //! Tests in the inner `mod tests` exercise every contract above. They are
@@ -43,17 +43,14 @@
 
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
 use crate::logviewer::encoding::decode_line;
 use crate::logviewer::indexer::FileIndexer;
-use crate::logviewer::storage::{decode_u64_le, FileIndex, LogIndexStorage};
+use crate::logviewer::storage::{decode_u64_le, LogIndexStorage};
 
 /// Result of a single `read_lines` call.
 ///
@@ -214,11 +211,10 @@ impl LineReader {
             .split('\n')
             .map(String::from)
             .collect();
-        if buffer[..effective_end].last() == Some(&b'\n') {
-            if matches!(lines.last(), Some(s) if s.is_empty()) {
+        if buffer[..effective_end].last() == Some(&b'\n')
+            && matches!(lines.last(), Some(s) if s.is_empty()) {
                 lines.pop();
             }
-        }
 
         Ok(ReadLinesResult {
             lines,
@@ -236,6 +232,8 @@ impl LineReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
 
     // -- shared fixture helpers ----------------------------------------
 

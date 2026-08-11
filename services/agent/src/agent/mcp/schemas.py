@@ -1,10 +1,10 @@
 """Schemas for MCP tool invocations — kept in sync with shared-protocol."""
+
 from __future__ import annotations
 
 from typing import Literal
 
 from pydantic import BaseModel, Field
-
 
 RiskLevel = Literal["read", "low", "medium", "high", "critical"]
 

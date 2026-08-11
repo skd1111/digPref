@@ -1,4 +1,5 @@
 """rest.request — perform the actual HTTP call."""
+
 from __future__ import annotations
 
 import json

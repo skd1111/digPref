@@ -15,13 +15,13 @@ A `PolicyDecision` is the only thing the hitl_gate node consumes; it doesn't
 care how the decision was made. This lets us swap in OPA / Rego later
 without touching the graph.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal
 
 from agent.config import settings
-
 
 DecisionKind = Literal["approve", "reject", "needs_hitl"]
 RiskLevel = Literal["read", "low", "medium", "high", "critical"]
@@ -30,6 +30,7 @@ RiskLevel = Literal["read", "low", "medium", "high", "critical"]
 @dataclass(frozen=True)
 class PolicyDecision:
     """Output of `policy_for(call)`."""
+
     decision: DecisionKind
     risk_level: RiskLevel
     reason: str = ""
@@ -93,4 +94,5 @@ def _derive_risk(call: dict) -> RiskLevel:
 
     # Fall back to write_detector's classification
     from agent.safety.write_detector import is_write_call
+
     return "medium" if is_write_call(call) else "read"

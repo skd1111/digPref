@@ -21,6 +21,7 @@ TypeScript / JavaScript:
   interface_declaration   → interface
   enum_declaration        → enum
 """
+
 from __future__ import annotations
 
 import logging
@@ -29,7 +30,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-from tree_sitter import Node, Parser
+from tree_sitter import Node
 
 from agent.codenav.language_registry import (
     get_parser_for_file,
@@ -40,10 +41,23 @@ from agent.codenav.models import IndexStatus, Symbol
 logger = logging.getLogger(__name__)
 
 # 跳过目录（性能 + 噪音）
-_IGNORE_DIRS = frozenset({
-    ".git", "node_modules", "__pycache__", "target", "dist", "build",
-    ".venv", "venv", ".idea", ".vscode", ".next", ".gradle", ".pytest_cache",
-})
+_IGNORE_DIRS = frozenset(
+    {
+        ".git",
+        "node_modules",
+        "__pycache__",
+        "target",
+        "dist",
+        "build",
+        ".venv",
+        "venv",
+        ".idea",
+        ".vscode",
+        ".next",
+        ".gradle",
+        ".pytest_cache",
+    }
+)
 
 # 单文件大小上限（默认 1MB；超过认为是大文件不索引）
 _MAX_FILE_BYTES = 1024 * 1024
@@ -95,7 +109,7 @@ class WorkspaceIndexer:
         if self._is_scanning:
             return self.get_status()
         self._is_scanning = True
-        started = time.time()
+        time.time()
         try:
             symbols: list[Symbol] = []
             files_scanned: set[str] = set()
@@ -117,8 +131,8 @@ class WorkspaceIndexer:
                 with self._connect() as conn:
                     # 收集当前 DB 中所有 file_path
                     existing = {
-                        r[0] for r in
-                        conn.execute("SELECT DISTINCT file_path FROM symbols").fetchall()
+                        r[0]
+                        for r in conn.execute("SELECT DISTINCT file_path FROM symbols").fetchall()
                     }
                     stale = existing - files_scanned
                     for fp in stale:
@@ -187,8 +201,8 @@ class WorkspaceIndexer:
 
         if language:
             # 测试用：直接给定语言
-            from agent.codenav.language_registry import _build_parser
-            from agent.codenav.language_registry import _LANGUAGE_BUILDERS
+            from agent.codenav.language_registry import _LANGUAGE_BUILDERS, _build_parser
+
             ext = next((e for e, (_, lid) in _LANGUAGE_BUILDERS.items() if lid == language), None)
             if not ext:
                 return []
@@ -251,8 +265,17 @@ class WorkspaceIndexer:
                       language=excluded.language,
                       last_modified=excluded.last_modified
                     """,
-                    (s.name, s.kind, s.file_path, s.start_line, s.end_line,
-                     s.signature, s.parent_class, s.language, mtime),
+                    (
+                        s.name,
+                        s.kind,
+                        s.file_path,
+                        s.start_line,
+                        s.end_line,
+                        s.signature,
+                        s.parent_class,
+                        s.language,
+                        mtime,
+                    ),
                 )
 
     def _count_distinct_files(self) -> int:
@@ -270,8 +293,9 @@ class WorkspaceIndexer:
 # Tree-sitter 节点 → Symbol
 # ============================================================================
 
+
 def _node_text(node: Node, source: bytes) -> str:
-    return source[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
+    return source[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
 
 
 def _find_ancestor(node: Node, type_name: str) -> Node | None:
@@ -305,7 +329,9 @@ def _make_symbol(
     )
 
 
-def _extract_from_tree(root: Node, source: bytes, file_path: str, language: str, last_mtime: int) -> list[Symbol]:
+def _extract_from_tree(
+    root: Node, source: bytes, file_path: str, language: str, last_mtime: int
+) -> list[Symbol]:
     """分发到具体语言的 extractor。"""
     if language == "java":
         return _extract_java(root, source, file_path, language, last_mtime)
@@ -316,7 +342,9 @@ def _extract_from_tree(root: Node, source: bytes, file_path: str, language: str,
     return []
 
 
-def _extract_java(root: Node, source: bytes, file_path: str, language: str, last_mtime: int) -> list[Symbol]:
+def _extract_java(
+    root: Node, source: bytes, file_path: str, language: str, last_mtime: int
+) -> list[Symbol]:
     out: list[Symbol] = []
     # 顶层 class/interface/enum
     for child in root.children:
@@ -325,10 +353,17 @@ def _extract_java(root: Node, source: bytes, file_path: str, language: str, last
             if not name_node:
                 continue
             cls_name = _node_text(name_node, source)
-            out.append(_make_symbol(
-                cls_name, "class", child, file_path, language, last_mtime,
-                signature=_node_text(child, source).split("{")[0].strip(),
-            ))
+            out.append(
+                _make_symbol(
+                    cls_name,
+                    "class",
+                    child,
+                    file_path,
+                    language,
+                    last_mtime,
+                    signature=_node_text(child, source).split("{")[0].strip(),
+                )
+            )
             # 方法
             body = child.child_by_field_name("body")
             if body:
@@ -337,43 +372,69 @@ def _extract_java(root: Node, source: bytes, file_path: str, language: str, last
                         mn = member.child_by_field_name("name")
                         if not mn:
                             continue
-                        out.append(_make_symbol(
-                            _node_text(mn, source), "method", member,
-                            file_path, language, last_mtime,
-                            signature=_node_text(member, source).split("{")[0].strip(),
-                            parent_class=cls_name,
-                        ))
+                        out.append(
+                            _make_symbol(
+                                _node_text(mn, source),
+                                "method",
+                                member,
+                                file_path,
+                                language,
+                                last_mtime,
+                                signature=_node_text(member, source).split("{")[0].strip(),
+                                parent_class=cls_name,
+                            )
+                        )
                     elif member.type == "field_declaration":
                         # 字段可能有多个 declarator；取第一个名字
                         for sub in member.children:
                             if sub.type == "variable_declarator":
                                 vn = sub.child_by_field_name("name")
                                 if vn:
-                                    out.append(_make_symbol(
-                                        _node_text(vn, source), "field", sub,
-                                        file_path, language, last_mtime,
-                                        parent_class=cls_name,
-                                    ))
+                                    out.append(
+                                        _make_symbol(
+                                            _node_text(vn, source),
+                                            "field",
+                                            sub,
+                                            file_path,
+                                            language,
+                                            last_mtime,
+                                            parent_class=cls_name,
+                                        )
+                                    )
                                     break
         elif child.type == "interface_declaration":
             name_node = child.child_by_field_name("name")
             if name_node:
-                out.append(_make_symbol(
-                    _node_text(name_node, source), "interface", child,
-                    file_path, language, last_mtime,
-                    signature=_node_text(child, source).split("{")[0].strip(),
-                ))
+                out.append(
+                    _make_symbol(
+                        _node_text(name_node, source),
+                        "interface",
+                        child,
+                        file_path,
+                        language,
+                        last_mtime,
+                        signature=_node_text(child, source).split("{")[0].strip(),
+                    )
+                )
         elif child.type == "enum_declaration":
             name_node = child.child_by_field_name("name")
             if name_node:
-                out.append(_make_symbol(
-                    _node_text(name_node, source), "enum", child,
-                    file_path, language, last_mtime,
-                ))
+                out.append(
+                    _make_symbol(
+                        _node_text(name_node, source),
+                        "enum",
+                        child,
+                        file_path,
+                        language,
+                        last_mtime,
+                    )
+                )
     return out
 
 
-def _extract_python(root: Node, source: bytes, file_path: str, language: str, last_mtime: int) -> list[Symbol]:
+def _extract_python(
+    root: Node, source: bytes, file_path: str, language: str, last_mtime: int
+) -> list[Symbol]:
     out: list[Symbol] = []
     for child in root.children:
         if child.type == "class_definition":
@@ -381,10 +442,17 @@ def _extract_python(root: Node, source: bytes, file_path: str, language: str, la
             if not name_node:
                 continue
             cls_name = _node_text(name_node, source)
-            out.append(_make_symbol(
-                cls_name, "class", child, file_path, language, last_mtime,
-                signature=_node_text(child, source).split(":")[0].strip(),
-            ))
+            out.append(
+                _make_symbol(
+                    cls_name,
+                    "class",
+                    child,
+                    file_path,
+                    language,
+                    last_mtime,
+                    signature=_node_text(child, source).split(":")[0].strip(),
+                )
+            )
             body = child.child_by_field_name("body")
             if body:
                 for member in body.children:
@@ -392,24 +460,38 @@ def _extract_python(root: Node, source: bytes, file_path: str, language: str, la
                         mn = member.child_by_field_name("name")
                         if not mn:
                             continue
-                        out.append(_make_symbol(
-                            _node_text(mn, source), "method", member,
-                            file_path, language, last_mtime,
-                            signature=_node_text(member, source).split(":")[0].strip(),
-                            parent_class=cls_name,
-                        ))
+                        out.append(
+                            _make_symbol(
+                                _node_text(mn, source),
+                                "method",
+                                member,
+                                file_path,
+                                language,
+                                last_mtime,
+                                signature=_node_text(member, source).split(":")[0].strip(),
+                                parent_class=cls_name,
+                            )
+                        )
         elif child.type == "function_definition":
             name_node = child.child_by_field_name("name")
             if name_node:
-                out.append(_make_symbol(
-                    _node_text(name_node, source), "function", child,
-                    file_path, language, last_mtime,
-                    signature=_node_text(child, source).split(":")[0].strip(),
-                ))
+                out.append(
+                    _make_symbol(
+                        _node_text(name_node, source),
+                        "function",
+                        child,
+                        file_path,
+                        language,
+                        last_mtime,
+                        signature=_node_text(child, source).split(":")[0].strip(),
+                    )
+                )
     return out
 
 
-def _extract_typescript(root: Node, source: bytes, file_path: str, language: str, last_mtime: int) -> list[Symbol]:
+def _extract_typescript(
+    root: Node, source: bytes, file_path: str, language: str, last_mtime: int
+) -> list[Symbol]:
     out: list[Symbol] = []
     # 顶层 children；export_statement 包住 declaration 时穿透一层
     for child in root.children:
@@ -417,8 +499,12 @@ def _extract_typescript(root: Node, source: bytes, file_path: str, language: str
         inner = child
         if child.type in ("export_statement", "export_default_statement"):
             for sub in child.children:
-                if sub.type in ("class_declaration", "function_declaration",
-                                "interface_declaration", "enum_declaration"):
+                if sub.type in (
+                    "class_declaration",
+                    "function_declaration",
+                    "interface_declaration",
+                    "enum_declaration",
+                ):
                     inner = sub
                     break
             else:
@@ -428,10 +514,17 @@ def _extract_typescript(root: Node, source: bytes, file_path: str, language: str
             if not name_node:
                 continue
             cls_name = _node_text(name_node, source)
-            out.append(_make_symbol(
-                cls_name, "class", inner, file_path, language, last_mtime,
-                signature=_node_text(inner, source).split("{")[0].strip(),
-            ))
+            out.append(
+                _make_symbol(
+                    cls_name,
+                    "class",
+                    inner,
+                    file_path,
+                    language,
+                    last_mtime,
+                    signature=_node_text(inner, source).split("{")[0].strip(),
+                )
+            )
             body = inner.child_by_field_name("body")
             if body:
                 for member in body.children:
@@ -439,40 +532,70 @@ def _extract_typescript(root: Node, source: bytes, file_path: str, language: str
                         mn = member.child_by_field_name("name")
                         if not mn:
                             continue
-                        out.append(_make_symbol(
-                            _node_text(mn, source), "method", member,
-                            file_path, language, last_mtime,
-                            signature=_node_text(member, source).split("{")[0].strip(),
-                            parent_class=cls_name,
-                        ))
+                        out.append(
+                            _make_symbol(
+                                _node_text(mn, source),
+                                "method",
+                                member,
+                                file_path,
+                                language,
+                                last_mtime,
+                                signature=_node_text(member, source).split("{")[0].strip(),
+                                parent_class=cls_name,
+                            )
+                        )
                     elif member.type in ("public_field_definition", "field_declaration"):
                         mn = member.child_by_field_name("name")
                         if mn:
-                            out.append(_make_symbol(
-                                _node_text(mn, source), "field", member,
-                                file_path, language, last_mtime,
-                                parent_class=cls_name,
-                            ))
+                            out.append(
+                                _make_symbol(
+                                    _node_text(mn, source),
+                                    "field",
+                                    member,
+                                    file_path,
+                                    language,
+                                    last_mtime,
+                                    parent_class=cls_name,
+                                )
+                            )
         elif inner.type == "function_declaration":
             name_node = inner.child_by_field_name("name")
             if name_node:
-                out.append(_make_symbol(
-                    _node_text(name_node, source), "function", inner,
-                    file_path, language, last_mtime,
-                    signature=_node_text(inner, source).split("{")[0].strip(),
-                ))
+                out.append(
+                    _make_symbol(
+                        _node_text(name_node, source),
+                        "function",
+                        inner,
+                        file_path,
+                        language,
+                        last_mtime,
+                        signature=_node_text(inner, source).split("{")[0].strip(),
+                    )
+                )
         elif inner.type == "interface_declaration":
             name_node = inner.child_by_field_name("name")
             if name_node:
-                out.append(_make_symbol(
-                    _node_text(name_node, source), "interface", inner,
-                    file_path, language, last_mtime,
-                ))
+                out.append(
+                    _make_symbol(
+                        _node_text(name_node, source),
+                        "interface",
+                        inner,
+                        file_path,
+                        language,
+                        last_mtime,
+                    )
+                )
         elif inner.type == "enum_declaration":
             name_node = inner.child_by_field_name("name")
             if name_node:
-                out.append(_make_symbol(
-                    _node_text(name_node, source), "enum", inner,
-                    file_path, language, last_mtime,
-                ))
+                out.append(
+                    _make_symbol(
+                        _node_text(name_node, source),
+                        "enum",
+                        inner,
+                        file_path,
+                        language,
+                        last_mtime,
+                    )
+                )
     return out

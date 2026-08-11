@@ -4,12 +4,13 @@ Two paths:
     - Intent = chitchat OR empty plan  →  respond directly from history
     - Otherwise                        →  call LLM.summarise(plan, results)
 """
+
 from __future__ import annotations
 
 from typing import Any
 
-from agent.graph.state import AgentState, record_trace
 from agent.graph.nodes.repair import MAX_RETRIES
+from agent.graph.state import AgentState, record_trace
 from agent.llm.router import LMRouter
 
 
@@ -28,20 +29,25 @@ async def responder_node(state: AgentState, llm: LMRouter) -> dict:
         if mode == "REFUSE":
             return _terminal_answer(
                 inner.get("refusal_message") or "该请求无法执行。",
-                "refuse", state,
+                "refuse",
+                state,
             )
         if mode == "ASK_USER":
             questions = inner.get("clarifying_questions") or []
-            body = "需要补充以下信息后再继续：\n\n" + "\n".join(
-                f"- {q}" for q in questions
-            )
+            body = "需要补充以下信息后再继续：\n\n" + "\n".join(f"- {q}" for q in questions)
             return _terminal_answer(body, "ask_user", state)
         if inner.get("user_confirmation_required") is True:
             message = inner.get("confirmation_message") or "该任务需要您确认后才能执行。"
             return _terminal_answer(
                 f"{message}\n\n（未确认前不会执行任何操作。）",
-                "confirmation", state,
+                "confirmation",
+                state,
             )
+        # 语义路由命中的闲聊 → 模板直回，零 LLM（semantic_route canned_response）
+        if mode == "MAIN_AGENT" and isinstance(state.get("intent_analysis"), dict):
+            canned = str((state["intent_analysis"] or {}).get("canned_response") or "")
+            if canned.strip():
+                return _terminal_answer(canned, "semantic_route", state)
         if mode == "MAIN_AGENT":
             return await _answer_directly(state, llm)
 
@@ -64,7 +70,10 @@ async def responder_node(state: AgentState, llm: LMRouter) -> dict:
         # Phase 12 V2：多智能体模式 —— 汇总各子 Agent 回报
         if sub_agent_reports:
             return await _respond_from_sub_agents(
-                state, llm, sub_agent_reports, user_prompt,
+                state,
+                llm,
+                sub_agent_reports,
+                user_prompt,
             )
         return {
             "final_answer": "抱歉，没有可执行的工具调用来回答这个问题。",
@@ -88,9 +97,16 @@ async def responder_node(state: AgentState, llm: LMRouter) -> dict:
             plan=plan,
             results=tool_results,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
+        if tool_results:
+            body = (
+                f"我无法综合最终答案（{type(exc).__name__}）。"
+                f"下面是工具返回的原始结果：\n\n{tool_results!r}"
+            )
+        else:
+            body = _no_model_answer(exc)
         return {
-            "final_answer": f"我无法综合最终答案（{type(exc).__name__}）。下面是工具返回的原始结果：\n\n{tool_results!r}",
+            "final_answer": body,
             "sources": [],
             "trace": [record_trace("responder", "fail", error=str(exc))],
         }
@@ -104,6 +120,24 @@ async def responder_node(state: AgentState, llm: LMRouter) -> dict:
 
 
 # ---- Helpers ---------------------------------------------------------------
+
+
+def _no_model_answer(exc: Exception) -> str:
+    """LLM 全链不可用时给用户的终答 —— 必须可操作，不能静默。
+
+    router.summarise 全链失败时抛的错误文本已带「无可用模型」前缀，
+    直接透传；其他异常包一层通用排查指引。
+    """
+    detail = str(exc)
+    if "无可用模型" in detail:
+        return detail
+    return (
+        "当前无可用模型：所有 LLM 后端均不可用。\n\n"
+        "请检查：\n"
+        "1. 本地 Ollama 是否已安装模型；\n"
+        "2. 内网 / 云端模型网关是否可达，「设置 → 模型管理」中是否已配置可用后端。\n\n"
+        f"技术详情：{type(exc).__name__}: {detail}"
+    )
 
 
 def _terminal_answer(body: str, mode: str, state: AgentState) -> dict:
@@ -122,12 +156,14 @@ async def _synthesise_tool_results(
     """把动态工具循环的执行结果交给 summarise 综合成最终答案。"""
     rows: list[dict] = []
     for r in results:
-        rows.append({
-            "tool": r.get("name"),
-            "ok": r.get("ok"),
-            "error": r.get("error"),
-            "result": _truncate_result(r.get("result")),
-        })
+        rows.append(
+            {
+                "tool": r.get("name"),
+                "ok": r.get("ok"),
+                "error": r.get("error"),
+                "result": _truncate_result(r.get("result")),
+            }
+        )
     try:
         answer, sources = await llm.summarise(
             intent=state.get("intent") or "query",
@@ -135,12 +171,11 @@ async def _synthesise_tool_results(
             plan=[],
             results=rows,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return {
-            "final_answer": (
-                f"我无法综合工具结果（{type(exc).__name__}）。"
-                f"以下是工具原始返回：\n\n{rows!r}"
-            ),
+            "final_answer": _no_model_answer(exc)
+            if not rows
+            else (f"我无法综合工具结果（{type(exc).__name__}）。以下是工具原始返回：\n\n{rows!r}"),
             "sources": [],
             "trace": [record_trace("responder", "fail", mode="tool_loop", error=str(exc))],
         }
@@ -166,9 +201,9 @@ async def _answer_directly(state: AgentState, llm: LMRouter) -> dict:
             plan=[],
             results=[],
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return {
-            "final_answer": f"我暂时无法回答这个问题（{type(exc).__name__}）。",
+            "final_answer": _no_model_answer(exc),
             "sources": [],
             "trace": [record_trace("responder", "fail", mode="main_agent", error=str(exc))],
         }
@@ -188,15 +223,17 @@ async def _respond_from_sub_agents(
     """把自动派生的子 Agent 回报整理成结果集，交给 summarise 综合成最终答案。"""
     rows: list[dict] = []
     for r in reports:
-        rows.append({
-            "sub_agent_id": r.get("sub_agent_id", ""),
-            "task_type": _report_task_type(r),
-            "status": r.get("status", ""),
-            "summary": r.get("summary", ""),
-            "error_message": r.get("error_message", ""),
-            "confidence": r.get("confidence", 0.0),
-            "latency_ms": r.get("latency_ms", 0),
-        })
+        rows.append(
+            {
+                "sub_agent_id": r.get("sub_agent_id", ""),
+                "task_type": _report_task_type(r),
+                "status": r.get("status", ""),
+                "summary": r.get("summary", ""),
+                "error_message": r.get("error_message", ""),
+                "confidence": r.get("confidence", 0.0),
+                "latency_ms": r.get("latency_ms", 0),
+            }
+        )
 
     try:
         answer, sources = await llm.summarise(
@@ -205,7 +242,7 @@ async def _respond_from_sub_agents(
             plan=[],
             results=rows,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         fallback = "\n\n".join(
             f"**{r.get('sub_agent_id', '?')}**（{r.get('task_type', '?')}）:\n"
             f"{r.get('summary') or r.get('error_message') or '(空回报)'}"
@@ -224,9 +261,14 @@ async def _respond_from_sub_agents(
         "final_answer": answer,
         "sources": sources,
         "multi_agent": True,
-        "trace": [record_trace(
-            "responder", "ok", mode="multi_agent", sub_agents=len(rows),
-        )],
+        "trace": [
+            record_trace(
+                "responder",
+                "ok",
+                mode="multi_agent",
+                sub_agents=len(rows),
+            )
+        ],
     }
 
 
@@ -267,7 +309,9 @@ def _collect_results(state: AgentState) -> list[dict]:
 def _check_hard_failures(state: AgentState) -> str | None:
     if state.get("approval_decision") == "reject":
         call = state.get("pending_tool_call") or {}
-        return f"用户已**拒绝**执行 `{call.get('server')}.{call.get('name')}` 操作，本次任务已取消。"
+        return (
+            f"用户已**拒绝**执行 `{call.get('server')}.{call.get('name')}` 操作，本次任务已取消。"
+        )
     if state.get("tool_error") and state.get("retry_count", 0) >= MAX_RETRIES:
         call = state.get("pending_tool_call") or {}
         return (

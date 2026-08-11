@@ -3,13 +3,13 @@
 仅保留 models.py 最小定义以满足其他模块的 import 依赖。
 详细实现（dataclass 字段、JSON helper）随 Phase 4 V1 实际推进补全。
 """
+
 from __future__ import annotations
 
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Optional
-
+from typing import Any
 
 # ---- Source 类型常量 -------------------------------------------------------
 
@@ -21,8 +21,12 @@ SOURCE_CODE_SYMBOL = "code_symbol"
 SOURCE_PDF = "pdf"
 
 ALL_SOURCE_TYPES: tuple[str, ...] = (
-    SOURCE_MARKDOWN, SOURCE_SWAGGER, SOURCE_CONVERSATION,
-    SOURCE_BUSINESS_RULE, SOURCE_CODE_SYMBOL, SOURCE_PDF,
+    SOURCE_MARKDOWN,
+    SOURCE_SWAGGER,
+    SOURCE_CONVERSATION,
+    SOURCE_BUSINESS_RULE,
+    SOURCE_CODE_SYMBOL,
+    SOURCE_PDF,
 )
 
 
@@ -30,21 +34,28 @@ ALL_SOURCE_TYPES: tuple[str, ...] = (
 # 文档
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class KnowledgeDoc:
     id: str
     title: str
     source_type: str
-    source_path: Optional[str] = None
+    source_path: str | None = None
     chunk_count: int = 0
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: int = 0
     updated_at: int = 0
-    deleted_at: Optional[int] = None
+    deleted_at: int | None = None
 
     @classmethod
-    def new(cls, *, title: str, source_type: str, source_path: str | None = None,
-            metadata: dict | None = None) -> "KnowledgeDoc":
+    def new(
+        cls,
+        *,
+        title: str,
+        source_type: str,
+        source_path: str | None = None,
+        metadata: dict | None = None,
+    ) -> KnowledgeDoc:
         now = int(time.time())
         return cls(
             id=str(uuid.uuid4()),
@@ -60,10 +71,15 @@ class KnowledgeDoc:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "id": self.id, "title": self.title, "source_type": self.source_type,
-            "source_path": self.source_path, "chunk_count": self.chunk_count,
-            "metadata": self.metadata, "created_at": self.created_at,
-            "updated_at": self.updated_at, "deleted_at": self.deleted_at,
+            "id": self.id,
+            "title": self.title,
+            "source_type": self.source_type,
+            "source_path": self.source_path,
+            "chunk_count": self.chunk_count,
+            "metadata": self.metadata,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "deleted_at": self.deleted_at,
         }
 
 
@@ -74,14 +90,14 @@ class KnowledgeChunk:
     seq: int
     content: str
     token_count: int = 0
-    embedding: Optional[list[float]] = None
+    embedding: list[float] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: int = 0
 
 
 @dataclass
 class RetrievalResult:
-    chunk: "KnowledgeChunk"
+    chunk: KnowledgeChunk
     similarity: float
     doc_title: str
     source_type: str

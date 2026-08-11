@@ -27,12 +27,16 @@ fn os_username() -> String {
 ///
 /// Phase 18：work_mode / autonomy 可选透传（前端 WorkMode 与会话级自主性），
 /// Rust 侧不解析业务语义，只随 chat 请求体进后端。
+/// inference_mode：推理性能模式开关（performance 时后端注入完整版双模式提示词）。
+/// history：会话上下文（当前 tab 最近几轮对话），Rust 侧不解析，透传后端。
 #[tauri::command]
 pub async fn agent_chat(
     state: State<'_, AppState>,
     prompt: String,
     work_mode: Option<String>,
     autonomy: Option<String>,
+    inference_mode: Option<String>,
+    history: Option<Vec<crate::stream::HistoryMsg>>,
 ) -> AppResult<String> {
     crate::agent_manager::app_log(&format!("[agent_chat] 收到 prompt，长度={}", prompt.len()));
     // 输入校验：拒绝空 prompt
@@ -52,7 +56,7 @@ pub async fn agent_chat(
     let bridge = Arc::clone(&state.sse);
     crate::agent_manager::app_log(&format!("[agent_chat] run_id={}，start_run 即将开始", run_id));
     bridge
-        .start_run(run_id.clone(), trimmed.to_string(), work_mode, autonomy)
+        .start_run(run_id.clone(), trimmed.to_string(), work_mode, autonomy, inference_mode, history)
         .await?;
     crate::agent_manager::app_log(&format!("[agent_chat] run_id={}，SSE 流已建立", run_id));
     state.audit_handle().append(
@@ -100,6 +104,21 @@ pub async fn agent_cancel(
     Ok(())
 }
 
+/// 会话标题摘要（2026-08-07）：非流式 HTTP，后端返回 {"title": "..."}。
+/// 失败时后端也返空 title（前端保留截断标题），此处只透传。
+#[tauri::command]
+pub async fn chat_summarize_title(
+    state: State<'_, AppState>,
+    user_prompt: String,
+    assistant_reply: Option<String>,
+) -> AppResult<serde_json::Value> {
+    let mut body = serde_json::json!({ "userPrompt": user_prompt });
+    if let Some(reply) = assistant_reply {
+        body["assistantReply"] = serde_json::Value::String(reply);
+    }
+    state.sse.post_json("/chat/summarize-title", body).await
+}
+
 /// 诊断用：当前有多少个活跃的 SSE 流？
 #[tauri::command]
 pub async fn agent_active_runs(state: State<'_, AppState>) -> AppResult<usize> {
@@ -136,6 +155,13 @@ pub async fn agent_autonomy_confirm(
 #[tauri::command]
 pub async fn agent_toolchain_get(state: State<'_, AppState>) -> AppResult<serde_json::Value> {
     state.agent_get("/toolchain").await
+}
+
+/// Token 用量（GET /llm/token-usage）—— 状态栏「Agent: 就绪」旁的实时速率
+/// （区分上传/下载）+ 当日总量。前端每 2s 轮询一次。
+#[tauri::command]
+pub async fn token_usage_get(state: State<'_, AppState>) -> AppResult<serde_json::Value> {
+    state.agent_get("/llm/token-usage").await
 }
 
 /// Phase 18：保存工具链路径配置。

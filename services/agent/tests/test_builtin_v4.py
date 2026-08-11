@@ -8,6 +8,7 @@
     - MCP 工具摘要关键词自动提取
     - 登记完整性：names / schema / 描述 / 风险 / registry callable
 """
+
 from __future__ import annotations
 
 import shutil
@@ -15,7 +16,6 @@ import subprocess
 
 import httpx
 import pytest
-
 from agent.builtin.capabilities import (
     builtin_biznav_features,
     builtin_file_symbols,
@@ -42,6 +42,7 @@ _HAS_GIT = shutil.which("git") is not None
 
 
 # ---- mkdir 兜底 --------------------------------------------------------------
+
 
 class TestMkdirFallback:
     def test_create_simple(self, tmp_path):
@@ -77,6 +78,7 @@ class TestMkdirFallback:
 
 # ---- http_post ---------------------------------------------------------------
 
+
 class TestHttpPost:
     async def test_invalid_url(self):
         result = await builtin_http_post(url="ftp://example.com", json_body={"a": 1})
@@ -92,7 +94,7 @@ class TestHttpPost:
         class _FakeResponse:
             status_code = 201
             content = b'{"id": 7}'
-            headers = {"content-type": "application/json"}
+            headers = {"content-type": "application/json"}  # noqa: RUF012 测试 fake 常量
 
         class _FakeClient:
             def __init__(self, *args, **kwargs):
@@ -109,15 +111,14 @@ class TestHttpPost:
                 return _FakeResponse()
 
         monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
-        result = await builtin_http_post(
-            url="https://example.com/api", json_body={"name": "test"}
-        )
+        result = await builtin_http_post(url="https://example.com/api", json_body={"name": "test"})
         assert result.ok is True
         assert result.content["status_code"] == 201
         assert result.risk_level == "medium"
 
 
 # ---- git 工具族 ---------------------------------------------------------------
+
 
 @pytest.mark.skipif(not _HAS_GIT, reason="git not installed")
 class TestGitTools:
@@ -127,17 +128,23 @@ class TestGitTools:
         subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
         subprocess.run(
             ["git", "config", "user.email", "test@example.com"],
-            cwd=tmp_path, capture_output=True, check=True,
+            cwd=tmp_path,
+            capture_output=True,
+            check=True,
         )
         subprocess.run(
             ["git", "config", "user.name", "Tester"],
-            cwd=tmp_path, capture_output=True, check=True,
+            cwd=tmp_path,
+            capture_output=True,
+            check=True,
         )
         (tmp_path / "README.md").write_text("hello", encoding="utf-8")
         subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True, check=True)
         subprocess.run(
             ["git", "commit", "-m", "init"],
-            cwd=tmp_path, capture_output=True, check=True,
+            cwd=tmp_path,
+            capture_output=True,
+            check=True,
         )
         return tmp_path
 
@@ -185,6 +192,7 @@ class TestGitTools:
 
 # ---- 内部能力只读入口 ----------------------------------------------------------
 
+
 class TestCapabilityTools:
     def test_symbol_search_index_missing(self, monkeypatch):
         monkeypatch.setenv("EAIDE_WORKSPACE_INDEX_DB", "/nonexistent/idx/workspace.db")
@@ -228,6 +236,7 @@ class TestCapabilityTools:
 
 # ---- MCP 关键词提取 ------------------------------------------------------------
 
+
 class TestMcpKeywordExtraction:
     def test_name_parts_kept(self):
         kw = _extract_mcp_keywords("database.query", "Execute a SQL SELECT query")
@@ -248,6 +257,7 @@ class TestMcpKeywordExtraction:
 
 
 # ---- 登记完整性 ----------------------------------------------------------------
+
 
 class TestRegistrationConsistency:
     def test_every_tool_has_schema_description_risk(self):

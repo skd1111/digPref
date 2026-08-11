@@ -23,8 +23,8 @@ const config: Config = {
           'activityBar-inactiveFg': '#616161',
           'activityBar-activeBorder': '#007acc',
           // 状态栏
-          'statusBar-bg': '#007acc',
-          'statusBar-fg': '#ffffff',
+          'statusBar-bg': '#f3f3f3',
+          'statusBar-fg': '#1f1f1f',
           'statusBar-noFolder-bg': '#68217a',
           // 标题栏
           'titleBar-activeBg': '#ececec',
@@ -75,15 +75,34 @@ const config: Config = {
           dim: '#6e6e6e',
         },
         accent: {
-          DEFAULT: '#007acc',
+          DEFAULT: '#10a37f',
           approval: '#0dbc79',
           warn: '#e5e510',
           danger: '#cd3131',
         },
+        // —— Codex 风格高质感调色板（2026-08-07，仅颜色升级，布局不动）——
+        codex: {
+          canvas: '#f5f5f4',   // 次级面板底（tab 栏 / 输入区 / 执行块）
+          surface: '#fafaf9',  // 气泡底
+          line: '#e7e5e4',     // 细分隔线 / 边框
+          ink: '#202124',      // 主文字
+          sub: '#6b7280',      // 次级文字
+          faint: '#9ca3af',    // 弱化文字
+          accent: '#10a37f',   // 品牌绿
+        },
       },
       fontFamily: {
         mono: ['"Cascadia Code"', '"JetBrains Mono"', 'Consolas', 'ui-monospace', 'monospace'],
-        sans: ['"Segoe UI Variable"', '"Segoe UI"', 'system-ui', 'sans-serif'],
+        sans: [
+          'Inter',
+          '"Segoe UI Variable"',
+          '"Segoe UI"',
+          '"PingFang SC"',
+          '"HarmonyOS Sans SC"',
+          '"Microsoft YaHei UI"',
+          'system-ui',
+          'sans-serif',
+        ],
       },
       fontSize: {
         // VSCode 12px 是 UI 元素标准尺寸

@@ -7,23 +7,22 @@ V0 简化：
 
 CLAUDE.md 红线：预算超限**硬拦截**（hard-stop），不让评分绕过。
 """
+
 from __future__ import annotations
 
 import logging
 import threading
 import time
-from dataclasses import dataclass
-from typing import Optional
 
-from agent.llm.models import LLMBackend, BudgetVerdict
 from agent.llm.metrics import emit_router_event
+from agent.llm.models import BudgetVerdict, LLMBackend
 
 logger = logging.getLogger(__name__)
 
 
 # 默认上限（V1 改成可配 + UI 设置）
-DEFAULT_DAILY_BUDGET = 100.0       # 元
-DEFAULT_PER_TASK_BUDGET = 1.0      # 元 / 单次
+DEFAULT_DAILY_BUDGET = 100.0  # 元
+DEFAULT_PER_TASK_BUDGET = 1.0  # 元 / 单次
 
 
 class BudgetController:
@@ -82,12 +81,15 @@ class BudgetController:
     def _emit_alert(backend: LLMBackend, estimated_cost: float, reason: str) -> None:
         """预算超限时发射 llm_budget_alert SSE 事件（三处同步：stream.py / sse_bridge.rs / events.ts）。"""
         try:
-            emit_router_event("llm_budget_alert", {
-                "kind": "llm_budget_alert",
-                "backend": backend.name,
-                "estimated_cost": round(estimated_cost, 6),
-                "reason": reason,
-            })
+            emit_router_event(
+                "llm_budget_alert",
+                {
+                    "kind": "llm_budget_alert",
+                    "backend": backend.name,
+                    "estimated_cost": round(estimated_cost, 6),
+                    "reason": reason,
+                },
+            )
         except Exception:
             pass  # best-effort，不因事件发射失败而中断路由流程
 
@@ -98,7 +100,10 @@ class BudgetController:
             self._daily_spent += cost
             logger.info(
                 "budget_spend backend=%s tokens=%d cost=%.4f daily_total=%.2f",
-                backend.name, actual_tokens, cost, self._daily_spent,
+                backend.name,
+                actual_tokens,
+                cost,
+                self._daily_spent,
             )
 
     @property

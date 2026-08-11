@@ -8,36 +8,36 @@
 - compression CompressionRouter 决策矩阵 + 格式化
 - api 4 端点（extract-events / distill-rules / recall-episode / compress）
 """
+
 from __future__ import annotations
 
 import pytest
-
-from agent.sessions.models_macc import (
-    CompressionContext,
-    CompressionStrategy,
-    DEFAULT_ANCHORS,
-    EventNode,
-    SemanticRule,
-)
-from agent.sessions.storage import SessionStorage
+from agent.sessions.compression import CompressionRouter as CompRouter
 from agent.sessions.event_graph import (
     heuristic_extract_from_messages,
     recall_episode,
     serialize_graph,
 )
+from agent.sessions.models_macc import (
+    DEFAULT_ANCHORS,
+    CompressionContext,
+    SemanticRule,
+)
 from agent.sessions.semantic import (
     distill_rules_from_events,
     recall_relevant_rules,
 )
-from agent.sessions.compression import CompressionRouter as CompRouter
-
+from agent.sessions.storage import SessionStorage
 
 # ---- 数据类 ----------------------------------------------------------------
 
 
 def test_data_classes_basic():
     rule = SemanticRule.new(
-        session_id="s1", pattern="tool:foo", rule_text="高频调用", confidence=0.5,
+        session_id="s1",
+        pattern="tool:foo",
+        rule_text="高频调用",
+        confidence=0.5,
     )
     assert rule.id
     d = rule.to_dict()
@@ -74,8 +74,8 @@ def storage(tmp_path):
     db = tmp_path / "sessions.db"
     s = SessionStorage(str(db))
     # 默认插入测试用 session（让外键 FK 通过）—— 用 SQLite 直插避免依赖 create_session 的随机 id
-    import json as _json
     from agent.sessions.storage import now_ms as _now_ms
+
     with s._connect() as conn:
         conn.execute(
             """
@@ -92,8 +92,10 @@ def test_storage_creates_macc_tables(storage):
     """schema 自动建 MACC 三表 + compression_log。"""
     # semantic_rules
     rid = storage.upsert_semantic_rule(
-        pattern="tool:test", rule_text="test rule",
-        session_id="s1", confidence=0.4,
+        pattern="tool:test",
+        rule_text="test rule",
+        session_id="s1",
+        confidence=0.4,
     )
     assert rid
     rules = storage.list_semantic_rules(min_confidence=0.0)
@@ -102,8 +104,10 @@ def test_storage_creates_macc_tables(storage):
 
     # event_graph_nodes
     nid = storage.insert_event_node(
-        session_id="s1", entity="orders_db.orders",
-        action="SELECT count(*)", status="ok",
+        session_id="s1",
+        entity="orders_db.orders",
+        action="SELECT count(*)",
+        status="ok",
     )
     assert nid
     nodes = storage.list_event_nodes("s1")
@@ -111,10 +115,15 @@ def test_storage_creates_macc_tables(storage):
 
     # event_graph_edges
     nid2 = storage.insert_event_node(
-        session_id="s1", entity="hitl_gate", action="approve",
+        session_id="s1",
+        entity="hitl_gate",
+        action="approve",
     )
     eid = storage.insert_event_edge(
-        session_id="s1", from_node=nid, to_node=nid2, relation="triggers",
+        session_id="s1",
+        from_node=nid,
+        to_node=nid2,
+        relation="triggers",
     )
     assert eid > 0
     edges = storage.list_event_edges("s1")
@@ -122,9 +131,12 @@ def test_storage_creates_macc_tables(storage):
 
     # compression_log
     lid = storage.log_compression(
-        session_id="s1", strategy="MEMORY",
-        before_tokens=10000, after_tokens=3000,
-        layers_used=["L3.WM", "L3.EM", "L3.SM"], elapsed_ms=150,
+        session_id="s1",
+        strategy="MEMORY",
+        before_tokens=10000,
+        after_tokens=3000,
+        layers_used=["L3.WM", "L3.EM", "L3.SM"],
+        elapsed_ms=150,
     )
     assert lid > 0
     logs = storage.list_compression_log("s1")
@@ -181,7 +193,10 @@ def test_bfs_recall_empty_seed(storage):
 
 def test_delete_semantic_rule(storage):
     rid = storage.upsert_semantic_rule(
-        pattern="p", rule_text="r", session_id="s1", confidence=0.5,
+        pattern="p",
+        rule_text="r",
+        session_id="s1",
+        confidence=0.5,
     )
     assert storage.delete_semantic_rule(rid) is True
     assert storage.list_semantic_rules(min_confidence=0.0) == []
@@ -224,9 +239,11 @@ def test_recall_episode_with_query(storage):
     storage.insert_event_node("s1", "orders", "SELECT count(*)")
     storage.insert_event_node("s1", "users", "SELECT id")
     nodes = recall_episode(
-        storage, "s1",
+        storage,
+        "s1",
         query="查 orders 表的总数",
-        max_hops=1, max_nodes=5,
+        max_hops=1,
+        max_nodes=5,
     )
     assert any("orders" in n["entity"] for n in nodes)
 
@@ -235,7 +252,8 @@ def test_recall_episode_with_explicit_keywords(storage):
     storage.insert_event_node("s1", "tool.x", "invoke")
     storage.insert_event_node("s1", "tool.y", "invoke")
     nodes = recall_episode(
-        storage, "s1",
+        storage,
+        "s1",
         query="anything",
         entity_keywords=["tool.x"],
     )
@@ -243,7 +261,18 @@ def test_recall_episode_with_explicit_keywords(storage):
 
 
 def test_serialize_graph():
-    nodes = [{"id": "n1", "entity": "e", "action": "a", "result": "r", "status": "ok", "hops": 0, "metadata": {}, "created_at": 1}]
+    nodes = [
+        {
+            "id": "n1",
+            "entity": "e",
+            "action": "a",
+            "result": "r",
+            "status": "ok",
+            "hops": 0,
+            "metadata": {},
+            "created_at": 1,
+        }
+    ]
     edges = [{"from_node": "n1", "to_node": "n2", "relation": "next"}]
     out = serialize_graph(nodes, edges)
     assert out["node_count"] == 1
@@ -260,8 +289,10 @@ def test_distill_rules_from_events_basic(storage):
     for _ in range(5):
         storage.insert_event_node("s1", "tool.x", "invoke")
     rules = distill_rules_from_events(
-        "s1", storage=storage,
-        min_occurrences=3, max_rules=5,
+        "s1",
+        storage=storage,
+        min_occurrences=3,
+        max_rules=5,
     )
     assert len(rules) >= 1
     rule = rules[0]
@@ -273,7 +304,8 @@ def test_distill_rules_skip_low_frequency(storage):
     """< min_occurrences → 不蒸馏。"""
     storage.insert_event_node("s1", "tool.rare", "invoke")
     rules = distill_rules_from_events(
-        "s1", storage=storage,
+        "s1",
+        storage=storage,
         min_occurrences=3,
     )
     assert rules == []
@@ -284,7 +316,8 @@ def test_distill_rules_sql_template(storage):
     for _ in range(4):
         storage.insert_event_node("s1", "orders_db.orders", "SELECT * FROM orders")
     rules = distill_rules_from_events(
-        "s1", storage=storage,
+        "s1",
+        storage=storage,
         min_occurrences=3,
     )
     assert rules
@@ -293,8 +326,15 @@ def test_distill_rules_sql_template(storage):
 
 def test_recall_relevant_rules(storage):
     """关键词命中 + confidence 加权排序。"""
-    storage.upsert_semantic_rule(pattern="订单平账", rule_text="先确认 payment status 再改 order", session_id="s1", confidence=0.8)
-    storage.upsert_semantic_rule(pattern="redis 部署", rule_text="用 Redis Cluster 模式", session_id="s1", confidence=0.6)
+    storage.upsert_semantic_rule(
+        pattern="订单平账",
+        rule_text="先确认 payment status 再改 order",
+        session_id="s1",
+        confidence=0.8,
+    )
+    storage.upsert_semantic_rule(
+        pattern="redis 部署", rule_text="用 Redis Cluster 模式", session_id="s1", confidence=0.6
+    )
     rules = recall_relevant_rules(storage, "订单平账流程", top_k=2)
     assert len(rules) >= 1
     # "订单平账" 应排第一
@@ -312,51 +352,75 @@ def test_recall_relevant_rules_min_confidence(storage):
 
 def test_router_decide_none_short_conversation():
     router = CompRouter(storage=None)  # type: ignore[arg-type]
-    strategy = router._decide_strategy(CompressionContext(
-        session_id="s1", token_count=1000, message_count=5,
-    ))
+    strategy = router._decide_strategy(
+        CompressionContext(
+            session_id="s1",
+            token_count=1000,
+            message_count=5,
+        )
+    )
     assert strategy == "NONE"
 
 
 def test_router_decide_working_only_medium():
     router = CompRouter(storage=None)  # type: ignore[arg-type]
-    strategy = router._decide_strategy(CompressionContext(
-        session_id="s1", token_count=10_000, message_count=30,
-    ))
+    strategy = router._decide_strategy(
+        CompressionContext(
+            session_id="s1",
+            token_count=10_000,
+            message_count=30,
+        )
+    )
     assert strategy == "WORKING_ONLY"
 
 
 def test_router_decide_memory_long():
     router = CompRouter(storage=None)  # type: ignore[arg-type]
-    strategy = router._decide_strategy(CompressionContext(
-        session_id="s1", token_count=50_000, message_count=150,
-    ))
+    strategy = router._decide_strategy(
+        CompressionContext(
+            session_id="s1",
+            token_count=50_000,
+            message_count=150,
+        )
+    )
     assert strategy == "MEMORY"
 
 
 def test_router_decide_hybrid_super_long():
     router = CompRouter(storage=None)  # type: ignore[arg-type]
-    strategy = router._decide_strategy(CompressionContext(
-        session_id="s1", token_count=200_000, message_count=600,
-    ))
+    strategy = router._decide_strategy(
+        CompressionContext(
+            session_id="s1",
+            token_count=200_000,
+            message_count=600,
+        )
+    )
     assert strategy == "HYBRID"
 
 
 def test_router_decide_gist_multimodal():
     router = CompRouter(storage=None)  # type: ignore[arg-type]
-    strategy = router._decide_strategy(CompressionContext(
-        session_id="s1", token_count=70_000, message_count=50,
-        has_multimodal=True,
-    ))
+    strategy = router._decide_strategy(
+        CompressionContext(
+            session_id="s1",
+            token_count=70_000,
+            message_count=50,
+            has_multimodal=True,
+        )
+    )
     assert strategy == "GIST"
 
 
 def test_router_decide_memory_idle():
     router = CompRouter(storage=None)  # type: ignore[arg-type]
-    strategy = router._decide_strategy(CompressionContext(
-        session_id="s1", token_count=10_000, message_count=30,
-        idle_time_s=400,
-    ))
+    strategy = router._decide_strategy(
+        CompressionContext(
+            session_id="s1",
+            token_count=10_000,
+            message_count=30,
+            idle_time_s=400,
+        )
+    )
     assert strategy == "MEMORY"
 
 
@@ -369,7 +433,9 @@ def test_router_route_writes_compression_log(storage):
     ]
     result = router.route(
         CompressionContext(
-            session_id="s1", token_count=10_000, message_count=30,
+            session_id="s1",
+            token_count=10_000,
+            message_count=30,
         ),
         messages=msgs,
     )
@@ -384,12 +450,12 @@ def test_router_route_writes_compression_log(storage):
 def test_router_route_formats_working_memory(storage):
     """WORKING_ONLY 输出包含锚点 + 滑动窗口。"""
     router = CompRouter(storage=storage, window_size=5)
-    msgs = [
-        {"role": "user", "content": f"msg-{i}"} for i in range(10)
-    ]
+    msgs = [{"role": "user", "content": f"msg-{i}"} for i in range(10)]
     result = router.route(
         CompressionContext(
-            session_id="s1", token_count=10_000, message_count=30,
+            session_id="s1",
+            token_count=10_000,
+            message_count=30,
         ),
         messages=msgs,
     )
@@ -405,11 +471,15 @@ def test_router_route_memory_layers(storage):
     # 先存一些事件 + 规则
     for _ in range(5):
         storage.insert_event_node("s1", "tool.x", "invoke")
-    storage.upsert_semantic_rule(pattern="tool:x", rule_text="高频调用工具", session_id="s1", confidence=0.5)
+    storage.upsert_semantic_rule(
+        pattern="tool:x", rule_text="高频调用工具", session_id="s1", confidence=0.5
+    )
 
     result = router.route(
         CompressionContext(
-            session_id="s1", token_count=50_000, message_count=150,
+            session_id="s1",
+            token_count=50_000,
+            message_count=150,
         ),
         messages=[{"role": "user", "content": "x"}],
     )

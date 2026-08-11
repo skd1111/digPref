@@ -3,6 +3,7 @@
 当用户附带截图时，调用本地视觉模型（local_vision）生成文字描述，
 注入到对话上下文中供后续 intent/planner 节点使用。
 """
+
 from __future__ import annotations
 
 import logging
@@ -29,8 +30,8 @@ async def vision_understand_node(state: AgentState, llm) -> dict:
     try:
         # 通过 LMRouter 获取 local_vision client
         # local_vision 客户端在 router 上作为属性存在
-        from agent.llm.local_vision import LocalVisionClient, LocalVisionUnavailableError
         from agent.config import settings
+        from agent.llm.local_vision import LocalVisionClient, LocalVisionUnavailableError
 
         client = LocalVisionClient(
             base_url=settings.local_vision_base_url or "http://127.0.0.1:8082/v1",
@@ -39,6 +40,7 @@ async def vision_understand_node(state: AgentState, llm) -> dict:
 
         # 将 base64 转回 bytes 传给客户端
         import base64
+
         try:
             image_bytes = base64.b64decode(screenshot)
         except Exception:
@@ -48,12 +50,14 @@ async def vision_understand_node(state: AgentState, llm) -> dict:
 
         return {
             "vision_result": result or "",
-            "trace": [record_trace(
-                "vision_understand",
-                "ok" if result else "fail",
-                result_len=len(result) if result else 0,
-                backend="local_vision",
-            )],
+            "trace": [
+                record_trace(
+                    "vision_understand",
+                    "ok" if result else "fail",
+                    result_len=len(result) if result else 0,
+                    backend="local_vision",
+                )
+            ],
         }
     except LocalVisionUnavailableError:
         logger.debug("vision_understand: local_vision unavailable, skipping")

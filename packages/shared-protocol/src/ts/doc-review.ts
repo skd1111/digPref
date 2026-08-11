@@ -3,7 +3,7 @@
  * Spec: docs/superpowers/specs/2026-08-04-doc-risk-review-design.md
  */
 
-export type DocFormat = 'pdf' | 'docx' | 'txt' | 'md';
+export type DocFormat = 'pdf' | 'docx' | 'doc' | 'txt' | 'md' | 'html' | 'xlsx' | 'pptx';
 export type DocCategory =
   | 'contract'
   | 'internal_policy'
@@ -33,6 +33,14 @@ export interface DocPosition {
   end: number;
 }
 
+/** 知识库/案例库引用（grep 式匹配，解释"为什么有风险"） */
+export interface DocKbRef {
+  source: string;
+  heading: string;
+  excerpt: string;
+  matched_terms: string[];
+}
+
 export interface DocFinding {
   finding_id: string;
   risk_type: DocRiskType;
@@ -43,6 +51,7 @@ export interface DocFinding {
   rule_ref: string | null;
   evidence_text: string;
   positions: DocPosition[];
+  kb_refs: DocKbRef[];
 }
 
 export interface DocSummary {

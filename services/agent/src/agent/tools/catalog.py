@@ -6,6 +6,7 @@
 - `execute(name, args, state)`：执行工具，返回结果 dict；写 / 高危调用在未审批时
   返回 `awaiting_approval=True`（由循环暂停并交 hitl_gate）。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -20,8 +21,8 @@ from agent.builtin.registry import (
     get_default_registry,
 )
 from agent.config import settings
+from agent.llm import tool_cache
 from agent.safety.write_detector import is_write_call
-
 
 # builtin 工具的关键词（帮助编排器从摘要里选工具）
 _BUILTIN_KEYWORDS: dict[str, list[str]] = {
@@ -44,7 +45,38 @@ _BUILTIN_KEYWORDS: dict[str, list[str]] = {
     "hash": ["哈希", "md5", "sha256"],
     "base64": ["base64", "编码", "解码"],
     "shell": ["命令", "shell", "执行命令"],
-    "datetime_now": ["时间", "日期", "现在", "当前时间"],
+    "datetime_now": [
+        "时间",
+        "日期",
+        "现在",
+        "当前时间",
+        "今天",
+        "几号",
+        "几点",
+        "农历",
+        "阴历",
+        "星期",
+        "日历",
+        "lunar",
+        "date",
+        "time",
+    ],
+    "date_parse": [
+        "明天",
+        "后天",
+        "昨天",
+        "前天",
+        "下周",
+        "本周",
+        "上周",
+        "周几",
+        "周末",
+        "月底",
+        "最近",
+        "日期转换",
+        "相对时间",
+        "date",
+    ],
     "uuid4": ["uuid", "唯一标识"],
     "http_get": ["http", "get", "接口", "api", "网页"],
     "csv_parse": ["csv", "表格", "解析"],
@@ -54,18 +86,99 @@ _BUILTIN_KEYWORDS: dict[str, list[str]] = {
     "git_diff": ["git", "diff", "差异", "改动"],
     "git_log": ["git", "提交历史", "log", "记录"],
     "git_commit": ["git", "提交", "commit", "提交代码"],
+    "excel_query": [
+        "excel",
+        "表格",
+        "报表",
+        "sheet",
+        "统计",
+        "聚合",
+        "分组",
+        "筛选",
+        "xlsx",
+        "csv",
+        "数据分析",
+    ],
+    "excel_export": ["导出", "excel", "生成表格", "xlsx", "报表导出", "数据落盘"],
+    "pdf_merge": ["pdf", "合并", "拼接", "merge"],
+    "pdf_split": ["pdf", "拆分", "抽取", "分页", "split"],
+    "word_generate": ["word", "docx", "生成报告", "写方案", "文档生成", "输出报告"],
+    "log_read_lines": [
+        "大文件",
+        "日志",
+        "查看",
+        "tail",
+        "尾部",
+        "log",
+        "read",
+        "文件太大",
+        "gb",
+    ],
+    "log_search": [
+        "大文件搜索",
+        "日志搜索",
+        "搜日志",
+        "ERROR",
+        "grep 大文件",
+        "log search",
+        "关键字",
+    ],
     "symbol_search": ["符号", "函数", "类", "symbol", "代码导航", "定义"],
     "file_symbols": ["文件符号", "symbol", "大纲", "结构"],
     "biznav_features": ["功能点", "业务导航", "biznav", "业务功能"],
+    "file_to_markdown": [
+        "转 markdown",
+        "转 md",
+        "文件转",
+        "提取文本",
+        "docx",
+        "word",
+        "pdf",
+        "pptx",
+        "xlsx",
+        "excel",
+        "合同",
+        "报告",
+        "文档解析",
+        "markitdown",
+    ],
 }
 
 
 # MCP 工具关键词提取：从工具名 + 描述中切出候选词（编排器选工具靠 keywords 命中）。
-_MCP_KEYWORD_STOPWORDS: frozenset[str] = frozenset({
-    "the", "a", "an", "and", "or", "for", "with", "from", "into", "this", "that",
-    "tool", "tools", "use", "using", "can", "will", "via", "based", "given",
-    "工具", "使用", "调用", "通过", "进行", "一个", "或者", "以及", "支持",
-})
+_MCP_KEYWORD_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "the",
+        "a",
+        "an",
+        "and",
+        "or",
+        "for",
+        "with",
+        "from",
+        "into",
+        "this",
+        "that",
+        "tool",
+        "tools",
+        "use",
+        "using",
+        "can",
+        "will",
+        "via",
+        "based",
+        "given",
+        "工具",
+        "使用",
+        "调用",
+        "通过",
+        "进行",
+        "一个",
+        "或者",
+        "以及",
+        "支持",
+    }
+)
 
 
 def _extract_mcp_keywords(name: str, description: str) -> list[str]:
@@ -108,24 +221,28 @@ class ToolCatalog:
         """轻量工具摘要（不包含参数定义，不可直接调用）。"""
         out: list[dict] = []
         for name in BUILTIN_TOOL_NAMES:
-            out.append({
-                "name": name,
-                "description": TOOL_DESCRIPTIONS.get(name, ""),
-                "category": "builtin",
-                "keywords": _BUILTIN_KEYWORDS.get(name, []),
-            })
+            out.append(
+                {
+                    "name": name,
+                    "description": TOOL_DESCRIPTIONS.get(name, ""),
+                    "category": "builtin",
+                    "keywords": _BUILTIN_KEYWORDS.get(name, []),
+                }
+            )
         for spec in await self._get_mcp_specs():
             server = str(spec.get("server") or "mcp")
             name = str(spec.get("name") or "")
             if not name:
                 continue
             description = str(spec.get("description") or "")
-            out.append({
-                "name": f"{server}.{name}",
-                "description": description,
-                "category": server,
-                "keywords": _extract_mcp_keywords(f"{server}.{name}", description),
-            })
+            out.append(
+                {
+                    "name": f"{server}.{name}",
+                    "description": description,
+                    "category": server,
+                    "keywords": _extract_mcp_keywords(f"{server}.{name}", description),
+                }
+            )
         return out
 
     async def definitions(self, names: list[str] | None = None) -> list[dict]:
@@ -138,34 +255,48 @@ class ToolCatalog:
             schema = self._registry.schema(name)
             if schema is None:
                 continue
-            out.append({
-                "name": name,
-                "description": TOOL_DESCRIPTIONS.get(name, ""),
-                "parameters": schema,
-                "server": "builtin",
-                "risk": TOOL_RISK_LEVEL.get(name, "read"),
-            })
+            out.append(
+                {
+                    "name": name,
+                    "description": TOOL_DESCRIPTIONS.get(name, ""),
+                    "parameters": schema,
+                    "server": "builtin",
+                    "risk": TOOL_RISK_LEVEL.get(name, "read"),
+                }
+            )
         for spec in await self._get_mcp_specs():
             server = str(spec.get("server") or "mcp")
             name = str(spec.get("name") or "")
             full = f"{server}.{name}"
             if want is not None and full not in want:
                 continue
-            out.append({
-                "name": full,
-                "description": str(spec.get("description") or ""),
-                "parameters": spec.get("inputSchema") or {"type": "object", "properties": {}},
-                "server": server,
-                "risk": "read",
-            })
+            out.append(
+                {
+                    "name": full,
+                    "description": str(spec.get("description") or ""),
+                    "parameters": spec.get("inputSchema") or {"type": "object", "properties": {}},
+                    "server": server,
+                    "risk": "read",
+                }
+            )
         return out
 
     # ---- 执行 --------------------------------------------------------------
 
     async def execute(self, name: str, args: dict, state: dict) -> dict:
-        """执行工具；写 / 高危未审批时返回 awaiting_approval=True。"""
+        """执行工具；写 / 高危未审批时返回 awaiting_approval=True。
+
+        Phase 17 V1：幂等只读 builtin 工具结果短 TTL 缓存（L3）。
+        红线：写工具 / 待审批 / 失败结果不查不写（tool_cache 内部双重把关）。
+        """
         if name in BUILTIN_TOOL_NAMES:
-            return await self._execute_builtin(name, args, state)
+            cached = tool_cache.lookup(name, args)
+            if cached is not None:
+                return {**cached, "cache_hit": True}
+            result = await self._execute_builtin(name, args, state)
+            if result.get("ok") and not result.get("awaiting_approval"):
+                tool_cache.store(name, args, result)
+            return result
         return await self._execute_mcp(name, args, state)
 
     async def _execute_builtin(self, name: str, args: dict, state: dict) -> dict:
@@ -190,10 +321,7 @@ class ToolCatalog:
     async def _execute_mcp(self, name: str, args: dict, state: dict) -> dict:
         specs = await self._get_mcp_specs()
         match = next(
-            (
-                s for s in specs
-                if f"{s.get('server')}.{s.get('name')}" == name
-            ),
+            (s for s in specs if f"{s.get('server')}.{s.get('name')}" == name),
             None,
         )
         if match is None or self._mcp is None:
@@ -217,7 +345,7 @@ class ToolCatalog:
                 timeout_sec=settings.tool_timeout_sec,
                 row_limit=settings.row_limit,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             return {"name": name, "ok": False, "error": f"{type(exc).__name__}: {exc}"}
         if isinstance(result, dict):
             return {
@@ -240,9 +368,16 @@ class ToolCatalog:
                 return self._mcp_specs
             try:
                 specs = await self._mcp.list_tools()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 return ()
-            self._mcp_specs = tuple(specs)
+            # Phase 17：工具列表顺序必须稳定（前缀缓存友好）——
+            # 按 (server, name) 字典序固定，不依赖 MCP 返回顺序。
+            self._mcp_specs = tuple(
+                sorted(
+                    specs,
+                    key=lambda s: (str(s.get("server") or ""), str(s.get("name") or "")),
+                )
+            )
         return self._mcp_specs
 
 

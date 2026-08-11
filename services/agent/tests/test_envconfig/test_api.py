@@ -9,14 +9,12 @@
     - POST /export → 加密 blob
     - POST /import → 反序列化 + placeholders 列表
 """
+
 from __future__ import annotations
 
 import base64
 
 import pytest
-from fastapi.testclient import TestClient
-from pydantic import SecretStr
-
 from agent.envconfig import (
     DatabaseConnection,
     EnvConfig,
@@ -24,6 +22,8 @@ from agent.envconfig import (
     save_env,
 )
 from agent.main import create_app
+from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 
 @pytest.fixture(autouse=True)
@@ -138,13 +138,16 @@ class TestSave:
         assert pwd is None or pwd != "should-be-scrubbed"
 
     def test_save_with_mismatched_env_400(self, client):
-        r = client.post("/envconfig/dev", json={
-            "environment": "prod",  # 与 URL 不一致
-            "label": "x",
-            "databases": [],
-            "api_gateways": [],
-            "mcp_servers": [],
-        })
+        r = client.post(
+            "/envconfig/dev",
+            json={
+                "environment": "prod",  # 与 URL 不一致
+                "label": "x",
+                "databases": [],
+                "api_gateways": [],
+                "mcp_servers": [],
+            },
+        )
         assert r.status_code == 400
 
     def test_save_arbitrary_new_env(self, client):
@@ -182,10 +185,13 @@ class TestSave:
 
     def test_save_invalid_name_400(self, client):
         # URL 里塞非法名字 → 立即 400
-        r = client.post("/envconfig/1abc", json={
-            "environment": "1abc",
-            "label": "x",
-        })
+        r = client.post(
+            "/envconfig/1abc",
+            json={
+                "environment": "1abc",
+                "label": "x",
+            },
+        )
         assert r.status_code == 400
 
 
@@ -216,10 +222,13 @@ class TestDelete:
 class TestExportImport:
     def test_export_returns_ciphertext(self, client):
         save_env(_make_cfg(Environment.PROD, "prod", pwd="real-prod-pwd"))
-        r = client.post("/envconfig/export", json={
-            "passphrase": "secret-pw",
-            "environments": ["prod"],
-        })
+        r = client.post(
+            "/envconfig/export",
+            json={
+                "passphrase": "secret-pw",
+                "environments": ["prod"],
+            },
+        )
         assert r.status_code == 200
         body = r.json()
         assert body["env_count"] == 1
@@ -231,34 +240,49 @@ class TestExportImport:
         assert blob.startswith(b"EAIDE-ENC-V1:")
 
     def test_export_empty_environments_400(self, client):
-        r = client.post("/envconfig/export", json={
-            "passphrase": "x",
-            "environments": [],
-        })
+        r = client.post(
+            "/envconfig/export",
+            json={
+                "passphrase": "x",
+                "environments": [],
+            },
+        )
         assert r.status_code == 400
 
     def test_import_with_wrong_passphrase_400(self, client):
         save_env(_make_cfg(Environment.PROD, "prod"))
-        ex = client.post("/envconfig/export", json={
-            "passphrase": "right",
-            "environments": ["prod"],
-        }).json()
-        r = client.post("/envconfig/import", json={
-            "passphrase": "wrong",
-            "ciphertext_base64": ex["ciphertext_base64"],
-        })
+        ex = client.post(
+            "/envconfig/export",
+            json={
+                "passphrase": "right",
+                "environments": ["prod"],
+            },
+        ).json()
+        r = client.post(
+            "/envconfig/import",
+            json={
+                "passphrase": "wrong",
+                "ciphertext_base64": ex["ciphertext_base64"],
+            },
+        )
         assert r.status_code == 400
 
     def test_import_round_trip_returns_placeholders(self, client):
         save_env(_make_cfg(Environment.PROD, "prod", pwd="real-pwd"))
-        ex = client.post("/envconfig/export", json={
-            "passphrase": "secret",
-            "environments": ["prod"],
-        }).json()
-        r = client.post("/envconfig/import", json={
-            "passphrase": "secret",
-            "ciphertext_base64": ex["ciphertext_base64"],
-        })
+        ex = client.post(
+            "/envconfig/export",
+            json={
+                "passphrase": "secret",
+                "environments": ["prod"],
+            },
+        ).json()
+        r = client.post(
+            "/envconfig/import",
+            json={
+                "passphrase": "secret",
+                "ciphertext_base64": ex["ciphertext_base64"],
+            },
+        )
         assert r.status_code == 200
         body = r.json()
         assert body["env_count"] == 1

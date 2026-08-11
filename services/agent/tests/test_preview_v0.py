@@ -337,7 +337,9 @@ class TestConfigGenerator:
 class FakeProcess:
     """模拟 asyncio.subprocess.Process。"""
 
-    def __init__(self, lines: list[str] = None, exit_code: int = 0, pid: int = 4242, **kwargs):
+    def __init__(
+        self, lines: list[str] | None = None, exit_code: int = 0, pid: int = 4242, **kwargs
+    ):
         self.pid = pid
         self.returncode: int | None = None
         self._lines = lines or []
@@ -483,13 +485,18 @@ class TestViteManager:
         with pytest.raises(ViteUnavailableError):
             _resolve_vite_command(tmp_path)
 
-    def test_resolve_vite_command_local_bin(self, tmp_path):
-        from agent.preview.vite_manager import _resolve_vite_command
+    def test_resolve_vite_command_local_bin(self, tmp_path, monkeypatch):
+        import agent.preview.vite_manager as vm
 
+        monkeypatch.setattr(
+            vm.shutil, "which", lambda name: "/usr/bin/node" if name == "node" else None
+        )
         (tmp_path / "node_modules" / "vite" / "bin").mkdir(parents=True)
         (tmp_path / "node_modules" / "vite" / "bin" / "vite.js").write_text("", encoding="utf-8")
-        cmd = _resolve_vite_command(tmp_path)
-        assert "vite.js" in cmd
+        cmd = vm._resolve_vite_command(tmp_path)
+        # 返回 argv 列表（node + vite.js 两个元素），不是复合字符串
+        assert len(cmd) == 2
+        assert cmd[-1].endswith("vite.js")
 
     def test_extract_file(self):
         from agent.preview.vite_manager import _extract_file

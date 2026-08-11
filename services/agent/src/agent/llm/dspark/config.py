@@ -9,6 +9,7 @@
 
 文档：[docs/design/phase-13-dspark.md](../../../../docs/design/phase-13-dspark.md)
 """
+
 from __future__ import annotations
 
 from typing import get_args
@@ -24,7 +25,6 @@ from protocol.dspark import (
     SpeculativePolicy,
 )
 from protocol.dspark import DSparkConfig as ProtocolDSparkConfig
-
 
 # 4 档预设 K + 阈值（来自设计文档 §2.2 置信度阈值对照表）
 _MODE_PARAMS: dict[str, tuple[int, float]] = {
@@ -87,7 +87,8 @@ class DSparkConfig(ProtocolDSparkConfig):
     deep copy DEFAULT_POLICIES —— 避免后续 cfg.profiles["x"].n_draft = 99 污染默认值。
     """
 
-    profiles: dict[str, SpeculativePolicy] = dict(DEFAULT_POLICIES)
+    # pydantic 构造时会深拷贝字段默认值，实例间不共享；RUF012 为误报
+    profiles: dict[str, SpeculativePolicy] = dict(DEFAULT_POLICIES)  # noqa: RUF012
 
 
 # 兼容 _MODE_PARAMS 单元测试
@@ -96,13 +97,13 @@ def all_modes() -> list[str]:
 
 
 __all__ = [
-    "DSparkConfig",
-    "SpeculativePolicy",
-    "SpeculativeMode",
     "DEFAULT_POLICIES",
-    "SPECULATIVE_OFF",
-    "policy_for_mode",
-    "all_modes",
-    "DSPARK_N_DRAFT_MIN",
     "DSPARK_N_DRAFT_MAX",
+    "DSPARK_N_DRAFT_MIN",
+    "SPECULATIVE_OFF",
+    "DSparkConfig",
+    "SpeculativeMode",
+    "SpeculativePolicy",
+    "all_modes",
+    "policy_for_mode",
 ]

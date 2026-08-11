@@ -1,24 +1,23 @@
-//! LLM 配置命令 —— 让前端切换后端时直接落盘并重启 Agent。
+//! LLM 配置命令 —— 让前端切换后端时落盘并重启 Agent。
 //!
-//! 设计：配置写到 `%APPDATA%\eaide\llm-config.json`，
-//! 启动 Agent 子进程时把它读出来注入环境变量 `EAIDE_LLM_BACKEND=...`。
-//! 切后端 = 改 JSON + 杀子进程 + 重启。
+//! 双轨制统一后：active 配置的长期事实源是 router.db llm_kv（Python 侧
+//! /router/active 端点读写）。本命令：
+//!   - get：优先 HTTP 读 Agent（db），Agent 离线时回退遗留 json 镜像
+//!   - set：先 HTTP PUT 到 Agent（写 db + 热应用），再写 json 镜像作离线邮箱，
+//!     最后重启 Agent
 //!
-//! ⚠️ 安全警告：api_key 字段以明文存储在 JSON 文件中。
-//! 当前依赖 Windows 用户级文件权限保护（%APPDATA% 仅当前用户可读）。
+//! ⚠️ 安全警告：api_key 字段以明文存储（json 镜像 / router.db）。
+//! 当前依赖 Windows 用户级文件权限保护。
 //! 长期方案应将 api_key 存入系统 Keyring（与 envconfig 的 SecretStr 一致）。
 
 use std::fs;
-use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::agent_manager::app_log;
+use crate::agent_manager::{app_log, llm_config_file_path};
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
-
-const CONFIG_FILE: &str = "llm-config.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LLMSettings {
@@ -80,7 +79,8 @@ pub struct CustomSettings {
 impl Default for LLMSettings {
     fn default() -> Self {
         Self {
-            active: "mock".into(),
+            // 双轨制统一：不再默认 mock，避免"模型已注册却静默走 mock"
+            active: "ollama".into(),
             ollama: OllamaSettings { base_url: default_ollama_url(), model: default_ollama_model() },
             private: PrivateSettings {
                 base_url: "http://172.1.0.134:8000/v1".into(),
@@ -92,17 +92,37 @@ impl Default for LLMSettings {
     }
 }
 
-fn config_path() -> PathBuf {
-    // 与 config.rs 中 audit_db_path 同一目录约定：%APPDATA%/eaide/
-    std::env::var("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("eaide")
-        .join(CONFIG_FILE)
+fn agent_base_url() -> String {
+    std::env::var("EAIDE_AGENT_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8765".to_string())
+}
+
+fn config_path() -> std::path::PathBuf {
+    // 统一收进安装目录：<安装目录>/config/llm-config.json（不再写 %APPDATA%）
+    llm_config_file_path()
 }
 
 #[tauri::command]
-pub fn llm_get_config() -> AppResult<LLMSettings> {
+pub async fn llm_get_config() -> AppResult<LLMSettings> {
+    // 1. 优先从 Agent 读（router.db llm_kv 为唯一长期事实源）
+    let url = format!("{}/router/active", agent_base_url());
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .map_err(|e| AppError::Config(format!("reqwest client: {}", e)))?;
+    match client.get(&url).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            match resp.json::<LLMSettings>().await {
+                Ok(s) => return Ok(s),
+                Err(e) => app_log(&format!("[llm_config] get: agent 响应解析失败: {} → 回退 json", e)),
+            }
+        }
+        Ok(resp) => app_log(&format!(
+            "[llm_config] get: agent 返回 {} → 回退 json",
+            resp.status().as_u16()
+        )),
+        Err(e) => app_log(&format!("[llm_config] get: agent 不可达({}) → 回退 json", e)),
+    }
+    // 2. 回退：遗留 json 镜像（离线邮箱）
     let p = config_path();
     if !p.exists() {
         return Ok(LLMSettings::default());
@@ -115,31 +135,45 @@ pub fn llm_get_config() -> AppResult<LLMSettings> {
 }
 
 #[tauri::command]
-pub fn llm_set_config(settings: State<'_, AppState>, cfg: LLMSettings) -> AppResult<()> {
+pub async fn llm_set_config(settings: State<'_, AppState>, cfg: LLMSettings) -> AppResult<()> {
     app_log(&format!(
         "[llm_config] set active={} (ollama={}, private={}, custom={})",
         cfg.active,
-        cfg.ollama.base_url.is_empty() == false,
-        cfg.private.base_url.is_empty() == false,
-        cfg.custom.base_url.is_empty() == false,
+        !cfg.ollama.base_url.is_empty(),
+        !cfg.private.base_url.is_empty(),
+        !cfg.custom.base_url.is_empty(),
     ));
 
-    // 1. 落盘
+    // 1. 优先写 Agent（router.db llm_kv + 热应用；重启前的旧进程仍在运行）
+    let url = format!("{}/router/active", agent_base_url());
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .map_err(|e| AppError::Config(format!("reqwest client: {}", e)))?;
+    match client.put(&url).json(&cfg).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            app_log("[llm_config] set: 已写入 router.db（经 Agent /router/active）");
+        }
+        Ok(resp) => app_log(&format!(
+            "[llm_config] set: agent 返回 {} → 仅写 json 邮箱（启动时迁移）",
+            resp.status().as_u16()
+        )),
+        Err(e) => app_log(&format!(
+            "[llm_config] set: agent 不可达({}) → 仅写 json 邮箱（启动时迁移）",
+            e
+        )),
+    }
+
+    // 2. json 镜像（离线邮箱：Agent 重启后 active_config 会消费并迁入 db）
     let p = config_path();
     if let Some(parent) = p.parent() {
         let _ = fs::create_dir_all(parent);
     }
     let json = serde_json::to_string_pretty(&cfg).map_err(AppError::from)?;
     fs::write(&p, json).map_err(AppError::from)?;
-    app_log(&format!("[llm_config] 已写入 {}", p.display()));
+    app_log(&format!("[llm_config] 已写入镜像 {}", p.display()));
 
-    // 2. 重启 Agent —— 把新 env vars 注入新进程
-    // 我们没存 AppState 的可写句柄（config 不可变），所以新进程会从 JSON 读。
-    // 但为了一次性把 env vars 设到新进程，我们在这里：
-    //   a) 重启 Agent（agent_manager.rs 暴露新方法 restart_with_env）
-    //   b) 临时把 env vars 写到 env file 让 Agent 读
-    //
-    // 简化：仅写 JSON + 调用 restart；下次 Agent 启动时由 agent_manager.rs 读 JSON → 转 env vars。
+    // 3. 重启 Agent —— 新进程启动时 active_config 按 env > json邮箱 > db 解析
     super::agent::agent_restart(settings)?;
     Ok(())
 }

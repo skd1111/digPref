@@ -7,9 +7,10 @@
 
 设计文档：docs/superpowers/specs/2026-08-03-dynamic-tool-loop-design.md
 """
+
 from __future__ import annotations
 
 from agent.tools.catalog import ToolCatalog
 from agent.tools.loop import DynamicToolLoop
 
-__all__ = ["ToolCatalog", "DynamicToolLoop"]
+__all__ = ["DynamicToolLoop", "ToolCatalog"]

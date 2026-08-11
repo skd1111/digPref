@@ -1,4 +1,5 @@
 """Phase 7 V0 · CSV 导出 —— UTF-8-BOM（防 Excel 中文乱码）。"""
+
 from __future__ import annotations
 
 import csv
@@ -49,11 +50,14 @@ def export_csv(
     md5 = hashlib.md5(file_bytes).hexdigest()
 
     # 水印元数据
-    meta = embed_watermark_metadata({
-        "path": output_path,
-        "md5": md5,
-        "row_count": len(masked_rows),
-        "format": "csv",
-    }, operator)
+    meta = embed_watermark_metadata(
+        {
+            "path": output_path,
+            "md5": md5,
+            "row_count": len(masked_rows),
+            "format": "csv",
+        },
+        operator,
+    )
 
     return meta

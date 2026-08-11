@@ -1,10 +1,10 @@
 """test_codenav_llm.py —— Phase 2F LLM 客户端测试（环境变量配置 + mock fallback）。"""
+
 from __future__ import annotations
 
 import json
 
 import pytest
-
 from agent.codenav.llm_client import (
     CodenavLLMClient,
     _coerce_infer,
@@ -13,10 +13,10 @@ from agent.codenav.llm_client import (
     reset_default_client,
 )
 
-
 # ---------------------------------------------------------------------------
 # 配置 + 单例
 # ---------------------------------------------------------------------------
+
 
 def test_unconfigured_returns_false():
     c = CodenavLLMClient(base_url="", model="", api_key="")
@@ -49,6 +49,7 @@ def test_default_client_reads_env(monkeypatch):
 # JSON 解析
 # ---------------------------------------------------------------------------
 
+
 def test_parse_infer_json_clean():
     raw = '{"file": "a.py", "line": 12, "confidence": 0.8, "reasoning": "x"}'
     out = _parse_infer_json(raw)
@@ -56,7 +57,7 @@ def test_parse_infer_json_clean():
 
 
 def test_parse_infer_json_with_fence():
-    raw = "```json\n{\"file\": \"a.py\", \"line\": 1, \"confidence\": 0.5, \"reasoning\": \"y\"}\n```"
+    raw = '```json\n{"file": "a.py", "line": 1, "confidence": 0.5, "reasoning": "y"}\n```'
     out = _parse_infer_json(raw)
     assert out["file"] == "a.py"
     assert out["line"] == 1
@@ -65,7 +66,7 @@ def test_parse_infer_json_with_fence():
 def test_parse_infer_json_with_extra_text():
     raw = (
         "我推断定义在：\n"
-        "{\"file\": \"b.py\", \"line\": 5, \"confidence\": 0.6, \"reasoning\": \"z\"}\n"
+        '{"file": "b.py", "line": 5, "confidence": 0.6, "reasoning": "z"}\n'
         "以上是我的推断。"
     )
     out = _parse_infer_json(raw)
@@ -91,6 +92,7 @@ def test_coerce_infer_clamps_confidence():
 # 推断/解释调用：未配置 → None
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_infer_unconfigured_returns_none():
     c = CodenavLLMClient()
@@ -107,6 +109,7 @@ async def test_explain_unconfigured_returns_none():
 # HTTP 调用成功路径（用 httpx mock）
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_infer_calls_openai_compatible(monkeypatch):
     """Mock httpx 验证：base_url/model/api_key 正确拼到请求。"""
@@ -120,12 +123,26 @@ async def test_infer_calls_openai_compatible(monkeypatch):
     captured: dict = {}
 
     class FakeResp:
-        def raise_for_status(self): pass
+        def raise_for_status(self):
+            pass
+
         def json(self):
-            return {"choices": [{"message": {"content": json.dumps({
-                "file": "/abs/path/foo.py", "line": 10, "confidence": 0.85,
-                "reasoning": "因为类名匹配",
-            })}}]}
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "file": "/abs/path/foo.py",
+                                    "line": 10,
+                                    "confidence": 0.85,
+                                    "reasoning": "因为类名匹配",
+                                }
+                            )
+                        }
+                    }
+                ]
+            }
 
     async def fake_post(self, url, json=None, headers=None):
         captured["url"] = url
@@ -134,6 +151,7 @@ async def test_infer_calls_openai_compatible(monkeypatch):
         return FakeResp()
 
     import httpx
+
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
 
     out = await c.infer_definition("foo", "/current.py", "上下文内容")
@@ -150,7 +168,9 @@ async def test_explain_returns_text(monkeypatch):
     c = CodenavLLMClient(base_url="http://llm.test/v1", model="m", api_key="k")
 
     class FakeResp:
-        def raise_for_status(self): pass
+        def raise_for_status(self):
+            pass
+
         def json(self):
             return {"choices": [{"message": {"content": "**foo** 是核心入口。"}}]}
 
@@ -158,6 +178,7 @@ async def test_explain_returns_text(monkeypatch):
         return FakeResp()
 
     import httpx
+
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
 
     out = await c.explain_symbol("foo", "/current.py", 5, "ctx")
@@ -173,7 +194,155 @@ async def test_llm_call_failure_returns_none(monkeypatch):
         raise RuntimeError("connection refused")
 
     import httpx
+
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
 
     assert await c.infer_definition("foo", "f.py", "ctx") is None
     assert await c.explain_symbol("foo", "f.py", 1, "ctx") is None
+
+
+# ---------------------------------------------------------------------------
+# think 剥离（流式 + 非流式）
+# ---------------------------------------------------------------------------
+
+
+def test_strip_think_removes_blocks():
+    from agent.codenav.llm_client import strip_think
+
+    raw = "开头\n<think>内部推理不该展示</think>**foo** 是入口。\n```think\n更隐蔽的思考\n```\n完。"
+    out = strip_think(raw)
+    assert "<think>" not in out
+    assert "```think" not in out
+    assert "**foo** 是入口。" in out
+    assert "完。" in out
+
+
+def test_strip_think_case_insensitive():
+    from agent.codenav.llm_client import strip_think
+
+    assert strip_think("<THINK>推理</THINK>正文") == "正文"
+
+
+def test_strip_think_drops_unclosed_tail():
+    from agent.codenav.llm_client import strip_think
+
+    assert strip_think("正文<think>没写完的推理") == "正文"
+
+
+def test_think_stream_filter_basic():
+    from agent.codenav.llm_client import _ThinkStreamFilter
+
+    f = _ThinkStreamFilter()
+    out = []
+    out.append(f.feed("<think>推理一</think>正文一"))
+    out.append(f.feed("正文二"))
+    out.append(f.feed("<THINK>大写推理</THINK>正文三"))
+    out.append(f.feed("```think\nmd 推理\n```正文四"))
+    out.append(f.flush())
+    assert "".join(out) == "正文一正文二正文三正文四"
+
+
+def test_think_stream_filter_split_tags():
+    from agent.codenav.llm_client import _ThinkStreamFilter
+
+    f = _ThinkStreamFilter()
+    parts = ["正", "文", "<th", "ink>秘密", "</th", "ink>", "结尾"]
+    out = "".join(f.feed(p) for p in parts) + f.flush()
+    assert out == "正文结尾"
+
+
+@pytest.mark.asyncio
+async def test_explain_strips_think(monkeypatch):
+    from agent.codenav.llm_client import CodenavLLMClient
+
+    c = CodenavLLMClient(base_url="http://llm.test/v1", model="m", api_key="k")
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "<think>内部推理</think>**foo** 是入口。",
+                        }
+                    }
+                ]
+            }
+
+    async def fake_post(self, url, json=None, headers=None):
+        return FakeResp()
+
+    import httpx
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    out = await c.explain_symbol("foo", "/current.py", 5, "ctx")
+    assert out == "**foo** 是入口。"
+
+
+@pytest.mark.asyncio
+async def test_explain_stream_yields_clean_chunks(monkeypatch):
+    from agent.codenav.llm_client import CodenavLLMClient
+
+    c = CodenavLLMClient(base_url="http://llm.test/v1", model="m", api_key="k")
+
+    lines = [
+        'data: {"choices":[{"delta":{"content":"<think>这是推理"}}]}',
+        'data: {"choices":[{"delta":{"content":"过程，不应展示"}}]}',
+        'data: {"choices":[{"delta":{"content":"</think>**foo** 是入口。"}}]}',
+        'data: {"choices":[{"delta":{"content":"它负责初始化。"}}]}',
+        "data: [DONE]",
+    ]
+
+    class FakeResp:
+        def __init__(self):
+            self._lines = iter(lines)
+
+        def raise_for_status(self):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def aiter_lines(self):
+            async def gen():
+                for ln in self._lines:
+                    yield ln
+
+            return gen()
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def stream(self, method, url, json=None, headers=None):
+            return FakeResp()
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+
+    out = []
+    async for piece in c.explain_symbol_stream("foo", "/current.py", 5, "ctx"):
+        out.append(piece)
+    assert "".join(out) == "**foo** 是入口。它负责初始化。"
+
+
+def test_parse_infer_json_fenced():
+    """围栏 JSON 仍可解析（spec §4.5 第三层）。"""
+    raw = '```json\n{"file": "src/a.py", "line": 12, "confidence": 0.9, "reasoning": "r"}\n```'
+    out = _parse_infer_json(raw)
+    assert out["file"] == "src/a.py"
+    assert out["line"] == 12

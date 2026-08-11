@@ -11,16 +11,17 @@
     - 复用 codenav.watcher pool（避免双 watcher 资源浪费）
     - 自动修正 affected feature（read file content → LLM 推断需不需要改）
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
 from pathlib import Path
-from typing import Optional
 
 try:
     from watchfiles import Change, awatch
+
     _WATCHFILES_AVAILABLE = True
 except ImportError:
     _WATCHFILES_AVAILABLE = False
@@ -34,10 +35,20 @@ logger = logging.getLogger(__name__)
 
 
 _DEBOUNCE_SECONDS = 0.3
-_IGNORE_DIRS = frozenset({
-    ".git", "node_modules", "__pycache__", "target", "dist", "build",
-    ".venv", ".idea", ".vscode", ".eaide",  # biznav YAML 自己写在 .eaide 下
-})
+_IGNORE_DIRS = frozenset(
+    {
+        ".git",
+        "node_modules",
+        "__pycache__",
+        "target",
+        "dist",
+        "build",
+        ".venv",
+        ".idea",
+        ".vscode",
+        ".eaide",  # biznav YAML 自己写在 .eaide 下
+    }
+)
 
 
 def _should_skip(path: str) -> bool:
@@ -64,8 +75,8 @@ class AffectedFeaturesWatcher:
         self._project_root = Path(project_root)
         self._project_name = project_name
         self._storage = storage
-        self._task: Optional[asyncio.Task] = None
-        self._stop_event: Optional[asyncio.Event] = None
+        self._task: asyncio.Task | None = None
+        self._stop_event: asyncio.Event | None = None
 
     async def start(self) -> None:
         if self._task and not self._task.done():
@@ -82,7 +93,7 @@ class AffectedFeaturesWatcher:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            except (asyncio.CancelledError, Exception):
                 pass
             self._task = None
 
@@ -94,9 +105,7 @@ class AffectedFeaturesWatcher:
             )
             return
         if not self._project_root.exists():
-            logger.warning(
-                "[biznav.incremental] project_root 不存在: %s", self._project_root
-            )
+            logger.warning("[biznav.incremental] project_root 不存在: %s", self._project_root)
             return
 
         debounce_buf: dict[str, Change] = {}
@@ -113,9 +122,7 @@ class AffectedFeaturesWatcher:
                     debounce_buf[path] = change
                 # 等 debounce 窗口
                 try:
-                    await asyncio.wait_for(
-                        self._stop_event.wait(), timeout=_DEBOUNCE_SECONDS
-                    )
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=_DEBOUNCE_SECONDS)
                     break
                 except asyncio.TimeoutError:
                     pass
@@ -125,11 +132,11 @@ class AffectedFeaturesWatcher:
                 debounce_buf.clear()
                 try:
                     await self._handle_changes(changed)
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     logger.exception("[biznav.incremental] handle_changes: %s", e)
         except asyncio.CancelledError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.exception("[biznav.incremental] watcher crashed: %s", e)
 
     async def _handle_changes(self, changed_paths: list[str]) -> None:
@@ -139,17 +146,13 @@ class AffectedFeaturesWatcher:
         for path in changed_paths:
             # 转相对路径（feature_file_index 存的是 POSIX 正斜杠路径）
             try:
-                rel = Path(path).resolve().relative_to(
-                    self._project_root.resolve()
-                ).as_posix()
+                rel = Path(path).resolve().relative_to(self._project_root.resolve()).as_posix()
             except ValueError:
                 rel = Path(path).as_posix()  # 越界路径 fallback 用绝对
             try:
                 features = self._storage.find_features_by_file(rel, self._project_name)
-            except Exception as e:  # noqa: BLE001 —— best-effort
-                logger.warning(
-                    "[biznav.incremental] find_features_by_file 失败: %s", e
-                )
+            except Exception as e:
+                logger.warning("[biznav.incremental] find_features_by_file 失败: %s", e)
                 continue
             for f in features:
                 affected.setdefault(f.id, []).append(rel)
@@ -162,8 +165,7 @@ class AffectedFeaturesWatcher:
             {
                 "project_name": self._project_name,
                 "affected": [
-                    {"feature_id": fid, "files": paths}
-                    for fid, paths in affected.items()
+                    {"feature_id": fid, "files": paths} for fid, paths in affected.items()
                 ],
                 "ts": int(time.time() * 1000),
             },

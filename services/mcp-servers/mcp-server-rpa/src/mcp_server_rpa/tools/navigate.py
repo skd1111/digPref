@@ -2,6 +2,7 @@
 
 每次导航创建新页签，但限制最大页签数量，超出时关闭最旧的页签。
 """
+
 from __future__ import annotations
 
 from mcp_server_rpa.browser import get_context

@@ -10,16 +10,16 @@
 - 短连接 + WAL + foreign_keys=ON
 - Tests 用 `tmp_path` fixture 隔离（_isolate autouse 已在 conftest）
 """
+
 from __future__ import annotations
 
-import json
 import logging
 import sqlite3
 import struct
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
 from agent.loganalysis.models import AnalysisCacheEntry
 
@@ -28,11 +28,15 @@ logger = logging.getLogger(__name__)
 
 # ---- 内嵌 schema（从 schema.sql 同步加载）----------------------------------
 
+
 def _load_schema_sql() -> str:
     """从同包 schema.sql 读 schema。"""
     import importlib.resources as resources
+
     try:
-        return resources.files("agent.loganalysis").joinpath("schema.sql").read_text(encoding="utf-8")
+        return (
+            resources.files("agent.loganalysis").joinpath("schema.sql").read_text(encoding="utf-8")
+        )
     except (FileNotFoundError, AttributeError, ModuleNotFoundError):
         here = Path(__file__).resolve().parent
         return (here / "schema.sql").read_text(encoding="utf-8")
@@ -42,6 +46,7 @@ SCHEMA_SQL = _load_schema_sql()
 
 
 # ---- BLOB 编码 / 解码（u64 LE，与 logviewer/storage.rs 对齐）-----------
+
 
 def encode_u64_le(values: list[int]) -> bytes:
     """list[int] → bytes（u64 little-endian；空 → 空 BLOB）。"""
@@ -152,8 +157,16 @@ class LogAnalysisStorage:
                    matched_lines, match_count, searched_at, expires_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (file_path, pattern, pattern_type, file_fingerprint,
-                 blob, len(matched_lines), now, now + ttl_sec),
+                (
+                    file_path,
+                    pattern,
+                    pattern_type,
+                    file_fingerprint,
+                    blob,
+                    len(matched_lines),
+                    now,
+                    now + ttl_sec,
+                ),
             )
 
     def cleanup_search_cache(self, now: int | None = None) -> int:
@@ -246,8 +259,7 @@ class LogAnalysisStorage:
         now = int(time.time())
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT * FROM log_analysis_cache "
-                "WHERE cache_key = ? AND expires_at > ?",
+                "SELECT * FROM log_analysis_cache WHERE cache_key = ? AND expires_at > ?",
                 (cache_key, now),
             ).fetchone()
         if row is None:
@@ -278,8 +290,15 @@ class LogAnalysisStorage:
                    payload_json, created_at, expires_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (entry.cache_key, entry.file_path, entry.file_fingerprint,
-                 entry.analysis_type, entry.payload_json, now, entry.expires_at),
+                (
+                    entry.cache_key,
+                    entry.file_path,
+                    entry.file_fingerprint,
+                    entry.analysis_type,
+                    entry.payload_json,
+                    now,
+                    entry.expires_at,
+                ),
             )
 
     def cleanup_analysis_cache(self, now: int | None = None) -> int:
@@ -288,7 +307,8 @@ class LogAnalysisStorage:
             now = int(time.time())
         with self._connect() as conn:
             cur = conn.execute(
-                "DELETE FROM log_analysis_cache WHERE expires_at <= ?", (now,),
+                "DELETE FROM log_analysis_cache WHERE expires_at <= ?",
+                (now,),
             )
         return cur.rowcount
 
@@ -299,9 +319,11 @@ class LogAnalysisStorage:
         with self._connect() as conn:
             search_n = int(conn.execute("SELECT COUNT(*) FROM search_cache").fetchone()[0])
             tail_n = int(conn.execute("SELECT COUNT(*) FROM tail_sessions").fetchone()[0])
-            active_n = int(conn.execute(
-                "SELECT COUNT(*) FROM tail_sessions WHERE ended_at IS NULL"
-            ).fetchone()[0])
+            active_n = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM tail_sessions WHERE ended_at IS NULL"
+                ).fetchone()[0]
+            )
             cache_n = int(conn.execute("SELECT COUNT(*) FROM log_analysis_cache").fetchone()[0])
         return {
             "search_cache_rows": search_n,
@@ -321,6 +343,7 @@ def get_default_storage() -> LogAnalysisStorage:
     global _default_storage
     if _default_storage is None:
         from agent.config import settings
+
         db_path = getattr(settings, "log_analysis_db_path", None) or (
             str(Path.home() / ".eaide" / "log_analysis.db")
         )

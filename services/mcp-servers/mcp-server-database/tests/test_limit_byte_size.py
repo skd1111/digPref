@@ -1,4 +1,5 @@
 """Tests for byte-level truncation."""
+
 from __future__ import annotations
 
 import json
@@ -50,10 +51,10 @@ class TestTruncateRow:
 class TestTruncateRows:
     def test_drops_rows_over_byte_cap(self):
         # Build rows that are individually small but add up to >1KB
-        rows = [["x" * 100] for _ in range(20)]   # ~100 * 20 = 2000 bytes
-        out, was, dropped = truncate_rows(rows, TruncationConfig(
-            per_cell_bytes=10_000, per_result_bytes=500
-        ))
+        rows = [["x" * 100] for _ in range(20)]  # ~100 * 20 = 2000 bytes
+        out, was, dropped = truncate_rows(
+            rows, TruncationConfig(per_cell_bytes=10_000, per_result_bytes=500)
+        )
         assert was is True
         assert dropped > 0
         # Total bytes must be within cap (approximately)
@@ -62,9 +63,9 @@ class TestTruncateRows:
 
     def test_no_truncation_when_fits(self):
         rows = [["a"], ["b"], ["c"]]
-        out, was, dropped = truncate_rows(rows, TruncationConfig(
-            per_cell_bytes=1000, per_result_bytes=10_000
-        ))
+        out, was, dropped = truncate_rows(
+            rows, TruncationConfig(per_cell_bytes=1000, per_result_bytes=10_000)
+        )
         assert was is False
         assert dropped == 0
         assert len(out) == 3

@@ -30,6 +30,10 @@ export function CodeBlock({ code, language }: Props): JSX.Element {
   const [copied, setCopied] = useState(false);
   const langKey = (LANG_LABEL[language as Language] ? (language as Language) : 'plaintext');
 
+  // 高度自适应（2026-08-07）：按行数撑开，min 80 / max 400，兑现头注释承诺
+  const lineCount = code.split('\n').length;
+  const editorHeight = Math.max(80, Math.min(400, lineCount * 18 + 24));
+
   const handleCopy = (): void => {
     void navigator.clipboard.writeText(code).then(() => {
       setCopied(true);
@@ -39,32 +43,54 @@ export function CodeBlock({ code, language }: Props): JSX.Element {
 
   return (
     <div
-      className="my-2 overflow-hidden rounded"
-      style={{ border: '1px solid #d4d4d4', backgroundColor: '#ffffff' }}
+      className="my-2 overflow-hidden rounded-lg"
+      style={{ border: '1px solid #e7e5e4', backgroundColor: '#ffffff' }}
     >
-      {/* Header bar */}
+      {/* Header bar（aicss 风格，2026-08-10：尖括号图标 + 语言 + Copy 勾选态） */}
       <div
-        className="group flex h-[28px] items-center justify-between border-b px-3 text-2xs uppercase tracking-wider"
+        className="group flex h-[28px] items-center justify-between border-b px-3 text-2xs"
         style={{
-          backgroundColor: '#f3f3f3',
-          borderColor: '#d4d4d4',
-          color: '#333333',
+          backgroundColor: '#f5f5f4',
+          borderColor: '#e7e5e4',
+          color: '#6b7280',
         }}
       >
-        <span>{(LANG_LABEL as Record<string, string>)[langKey] ?? language.toUpperCase()}</span>
+        <span className="flex items-center gap-1.5 uppercase tracking-wider">
+          <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true">
+            <path
+              d="m8 6-6 6 6 6M16 6l6 6-6 6"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          {(LANG_LABEL as Record<string, string>)[langKey] ?? language.toUpperCase()}
+        </span>
         <button
           type="button"
           onClick={handleCopy}
-          className="rounded px-2 py-0.5 text-fg-muted opacity-0 transition-opacity hover:bg-vscode-border hover:text-fg group-hover:opacity-100"
-          style={copied ? { opacity: 1 } : undefined}
+          className="flex items-center gap-1 rounded px-2 py-0.5 text-fg-muted opacity-0 transition-opacity hover:bg-vscode-border hover:text-fg group-hover:opacity-100"
+          style={copied ? { opacity: 1, color: '#10a37f' } : undefined}
         >
-          {copied ? '✓ 已复制' : '复制'}
+          {copied ? (
+            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="m4.5 12.75 6 6 9-13.5" />
+            </svg>
+          ) : (
+            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="9" y="9" width="11" height="11" rx="2.5" />
+              <path d="M5 15a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2" />
+            </svg>
+          )}
+          {copied ? '已复制' : '复制'}
         </button>
       </div>
 
       {/* Monaco editor */}
       <Editor
-        height="200px"
+        height={`${editorHeight}px`}
         {...(langKey !== 'plaintext' ? { language: langKey } : {})}
         value={code}
         theme="vs-light"

@@ -10,9 +10,10 @@
 调用方只需要：
     sqlglot_validator.assert_safe_sql("SELECT 1", dialect="postgres")
 """
+
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 
 import sqlglot
 import sqlglot.expressions as exp
@@ -23,47 +24,48 @@ from mcp_server_database.safety.dialect_allowlist import (
     to_sqlglot_dialect,
 )
 
-
 # ---- Allow-listed top-level statement types ----
 _ALLOWED_TOP_LEVEL: tuple[type, ...] = (
     exp.Select,
     exp.Insert,
     exp.Update,
     exp.Delete,
-    exp.With,         # CTEs that wrap a SELECT (we re-validate inner)
-    exp.Command,      # postgres EXPLAIN / VACUUM etc. — gated by name
-    exp.Union,        # set operations
+    exp.With,  # CTEs that wrap a SELECT (we re-validate inner)
+    exp.Command,  # postgres EXPLAIN / VACUUM etc. — gated by name
+    exp.Union,  # set operations
     exp.Intersect,
     exp.Except,
 )
 
 
 # ---- Dangerous function names (case-insensitive) ----
-_BANNED_FUNCTIONS: frozenset[str] = frozenset({
-    # generic
-    "sleep",          # can stall a query (combined with heavy CPU)
-    "benchmark",
-    # file / OS
-    "load_file",
-    "load_extension",
-    "xp_cmdshell",
-    "xp_dirtree",
-    "xp_fileexist",
-    "openrowset",
-    "opendatasource",
-    "bulk_insert",
-    # network
-    "utl_http",
-    "http_get",
-    "dbms_xmlquery",
-    # postgres COPY from program
-    "pg_read_file",
-    "pg_read_binary_file",
-    "lo_import",
-    # sqlite
-    "readfile",
-    "writefile",
-})
+_BANNED_FUNCTIONS: frozenset[str] = frozenset(
+    {
+        # generic
+        "sleep",  # can stall a query (combined with heavy CPU)
+        "benchmark",
+        # file / OS
+        "load_file",
+        "load_extension",
+        "xp_cmdshell",
+        "xp_dirtree",
+        "xp_fileexist",
+        "openrowset",
+        "opendatasource",
+        "bulk_insert",
+        # network
+        "utl_http",
+        "http_get",
+        "dbms_xmlquery",
+        # postgres COPY from program
+        "pg_read_file",
+        "pg_read_binary_file",
+        "lo_import",
+        # sqlite
+        "readfile",
+        "writefile",
+    }
+)
 
 
 class UnsafeSqlError(Exception):
@@ -71,6 +73,7 @@ class UnsafeSqlError(Exception):
 
 
 # ---- Public API -------------------------------------------------------------
+
 
 def assert_safe_sql(sql: str, *, dialect: str = "ansi") -> None:
     """Validate `sql` against every safety rule. Raises UnsafeSqlError on failure.
@@ -94,6 +97,7 @@ def assert_safe_sql(sql: str, *, dialect: str = "ansi") -> None:
 
 
 # ---- Implementation --------------------------------------------------------
+
 
 def _assert_not_empty(sql: str) -> None:
     stripped = sql.strip().rstrip(";").strip()
@@ -169,7 +173,7 @@ def _contains_top_level_semicolon(sql: str) -> bool:
             continue
         if ch == ";":
             # A trailing semicolon at the very end is fine.
-            if sql[i + 1:].strip() == "":
+            if sql[i + 1 :].strip() == "":
                 return False
             return True
         i += 1
@@ -202,9 +206,7 @@ def _assert_top_level_allowed(statements: Iterable[exp.Expression]) -> None:
             _assert_safe_command(stmt)
             continue
         if not isinstance(stmt, _ALLOWED_TOP_LEVEL):
-            raise UnsafeSqlError(
-                f"statement type not allowed: {type(stmt).__name__}"
-            )
+            raise UnsafeSqlError(f"statement type not allowed: {type(stmt).__name__}")
         _walk_subtree(stmt)
 
 
@@ -262,7 +264,8 @@ def _assert_no_explain_analyze(sql: str) -> None:
     would actually delete rows.
     """
     import re
-    if re.search(r'\bEXPLAIN\s+ANALYZE\b', sql, re.IGNORECASE):
+
+    if re.search(r"\bEXPLAIN\s+ANALYZE\b", sql, re.IGNORECASE):
         raise UnsafeSqlError(
             "EXPLAIN ANALYZE is not allowed — it executes the underlying statement. "
             "Use EXPLAIN (without ANALYZE) to inspect query plans."

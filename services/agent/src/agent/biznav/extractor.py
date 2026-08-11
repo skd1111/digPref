@@ -13,22 +13,31 @@
 - 私有 helper：_build_llm_prompt / _parse_llm_json / _json_or_text
 - 失败兜底：单组失败 → 记录 error_message，不中断整批
 """
+
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import re
-import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
+
+from agent.llm.json_discipline import extract_json, parse_with_retry
+from agent.llm.prompts import load_prompt, render_prompt
 
 from .audit import EVT_FEATURE_EXTRACT
-from .models import CandidateFileGroup, Feature, RelatedFile
+from .models import (
+    BusinessRule,
+    CandidateFileGroup,
+    Feature,
+    RelatedApi,
+    RelatedFile,
+    RelatedTable,
+)
 from .storage import FeatureStorage, now
-
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +65,11 @@ _GROUP_RULES: list[tuple[str, str]] = [
 ]
 
 _DEFAULT_GROUP_ROLE = "其它"
+
+# 每组最多几个文件（避免 LLM 上下文爆炸）；同 role 超过此数会切多个组
+_FILES_PER_GROUP = 8
+# 单次提取任务的组数安全上限：超大工程避免 LLM 调用数失控（按 role 字典序取前 N 组）
+_MAX_GROUPS = 40
 
 
 @dataclass
@@ -131,7 +145,7 @@ class FeatureExtractor:
 
         # 1. scan
         try:
-            groups = self._scan_candidate_files()
+            groups = self._scan_candidate_files(result)
         except Exception as e:
             logger.error("[biznav] scan failed: %s", e)
             result.errors.append(f"scan: {e}")
@@ -146,38 +160,73 @@ class FeatureExtractor:
         self.storage.update_job(job_id, status="extracting")
         sem = asyncio.Semaphore(self.max_concurrent)
 
-        async def _run_one(g: CandidateFileGroup) -> Optional[Feature]:
-            async with sem:
-                try:
+        # 进度增量：每组完成后累加其文件数并写回 job，
+        # 前端轮询 processed_files / total_files 算百分比。
+        progress_files = 0
+
+        async def _run_one(g: CandidateFileGroup) -> list[Feature]:
+            nonlocal progress_files
+            try:
+                async with sem:
                     return await self._generate_feature_for_group(g)
+            except Exception as e:
+                logger.warning("[biznav] group %s failed: %s", g.group_key, e)
+                result.errors.append(f"group {g.group_key}: {e}")
+                return []
+            finally:
+                progress_files += len(g.files)
+                try:
+                    self.storage.update_job(job_id, processed_files=progress_files)
                 except Exception as e:
-                    logger.warning("[biznav] group %s failed: %s", g.group_key, e)
-                    result.errors.append(f"group {g.group_key}: {e}")
-                    return None
+                    logger.warning("[biznav] progress update failed: %s", e)
 
         tasks = [asyncio.create_task(_run_one(g)) for g in groups]
         produced = await asyncio.gather(*tasks, return_exceptions=False)
-        for f in produced:
-            if f is None:
-                continue
-            try:
-                if self._is_valid_feature(f):
+        used_ids: set[str] = set()
+        for feats in produced:
+            for f in feats:
+                if not self._is_valid_feature(f):
+                    result.errors.append(f"feature validation failed: {f.id}")
+                    continue
+                # 跨组 id 去重：upsert 以 (id, project_name) 为主键，重名会互盖
+                if f.id in used_ids:
+                    f.id = f"{f.id}-{uuid.uuid4().hex[:6]}"
+                used_ids.add(f.id)
+                try:
                     self.storage.upsert(f)
                     result.features_generated += 1
-                else:
-                    result.errors.append(f"feature validation failed: {f.id}")
-            except Exception as e:
-                logger.warning("[biznav] upsert %s failed: %s", f.id, e)
-                result.errors.append(f"upsert {f.id}: {e}")
-            result.processed_files += 1
+                except Exception as e:
+                    logger.warning("[biznav] upsert %s failed: %s", f.id, e)
+                    result.errors.append(f"upsert {f.id}: {e}")
+                result.processed_files += 1
 
-        # 4. 收尾
+        # 3.5 旧数据替换：本次有新产出时，软删除该项目上一次提取遗留的
+        #     AI 功能点（不在 used_ids 里且 source='ai'）——重提取是「整批替换」
+        #     语义，避免旧提示词产出的「工具/数据」等分类残留；手动维护的保留。
+        if result.features_generated > 0:
+            try:
+                for old in self.storage.list_by_project(self.project_name):
+                    if old.source == "ai" and old.id not in used_ids:
+                        self.storage.soft_delete(old.id, self.project_name)
+            except Exception as e:
+                logger.warning("[biznav] stale AI features cleanup failed: %s", e)
+
+        # 4. 收尾：扫到了文件却 0 产出 → 标 failed，前端才能把原因展示给用户
+        # （此前静默 done + error_message=None → 界面只剩「暂无业务功能点」）。
+        unique_errors = list(dict.fromkeys(result.errors))
+        error_message = "; ".join(unique_errors) if unique_errors else None
+        if result.features_generated == 0 and total_files > 0:
+            final_status = "failed"
+            if not error_message:
+                error_message = "未能生成任何功能点（LLM 返回为空）"
+        else:
+            final_status = "done"
         self.storage.update_job(
             job_id,
-            status="done" if not result.errors else "done",
-            processed_files=result.processed_files,
+            status=final_status,
+            processed_files=progress_files,
             features_generated=result.features_generated,
-            error_message=("; ".join(result.errors)) if result.errors else None,
+            error_message=(error_message[:800] if error_message else None),
             finished=True,
         )
 
@@ -202,9 +251,10 @@ class FeatureExtractor:
 
     # ---- 私有：扫描 ------------------------------------------------------
 
-    def _scan_candidate_files(self) -> list[CandidateFileGroup]:
+    def _scan_candidate_files(self, result: ExtractionResult) -> list[CandidateFileGroup]:
         """读支持的文件后缀 → 走 project_root → 按启发式分组。
 
+        result 仅用于超大工程截断时留痕（errors）。
         任何 IO 异常（目录不存在/无权限） → 抛回 extract_all 兜底。
         """
         from agent.codenav import language_registry  # 局部 import，防止 codenav 缺失时 import 失败
@@ -221,7 +271,10 @@ class FeatureExtractor:
             if path.suffix.lower() not in extensions:
                 continue
             # 跳过常见排除目录
-            if any(part in path.parts for part in ("node_modules", ".git", "dist", "build", "__pycache__", ".eaide")):
+            if any(
+                part in path.parts
+                for part in ("node_modules", ".git", "dist", "build", "__pycache__", ".eaide")
+            ):
                 continue
             try:
                 rel = str(path.relative_to(root)).replace("\\", "/")
@@ -232,14 +285,19 @@ class FeatureExtractor:
 
         groups: list[CandidateFileGroup] = []
         for role, files in sorted(buckets.items()):
-            # 每组最多 8 个文件（避免 LLM 上下文爆炸）
-            groups.append(
-                CandidateFileGroup(
-                    group_key=f"{role}",
-                    role=role,
-                    files=sorted(files)[:8],
-                )
-            )
+            ordered = sorted(files)
+            total_chunks = (len(ordered) + _FILES_PER_GROUP - 1) // _FILES_PER_GROUP
+            # 每 _FILES_PER_GROUP 个文件切一组：大工程同一 role 切成多组，
+            # 保证第 8 个之后的文件也能被分析（此前只取前 8 个，大项目覆盖极低）
+            for idx in range(0, len(ordered), _FILES_PER_GROUP):
+                chunk = ordered[idx : idx + _FILES_PER_GROUP]
+                seq = idx // _FILES_PER_GROUP + 1
+                key = f"{role}({seq}/{total_chunks})" if total_chunks > 1 else role
+                groups.append(CandidateFileGroup(group_key=key, role=role, files=chunk))
+        # 超大工程安全上限：超出时按 role 字典序保留前 _MAX_GROUPS 组并留痕
+        if len(groups) > _MAX_GROUPS:
+            result.errors.append(f"工程过大：共 {len(groups)} 组，仅分析前 {_MAX_GROUPS} 组")
+            groups = groups[:_MAX_GROUPS]
         return groups
 
     @staticmethod
@@ -264,41 +322,36 @@ class FeatureExtractor:
             if len(content) > 2000:
                 content = content[:2000] + "\n... (truncated)"
             snippets.append(f"// file: {rel}\n{content}")
-        user = (
-            f"分析以下项目路径分组（role='{group.role}'），输出一组业务功能点 JSON。\n"
-            f"【项目名】{self.project_name}\n"
-            f"【文件清单】\n" + "\n\n".join(snippets) + "\n\n"
-            "【输出格式】仅输出 JSON 数组，不要任何额外文字。\n"
-            "每个元素字段：\n"
-            '  id: "<group.role>-<类别>-<index>"（例如 "API 入口-认证-1"）\n'
-            '  name: "<功能点名称>"（中文，< 30 字）\n'
-            '  description: "<业务说明 >"（中文，1-2 句）\n'
-            '  category: "<分类>"（路由 / 业务 / 数据 / 工具 四选一）\n'
-            '  related_files: [{"path": "<相对路径>", "role": "<说明>"}]\n'
-            '  related_apis: [{"method": "GET/POST/...", "path": "<API 路径>", "description": ""}]（如无则空数组）\n'
-            '  related_tables: [{"name": "<表名>", "description": ""}]（如无则空数组）\n'
-            '  business_rules: [{"text": "<单条规则>", "structured": null}]（如无则空数组）\n'
-            "若无法识别出有价值的功能点，返回空数组 []。"
+        user = render_prompt(
+            load_prompt("biznav/extract"),
+            PROJECT_NAME=self.project_name,
+            GROUP_ROLE=group.role,
+            FILES="\n\n".join(snippets),
         )
         return [
             {
                 "role": "system",
-                "content": "你是 EAIDE 业务功能点分析助手。根据代码文件识别业务功能点并输出 JSON。"
+                "content": "你是 EAIDE 业务功能点分析助手。根据代码文件识别业务功能点并输出 JSON。",
             },
             {"role": "user", "content": user},
         ]
 
-    async def _generate_feature_for_group(self, group: CandidateFileGroup) -> Optional[Feature]:
-        messages = self._build_llm_prompt(group)
-        # 期望注入：llm_client 是 async callable，签名 (kind, messages) -> str
-        text = await self.llm_client("biznav_extract", messages)
-        if not text:
-            return None
-        data = self._parse_llm_json(text)
+    async def _generate_feature_for_group(self, group: CandidateFileGroup) -> list[Feature]:
+        base_messages = self._build_llm_prompt(group)
+
+        async def _call(hint: str, last: str) -> str:
+            messages = list(base_messages)
+            if hint:
+                messages = [*messages, {"role": "user", "content": hint}]
+            return str(await self.llm_client("biznav_extract", messages))
+
+        data = await parse_with_retry(_call, lambda t: extract_json(t, want="array"))
         if not isinstance(data, list):
-            return None
+            return []
         ts = now()
-        # 取第一个有效元素（V1.1 一组 = 一个功能点）
+        out: list[Feature] = []
+        # V1.2 (2026-08-05)：采纳 LLM 返回的全部有效元素（此前只取第一个，
+        # 导致大工程功能点数量被人为卡死）；关联 API/表/规则也如实解析入库
         for item in data:
             if not isinstance(item, dict):
                 continue
@@ -321,9 +374,31 @@ class FeatureExtractor:
                     for rf in (item.get("related_files") or [])
                     if isinstance(rf, dict) and rf.get("path")
                 ],
-                related_apis=[],
-                related_tables=[],
-                business_rules=[],
+                related_apis=[
+                    RelatedApi(
+                        method=str(a.get("method", "")),
+                        path=str(a.get("path", "")),
+                        description=str(a.get("description", "")),
+                    )
+                    for a in (item.get("related_apis") or [])
+                    if isinstance(a, dict) and a.get("path")
+                ],
+                related_tables=[
+                    RelatedTable(
+                        name=str(t.get("name", "")),
+                        description=str(t.get("description", "")),
+                    )
+                    for t in (item.get("related_tables") or [])
+                    if isinstance(t, dict) and t.get("name")
+                ],
+                business_rules=[
+                    BusinessRule(
+                        text=str(r.get("text", "")),
+                        structured=r.get("structured"),
+                    )
+                    for r in (item.get("business_rules") or [])
+                    if isinstance(r, dict) and r.get("text")
+                ],
                 source="ai",
                 ai_confidence=0.7,
                 version=1,
@@ -331,51 +406,14 @@ class FeatureExtractor:
                 updated_at=ts,
                 deleted_at=None,
             )
-            return f
-        return None
+            out.append(f)
+        return out
 
     @staticmethod
     def _parse_llm_json(response_text: str) -> Any:
-        """处理 ```json ... ``` 围栏、嵌套 JSON、容错。"""
-        if not response_text:
-            return None
-        text = response_text.strip()
-        # 去掉 ```json 围栏
-        fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
-        if fence:
-            text = fence.group(1).strip()
-        # 截取第一个 [ 或 { 到末尾
-        bracket = text.find("[")
-        brace = text.find("{")
-        if bracket == -1 and brace == -1:
-            return None
-        if bracket == -1:
-            start = brace
-        elif brace == -1:
-            start = bracket
-        else:
-            start = min(bracket, brace)
-        # 找对应的末尾（粗暴切到最后一个 } 或 ]）
-        end_bracket = text.rfind("]")
-        end_brace = text.rfind("}")
-        end = max(end_bracket, end_brace)
-        if end < start:
-            return None
-        text = text[start : end + 1]
-        return _json_or_text(text, default=None)
+        """共享容错解析：处理围栏、think、前后缀（spec §4.5）。"""
+        return extract_json(response_text, want="array")
 
     @staticmethod
     def _is_valid_feature(f: Feature) -> bool:
         return bool(f.id and f.name and f.project_name and f.category)
-
-
-# ---------------------------------------------------------------------------
-# 鲁棒 JSON 解析
-# ---------------------------------------------------------------------------
-
-
-def _json_or_text(text: str, default: Any = None) -> Any:
-    try:
-        return json.loads(text)
-    except (ValueError, TypeError):
-        return default

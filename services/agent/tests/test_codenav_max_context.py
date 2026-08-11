@@ -83,11 +83,16 @@ def test_build_client_from_config_propagates_max_context():
     """build_client_from_config 应把 cfg['max_context'] 透传给 client。"""
     from agent.codenav.llm_client import build_client_from_config
 
-    cli = build_client_from_config({
-        "name": "deepseek", "type": "private",
-        "base_url": "http://x", "model": "m", "api_key": "k",
-        "max_context": 128000,
-    })
+    cli = build_client_from_config(
+        {
+            "name": "deepseek",
+            "type": "private",
+            "base_url": "http://x",
+            "model": "m",
+            "api_key": "k",
+            "max_context": 128000,
+        }
+    )
     assert cli.max_context == 128000
     assert cli.base_url == "http://x"
     assert cli.model == "m"
@@ -97,20 +102,32 @@ def test_build_client_from_config_handles_invalid_max_context():
     """cfg['max_context'] 非法值（负数 / 字符串）→ 走 None（不截断）。"""
     from agent.codenav.llm_client import build_client_from_config
 
-    cli = build_client_from_config({
-        "base_url": "http://x", "model": "m", "api_key": "k",
-        "max_context": -100,
-    })
+    cli = build_client_from_config(
+        {
+            "base_url": "http://x",
+            "model": "m",
+            "api_key": "k",
+            "max_context": -100,
+        }
+    )
     assert cli.max_context is None
 
-    cli2 = build_client_from_config({
-        "base_url": "http://x", "model": "m", "api_key": "k",
-        "max_context": "abc",
-    })
+    cli2 = build_client_from_config(
+        {
+            "base_url": "http://x",
+            "model": "m",
+            "api_key": "k",
+            "max_context": "abc",
+        }
+    )
     assert cli2.max_context is None
 
-    cli3 = build_client_from_config({
-        "base_url": "http://x", "model": "m", "api_key": "k",
-        "max_context": 0,
-    })
+    cli3 = build_client_from_config(
+        {
+            "base_url": "http://x",
+            "model": "m",
+            "api_key": "k",
+            "max_context": 0,
+        }
+    )
     assert cli3.max_context is None

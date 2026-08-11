@@ -18,41 +18,9 @@ V1.1 范围：
     - 增量 affected-features 计算
     - LLM Judge 评测
 """
+
 from __future__ import annotations
 
-from .models import (
-    AffectedFeature,
-    CandidateFileGroup,
-    ExtractionJob,
-    Feature,
-    FeatureContextPayload,
-    RelatedApi,
-    RelatedFile,
-    RelatedTable,
-    SyncReport,
-    feature_from_dict,
-    feature_to_dict,
-    related_files_from_json,
-    related_files_to_json,
-)
-from .storage import (
-    FeatureStorage,
-    FeatureVersionConflict,
-)
-from .import_export import (
-    FeatureIO,
-    FeatureImportError,
-)
-from .extractor import (
-    ExtractionResult,
-    FeatureExtractor,
-)
-from .rule_engine import (
-    BusinessRule,
-    to_system_prompt_snippet,
-    validate_syntax,
-)
-from . import audit as _audit
 from .audit import (
     EVT_FEATURE_DELETE,
     EVT_FEATURE_EXTRACT,
@@ -68,53 +36,85 @@ from .events import (
     emit_biznav_event,
     flush_biznav_events,
 )
+from .extractor import (
+    ExtractionResult,
+    FeatureExtractor,
+)
 from .hot_reload import YamlHotReloader, mark_yaml_written, reload_yaml_to_db
+from .import_export import (
+    FeatureImportError,
+    FeatureIO,
+)
 from .incremental import AffectedFeaturesWatcher
+from .models import (
+    AffectedFeature,
+    CandidateFileGroup,
+    ExtractionJob,
+    Feature,
+    FeatureContextPayload,
+    RelatedApi,
+    RelatedFile,
+    RelatedTable,
+    SyncReport,
+    feature_from_dict,
+    feature_to_dict,
+    related_files_from_json,
+    related_files_to_json,
+)
+from .rule_engine import (
+    BusinessRule,
+    to_system_prompt_snippet,
+    validate_syntax,
+)
+from .storage import (
+    FeatureStorage,
+    FeatureVersionConflict,
+)
 
 __all__ = [
+    "EVT_EXTRACTION_DONE",
+    "EVT_FEATURE_AFFECTED",
+    "EVT_FEATURE_DELETE",
+    # audit constants
+    "EVT_FEATURE_EXTRACT",
+    "EVT_FEATURE_IMPORT",
+    "EVT_FEATURE_UPDATE",
+    "EVT_YAML_RELOAD",
+    # SSE event constants + helpers (V1.3)
+    "EVT_YAML_RELOADED",
     # models
     "AffectedFeature",
+    "AffectedFeaturesWatcher",
+    # rule engine
+    "BusinessRule",
     "CandidateFileGroup",
     "ExtractionJob",
+    # extractor
+    "ExtractionResult",
     "Feature",
     "FeatureContextPayload",
+    "FeatureExtractor",
+    # import / export
+    "FeatureIO",
+    "FeatureImportError",
+    # storage
+    "FeatureStorage",
+    "FeatureVersionConflict",
     "RelatedApi",
     "RelatedFile",
     "RelatedTable",
     "SyncReport",
-    "feature_from_dict",
-    "feature_to_dict",
-    "related_files_from_json",
-    "related_files_to_json",
-    # storage
-    "FeatureStorage",
-    "FeatureVersionConflict",
-    # import / export
-    "FeatureIO",
-    "FeatureImportError",
-    # extractor
-    "ExtractionResult",
-    "FeatureExtractor",
-    # rule engine
-    "BusinessRule",
-    "to_system_prompt_snippet",
-    "validate_syntax",
-    # audit constants
-    "EVT_FEATURE_EXTRACT",
-    "EVT_FEATURE_UPDATE",
-    "EVT_FEATURE_DELETE",
-    "EVT_FEATURE_IMPORT",
-    "EVT_YAML_RELOAD",
-    # SSE event constants + helpers (V1.3)
-    "EVT_YAML_RELOADED",
-    "EVT_FEATURE_AFFECTED",
-    "EVT_EXTRACTION_DONE",
-    "emit_biznav_event",
-    "consume_biznav_events",
-    "flush_biznav_events",
     # hot reload + incremental (V1.3)
     "YamlHotReloader",
+    "consume_biznav_events",
+    "emit_biznav_event",
+    "feature_from_dict",
+    "feature_to_dict",
+    "flush_biznav_events",
     "mark_yaml_written",
+    "related_files_from_json",
+    "related_files_to_json",
     "reload_yaml_to_db",
-    "AffectedFeaturesWatcher",
+    "to_system_prompt_snippet",
+    "validate_syntax",
 ]

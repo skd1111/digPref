@@ -9,9 +9,13 @@
  *   - 底部"+ 新会话"按钮
  *
  * V1.5 (2026-07-31) 新增：搜索框、分支图标、FTS 搜索结果展示。
+ * V1.6 (2026-08-06) 补齐集成：详情弹窗入口（SessionDetailDialog）+ .eas 导入入口（ImportDialog）。
  */
 import { useState, useEffect } from 'react';
 import { useSessionsStore } from '@/store/sessionsStore';
+import { formatRelativeTime } from '@/store/collabStore';
+import { SessionDetailDialog } from './SessionDetailDialog';
+import { ImportDialog } from './ImportDialog';
 
 interface Props {
   onSessionSelected?: (sessionId: string) => void;
@@ -34,6 +38,9 @@ export function SessionsPanel({ onSessionSelected }: Props): JSX.Element {
   const [newTitle, setNewTitle] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [searchInput, setSearchInput] = useState('');
+  // V1.6：详情弹窗 / 导入弹窗状态
+  const [detailSessionId, setDetailSessionId] = useState<string | null>(null);
+  const [showImport, setShowImport] = useState(false);
 
   useEffect(() => {
     void loadList();
@@ -102,15 +109,25 @@ export function SessionsPanel({ onSessionSelected }: Props): JSX.Element {
         style={{ borderBottom: '1px solid #c0c0c0' }}
       >
         <span className="font-semibold">会话管理</span>
-        <button
-          type="button"
-          onClick={() => void loadList()}
-          disabled={loading}
-          className="px-2 py-1 text-xs hover:bg-[#333]"
-          title="刷新"
-        >
-          {loading ? '⏳' : '🔄'}
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setShowImport(true)}
+            className="px-2 py-1 text-xs hover:bg-[#333]"
+            title="导入 .eas 会话"
+          >
+            📥
+          </button>
+          <button
+            type="button"
+            onClick={() => void loadList()}
+            disabled={loading}
+            className="px-2 py-1 text-xs hover:bg-[#333]"
+            title="刷新"
+          >
+            {loading ? '⏳' : '🔄'}
+          </button>
+        </div>
       </div>
 
       {/* 搜索框 */}
@@ -168,7 +185,10 @@ export function SessionsPanel({ onSessionSelected }: Props): JSX.Element {
             <div className="mt-1 flex items-center gap-2 text-xs" style={{ color: '#616161' }}>
               <span>{s.owner}</span>
               <span>·</span>
-              <span>{new Date(s.updated_at).toLocaleDateString()}</span>
+              {/* 距今时间（用户要求 2026-08-07）；hover 看绝对时间 */}
+              <span title={new Date(s.updated_at).toLocaleString()}>
+                {s.updated_at > 0 ? formatRelativeTime(s.updated_at) : ''}
+              </span>
             </div>
             {isSearching && s.snippet && (
               <div
@@ -178,19 +198,32 @@ export function SessionsPanel({ onSessionSelected }: Props): JSX.Element {
               />
             )}
             {!isSearching && (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (confirm(`确认删除会话「${s.title}」？`)) {
-                    void remove(s.id);
-                  }
-                }}
-                className="mt-1 text-xs hover:underline"
-                style={{ color: '#cd3131' }}
-              >
-                删除
-              </button>
+              <div className="mt-1 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDetailSessionId(s.id);
+                  }}
+                  className="text-xs hover:underline"
+                  style={{ color: '#0b6bcb' }}
+                >
+                  详情
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (confirm(`确认删除会话「${s.title}」？`)) {
+                      void remove(s.id);
+                    }
+                  }}
+                  className="text-xs hover:underline"
+                  style={{ color: '#cd3131' }}
+                >
+                  删除
+                </button>
+              </div>
             )}
           </div>
         ))}
@@ -245,6 +278,22 @@ export function SessionsPanel({ onSessionSelected }: Props): JSX.Element {
           </button>
         )}
       </div>
+
+      {/* V1.6：详情弹窗（stats / 消息 / 分支 / 共享 / 事件链 + BranchDialog + ExportDialog） */}
+      {detailSessionId && (
+        <SessionDetailDialog
+          sessionId={detailSessionId}
+          open={detailSessionId !== null}
+          onClose={() => setDetailSessionId(null)}
+        />
+      )}
+
+      {/* V1.6：.eas 导入弹窗（导入成功后刷新列表并选中） */}
+      <ImportDialog
+        open={showImport}
+        onClose={() => setShowImport(false)}
+        onImported={(sid) => setActive(sid)}
+      />
     </div>
   );
 }

@@ -11,6 +11,7 @@
   2. <exe所在目录>/config/driver/（PyInstaller 打包）
   3. <项目根>/config/driver/（开发模式）
 """
+
 from __future__ import annotations
 
 import logging
@@ -72,7 +73,7 @@ def _ensure_extracted(driver_dir: Path) -> Path:
         try:
             with zipfile.ZipFile(whl, "r") as zf:
                 zf.extractall(site_dir)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("解压 %s 失败: %s", whl.name, exc)
 
     # 写入 marker

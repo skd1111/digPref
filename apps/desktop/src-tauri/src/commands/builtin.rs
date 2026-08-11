@@ -242,22 +242,22 @@ mod tests {
         let args: super::PathArgs = serde_json::from_str(json).unwrap();
         assert_eq!(args.path, "/tmp/test.txt");
         assert_eq!(args.allowed_roots.len(), 0);
-        assert_eq!(args._require_hitl_unused, false);
+        assert!(!args._require_hitl_unused);
     }
 
     #[test]
     fn test_mkdir_args_defaults() {
         let json = r#"{"path": "/tmp/new"}"#;
         let args: super::MkdirArgs = serde_json::from_str(json).unwrap();
-        assert_eq!(args.parents, true);  // default
-        assert_eq!(args.require_hitl, false);
+        assert!(args.parents);  // default
+        assert!(!args.require_hitl);
     }
 
     #[test]
     fn test_find_args_full() {
         let json = r#"{"path": "/tmp", "pattern": "*.rs", "regex": true, "max_results": 50}"#;
         let args: super::FindArgs = serde_json::from_str(json).unwrap();
-        assert_eq!(args.regex, true);
+        assert!(args.regex);
         assert_eq!(args.max_results, 50);
     }
 
@@ -284,8 +284,8 @@ mod tests {
     fn test_delete_args_defaults() {
         let json = r#"{"path": "/tmp/a.txt"}"#;
         let args: super::DeleteArgs = serde_json::from_str(json).unwrap();
-        assert_eq!(args.recursive, false);
-        assert_eq!(args.require_hitl, false);
+        assert!(!args.recursive);
+        assert!(!args.require_hitl);
         assert_eq!(args.allowed_roots.len(), 0);
     }
 
@@ -293,8 +293,8 @@ mod tests {
     fn test_move_args_full() {
         let json = r#"{"src": "/tmp/a", "dest": "/tmp/b", "overwrite": true, "require_hitl": true}"#;
         let args: super::MoveArgs = serde_json::from_str(json).unwrap();
-        assert_eq!(args.overwrite, true);
-        assert_eq!(args.require_hitl, true);
+        assert!(args.overwrite);
+        assert!(args.require_hitl);
     }
 
     #[test]
@@ -303,6 +303,6 @@ mod tests {
         let args: super::ShellArgs = serde_json::from_str(json).unwrap();
         assert_eq!(args.timeout_sec, 30);
         assert_eq!(args.allowed_prefixes.len(), 0);
-        assert_eq!(args.require_hitl, false);
+        assert!(!args.require_hitl);
     }
 }

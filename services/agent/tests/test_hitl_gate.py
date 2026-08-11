@@ -3,6 +3,7 @@
 回归测试：decision 返回后，approval_id 必须设为 None，否则下次再进入时
 带过期 UUID → check_decision() 返 None → 落到"等待"分支 → 无限循环。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -67,8 +68,7 @@ def test_decision_clears_approval_id():
     out2 = _run(hitl_gate_node(s))
     # 关键断言：approval_id 必须 = None
     assert out2["approval_id"] is None, (
-        "回归 #2: 决策返回后没清 approval_id，会导致下次进入时 "
-        "check_decision() 返 None → 无限循环"
+        "回归 #2: 决策返回后没清 approval_id，会导致下次进入时 check_decision() 返 None → 无限循环"
     )
     assert out2["approval_decision"] == "approve"
     assert out2["awaiting_approval"] is False

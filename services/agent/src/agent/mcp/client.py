@@ -1,11 +1,12 @@
 """MCP client — discovers tools across servers and routes invocations."""
+
 from __future__ import annotations
 
 import asyncio
 from contextlib import AsyncExitStack
 from typing import Any
 
-from mcp import ClientSession, StdioServerParameters
+from mcp import ClientSession
 from mcp.client.stdio import stdio_client
 
 from agent.mcp.registry import ServerRegistry
@@ -26,7 +27,7 @@ class McpClient:
         self._stack: AsyncExitStack | None = None
         self._sessions: dict[str, ClientSession] = {}
 
-    async def __aenter__(self) -> "McpClient":
+    async def __aenter__(self) -> McpClient:
         self._stack = AsyncExitStack()
         for name, params in self.registry.servers.items():
             read, write = await self._stack.enter_async_context(stdio_client(params))
@@ -45,12 +46,14 @@ class McpClient:
         all_tools: list[dict] = []
         for server, session in self._sessions.items():
             for tool in (await session.list_tools()).tools:
-                all_tools.append({
-                    "server": server,
-                    "name": tool.name,
-                    "description": tool.description,
-                    "inputSchema": tool.inputSchema,
-                })
+                all_tools.append(
+                    {
+                        "server": server,
+                        "name": tool.name,
+                        "description": tool.description,
+                        "inputSchema": tool.inputSchema,
+                    }
+                )
         return all_tools
 
     async def invoke(

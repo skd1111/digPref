@@ -1,4 +1,5 @@
 """Phase 2B V0 · ssh_sessions + ssh_commands 表 CRUD。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -10,7 +11,6 @@ from typing import Any
 import aiosqlite
 
 from agent.config import settings
-
 
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -59,10 +59,18 @@ class SshStorage:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        session_id, host, port, username, auth_method,
-                        status, pty_mode, _now_iso(), _now_iso(),
+                        session_id,
+                        host,
+                        port,
+                        username,
+                        auth_method,
+                        status,
+                        pty_mode,
+                        _now_iso(),
+                        _now_iso(),
                         json.dumps(meta, ensure_ascii=False, default=str),
-                        error, _now_iso(),
+                        error,
+                        _now_iso(),
                     ),
                 )
                 await db.commit()
@@ -142,9 +150,15 @@ class SshStorage:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        session_id, command, exit_code, elapsed_ms,
-                        1 if ok else 0, error,
-                        stdout_head, stderr_head, _now_iso(),
+                        session_id,
+                        command,
+                        exit_code,
+                        elapsed_ms,
+                        1 if ok else 0,
+                        error,
+                        stdout_head,
+                        stderr_head,
+                        _now_iso(),
                     ),
                 )
                 await db.commit()
@@ -169,13 +183,9 @@ class SshStorage:
         async with self._lock:
             db = await self._connect()
             try:
-                cur = await db.execute(
-                    "SELECT host, COUNT(*) as n FROM ssh_sessions GROUP BY host"
-                )
+                cur = await db.execute("SELECT host, COUNT(*) as n FROM ssh_sessions GROUP BY host")
                 rows = await cur.fetchall()
-                cur2 = await db.execute(
-                    "SELECT ok, COUNT(*) as n FROM ssh_commands GROUP BY ok"
-                )
+                cur2 = await db.execute("SELECT ok, COUNT(*) as n FROM ssh_commands GROUP BY ok")
                 cmd_rows = await cur2.fetchall()
             finally:
                 await db.close()
@@ -187,9 +197,20 @@ class SshStorage:
 
 def _row_to_dict(row: tuple) -> dict:
     cols = [
-        "id", "session_id", "host", "port", "username", "auth_method",
-        "status", "pty_mode", "created_at", "last_used", "disconnected_at",
-        "meta_json", "error", "ts",
+        "id",
+        "session_id",
+        "host",
+        "port",
+        "username",
+        "auth_method",
+        "status",
+        "pty_mode",
+        "created_at",
+        "last_used",
+        "disconnected_at",
+        "meta_json",
+        "error",
+        "ts",
     ]
     d = dict(zip(cols, row))
     if d.get("meta_json"):
@@ -202,8 +223,16 @@ def _row_to_dict(row: tuple) -> dict:
 
 def _cmd_row_to_dict(row: tuple) -> dict:
     cols = [
-        "id", "session_id", "command", "exit_code", "elapsed_ms",
-        "ok", "error", "stdout_head", "stderr_head", "ts",
+        "id",
+        "session_id",
+        "command",
+        "exit_code",
+        "elapsed_ms",
+        "ok",
+        "error",
+        "stdout_head",
+        "stderr_head",
+        "ts",
     ]
     return dict(zip(cols, row))
 

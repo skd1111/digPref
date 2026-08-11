@@ -1,14 +1,7 @@
 """Loader 单元测试。"""
-import os
-import tempfile
-from pathlib import Path
 
 import pytest
-import yaml
-
 from agent.skills.loader import SkillLoader
-from agent.skills.models import Skill
-
 
 VALID_YAML = """
 schema_version: "1.0"

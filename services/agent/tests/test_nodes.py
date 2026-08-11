@@ -1,17 +1,17 @@
 """Tests for individual graph nodes."""
+
 from __future__ import annotations
 
 import pytest
-
 from agent.graph.nodes.intent import intent_node
-from agent.graph.nodes.planner import planner_node, _normalise_step
+from agent.graph.nodes.planner import _normalise_step, planner_node
 from agent.graph.nodes.repair import repair_node
 from agent.graph.nodes.responder import responder_node
 from agent.graph.nodes.tool_runner import tool_runner_node
 from agent.graph.state import empty_state
 
-
 # ---- intent --------------------------------------------------------------
+
 
 class TestIntentNode:
     @pytest.mark.asyncio
@@ -29,6 +29,7 @@ class TestIntentNode:
 
 
 # ---- planner -------------------------------------------------------------
+
 
 class TestPlannerNode:
     @pytest.mark.asyncio
@@ -54,8 +55,12 @@ class TestPlannerNode:
 class TestNormaliseStep:
     def test_valid_step(self):
         specs = ({"server": "db", "name": "db.query", "inputSchema": {}},)
-        step = {"server": "db", "name": "db.query", "args": {"sql": "SELECT 1"},
-                "risk_level": "read"}
+        step = {
+            "server": "db",
+            "name": "db.query",
+            "args": {"sql": "SELECT 1"},
+            "risk_level": "read",
+        }
         out = _normalise_step(step, specs)
         assert out is not None
         assert out["name"] == "db.query"
@@ -70,6 +75,7 @@ class TestNormaliseStep:
 
 
 # ---- tool_runner ---------------------------------------------------------
+
 
 class TestToolRunner:
     @pytest.mark.asyncio
@@ -103,6 +109,7 @@ class TestToolRunner:
 
 # ---- repair --------------------------------------------------------------
 
+
 class TestRepairNode:
     @pytest.mark.asyncio
     async def test_no_error_skipped(self, mock_llm):
@@ -113,8 +120,12 @@ class TestRepairNode:
     @pytest.mark.asyncio
     async def test_recovers_with_fixed_call(self, mock_llm):
         s = empty_state("x")
-        s["pending_tool_call"] = {"server": "db", "name": "db.query",
-                                   "args": {"sql": "SELECT 1"}, "risk_level": "read"}
+        s["pending_tool_call"] = {
+            "server": "db",
+            "name": "db.query",
+            "args": {"sql": "SELECT 1"},
+            "risk_level": "read",
+        }
         s["tool_error"] = "syntax error near SELECT"
         s["plan"] = [s["pending_tool_call"]]
         out = await repair_node(s, mock_llm)
@@ -125,8 +136,12 @@ class TestRepairNode:
     @pytest.mark.asyncio
     async def test_exhausts_after_max_retries(self, mock_llm):
         s = empty_state("x")
-        s["pending_tool_call"] = {"server": "db", "name": "db.query",
-                                   "args": {"sql": "SELECT 1"}, "risk_level": "read"}
+        s["pending_tool_call"] = {
+            "server": "db",
+            "name": "db.query",
+            "args": {"sql": "SELECT 1"},
+            "risk_level": "read",
+        }
         s["tool_error"] = "still broken"
         s["retry_count"] = 2  # already at max
         out = await repair_node(s, mock_llm)
@@ -135,6 +150,7 @@ class TestRepairNode:
 
 
 # ---- responder -----------------------------------------------------------
+
 
 class TestResponderNode:
     @pytest.mark.asyncio

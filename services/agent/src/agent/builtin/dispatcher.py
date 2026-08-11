@@ -13,11 +13,11 @@ V2 职责（2026-07-31）：
   7. SSE 三处同步：emit builtin_tool_started / done / denied
   8. 返 AgentState 增量
 """
+
 from __future__ import annotations
 
 import asyncio
 import json
-import os
 import time
 import uuid
 from datetime import datetime, timezone
@@ -26,7 +26,6 @@ from typing import Any
 
 from agent.builtin.models import ToolResult, is_rust_tool
 from agent.builtin.registry import get_default_registry
-
 
 # 兼容 V0 import（外部代码 `from agent.builtin.dispatcher import dispatcher` 不变）
 __all__ = ["ToolDispatcher", "dispatcher", "reset_default_dispatcher"]
@@ -52,30 +51,39 @@ class ToolDispatcher:
         """Rust 工具的 Python 原生兜底（3 高危 + 5 只读）。"""
         if name == "delete_file":
             from agent.builtin.files import builtin_delete_file
+
             return await builtin_delete_file(**args)
         if name == "move_file":
             from agent.builtin.files import builtin_move_file
+
             return await builtin_move_file(**args)
         if name == "shell":
             from agent.builtin.shell import builtin_shell
+
             return await builtin_shell(**args)
         if name == "stat_file":
             from agent.builtin.fallbacks import builtin_stat_file_py
+
             return await asyncio.to_thread(builtin_stat_file_py, **args)
         if name == "find":
             from agent.builtin.fallbacks import builtin_find_py
+
             return await asyncio.to_thread(builtin_find_py, **args)
         if name == "glob":
             from agent.builtin.fallbacks import builtin_glob_py
+
             return await asyncio.to_thread(builtin_glob_py, **args)
         if name == "hash":
             from agent.builtin.fallbacks import builtin_hash_py
+
             return await asyncio.to_thread(builtin_hash_py, **args)
         if name == "base64":
             from agent.builtin.fallbacks import builtin_base64_py
+
             return await asyncio.to_thread(builtin_base64_py, **args)
         if name == "mkdir":
             from agent.builtin.fallbacks import builtin_mkdir_py
+
             return await asyncio.to_thread(builtin_mkdir_py, **args)
         return ToolResult(
             ok=False,
@@ -118,7 +126,9 @@ class ToolDispatcher:
 
         risk_level = self._registry.risk_level(name)
         needs_hitl = await _evaluate_hitl(call, risk_level, state)
-        approved = bool(state.get("approval_decision") == "approve") if isinstance(state, dict) else False
+        approved = (
+            bool(state.get("approval_decision") == "approve") if isinstance(state, dict) else False
+        )
 
         # ---- 2. SSE started（before execution）----
         started_ts = time.monotonic()
@@ -140,14 +150,17 @@ class ToolDispatcher:
                 "tool_error": None,
                 "awaiting_approval": True,
                 "approval_id": None,
-                "trace": [_trace_entry(
-                    "builtin_tool", "running",
-                    name=name,
-                    risk_level=risk_level,
-                    needs_hitl=True,
-                    reason="awaiting_hitl",
-                    call_id=call_id,
-                )],
+                "trace": [
+                    _trace_entry(
+                        "builtin_tool",
+                        "running",
+                        name=name,
+                        risk_level=risk_level,
+                        needs_hitl=True,
+                        reason="awaiting_hitl",
+                        call_id=call_id,
+                    )
+                ],
             }
 
         # ---- 3. 执行（Rust 工具 V1 占位 / V1.5 已实现的 6 工具通过 IPC 远端调用）----
@@ -163,6 +176,7 @@ class ToolDispatcher:
                 has_python_fallback,
                 invoke_rust_tool_sync,
             )
+
             bridge_result = await invoke_rust_tool_sync(
                 tool_name=name,
                 args=args,
@@ -175,7 +189,7 @@ class ToolDispatcher:
                 # V2：Agent 独立运行（无 Tauri 注入）→ 3 高危工具走 Python 原生兜底
                 try:
                     result = await self._exec_python_fallback(name, args)
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     result = ToolResult.from_exception(exc, risk_level=risk_level)
                     result.error = f"exec_failed: {type(exc).__name__}: {exc}"
             else:
@@ -207,7 +221,7 @@ class ToolDispatcher:
                     )
                 else:
                     result = result_obj
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 result = ToolResult.from_exception(exc, risk_level=risk_level)
                 result.error = f"exec_failed: {type(exc).__name__}: {exc}"
 
@@ -254,15 +268,18 @@ class ToolDispatcher:
             "pending_tool_call": call,
             "tool_result": result.to_dict(),
             "tool_error": None if result.ok else result.error,
-            "trace": [_trace_entry(
-                "builtin_tool", trace_status,
-                name=name,
-                risk_level=risk_level,
-                needs_hitl=needs_hitl,
-                error=result.error if not result.ok else None,
-                elapsed_ms=elapsed_ms,
-                call_id=call_id,
-            )],
+            "trace": [
+                _trace_entry(
+                    "builtin_tool",
+                    trace_status,
+                    name=name,
+                    risk_level=risk_level,
+                    needs_hitl=needs_hitl,
+                    error=result.error if not result.ok else None,
+                    elapsed_ms=elapsed_ms,
+                    call_id=call_id,
+                )
+            ],
             # 执行路径（含审批后放行）不再等待审批；同时消费掉 approval_decision，
             # 防止同一个 approval_decision 放行后续其他高危调用
             "awaiting_approval": False,
@@ -272,6 +289,7 @@ class ToolDispatcher:
 
 
 # ---- 内部辅助 ----------------------------------------------------------------
+
 
 async def _trace_file_operation(
     *,
@@ -299,13 +317,11 @@ async def _trace_file_operation(
         after: str | None = None
         if name == "write_file" and result.ok:
             after = str(args.get("content") or "")
-        op = extract_file_operation(
-            name, args, result.to_dict(), before=before, after=after
-        )
+        op = extract_file_operation(name, args, result.to_dict(), before=before, after=after)
         if op is None:
             return
         await get_collector().attach_file_operation(session_id, op)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass  # best-effort
 
 
@@ -322,6 +338,7 @@ async def _evaluate_hitl(call: dict, risk_level: str, state: dict) -> bool:
     if risk_level in ("medium", "high", "critical"):
         try:
             from agent.config import settings
+
             if settings.require_hitl_for_write:
                 return True
         except Exception:
@@ -389,6 +406,7 @@ async def _audit_builtin_call(
     # ---- 1. audit() 通用表（向后兼容 + 已有索引）----
     try:
         from agent.audit.store import audit
+
         await audit(
             "builtin_tool",
             {
@@ -452,6 +470,7 @@ async def _write_tool_calls_row(
     不导出新模块入口以保持 audit.store 公开 API 不变；通过 to_thread 避免阻塞事件循环。
     """
     import aiosqlite
+
     from agent.audit.store import SCHEMA_CREATE_TABLE, SCHEMA_INDEXES
     from agent.config import settings
 
@@ -459,7 +478,10 @@ async def _write_tool_calls_row(
     Path(target).parent.mkdir(parents=True, exist_ok=True)
 
     # tool_calls 表追加到 audit 通用 schema 后（CLAUDE.md §6 双 schema 同步）
-    extended_schema = SCHEMA_CREATE_TABLE + SCHEMA_INDEXES + """
+    extended_schema = (
+        SCHEMA_CREATE_TABLE
+        + SCHEMA_INDEXES
+        + """
 CREATE TABLE IF NOT EXISTS tool_calls (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     call_id         TEXT NOT NULL,
@@ -482,6 +504,7 @@ CREATE INDEX IF NOT EXISTS idx_tool_calls_ts     ON tool_calls(ts);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_call   ON tool_calls(call_id);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_risk   ON tool_calls(risk_level, ts);
 """
+    )
 
     async with aiosqlite.connect(target) as db:
         await db.executescript(extended_schema)
@@ -494,9 +517,19 @@ CREATE INDEX IF NOT EXISTS idx_tool_calls_risk   ON tool_calls(risk_level, ts);
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                call_id, tool_name, risk_level, needs_hitl, ok, error,
-                args_json, run_id, operator, elapsed_ms, content_size,
-                approval_id, ts,
+                call_id,
+                tool_name,
+                risk_level,
+                needs_hitl,
+                ok,
+                error,
+                args_json,
+                run_id,
+                operator,
+                elapsed_ms,
+                content_size,
+                approval_id,
+                ts,
             ),
         )
         await db.commit()
@@ -513,6 +546,7 @@ async def _emit_started(
     """SSE emit: builtin_tool_started."""
     try:
         from agent.builtin.events import emit_tool_started
+
         await emit_tool_started(
             tool_name=tool_name,
             args=args,
@@ -538,6 +572,7 @@ async def _emit_done(
     """SSE emit: builtin_tool_done."""
     try:
         from agent.builtin.events import emit_tool_done
+
         await emit_tool_done(
             tool_name=tool_name,
             call_id=call_id,

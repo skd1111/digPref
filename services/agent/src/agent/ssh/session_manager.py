@@ -10,6 +10,7 @@ V1 接力：
   - 会话自动重连（心跳检测 + 重试）
   - 会话超时回收（idle > 30min 自动 disconnect）
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -22,12 +23,9 @@ from agent.ssh.models import (
     AuthMethod,
     ConnectionStatus,
     PtyMode,
-    SshAuthError,
-    SshConnectionError,
     SshSession,
     check_session_limit,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -95,14 +93,18 @@ class SshSessionManager:
             if client is None:
                 return False
             await client.disconnect()
-            logger.info("ssh_session_disconnected session_id=%s host=%s", session_id, meta.host if meta else "?")
+            logger.info(
+                "ssh_session_disconnected session_id=%s host=%s",
+                session_id,
+                meta.host if meta else "?",
+            )
             return True
 
     async def disconnect_all(self) -> int:
         """断开所有 session。返断开数量。"""
         async with self._lock:
             count = len(self._sessions)
-            for sid, client in list(self._sessions.items()):
+            for _sid, client in list(self._sessions.items()):
                 await client.disconnect()
             self._sessions.clear()
             self._session_meta.clear()

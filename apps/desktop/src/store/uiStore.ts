@@ -25,10 +25,22 @@ export type ActivityId =
   | 'search'
   | 'source-control'
   | 'run-debug'
+  // reqflow V1：需求工作台（运营专家模式，需求卡片管理）
+  | 'requirements'
   | 'extensions'
   | 'collab'
   | 'code-nav'
-  | 'sessions';
+  | 'sessions'
+  // 数据字典：独立顶级入口（公共参数维护，原运营工作台右侧 tab 迁出）
+  | 'data-dict';
+
+/**
+ * Phase 2H：开发模式左侧栏三态子切换。
+ *   'assets'   —— 系统资产（DB / API / SSH / RPA）
+ *   'files'    —— 文件列表（工程目录树，界面与右侧思维链保持现状）
+ *   'features' —— 系统功能点（工程 AI 提炼，支持搜索，右侧切换为需求卡片）
+ */
+export type DevPanelMode = 'assets' | 'files' | 'features';
 
 interface UIState {
   // 命令面板 / cheat sheet
@@ -52,7 +64,8 @@ interface UIState {
 
   // 工作模式：
   //   'full'    = 开发模式（4 象限）
-  //   'operator'= 运营专家模式（2 象限，业务视角）
+  //   'operator'= 运营模式（Phase 2H 收尾：恢复为独立顶级页签，与开发模式并列；
+  //               进入后全屏渲染运营工作台：业务列表 + Chat + 工作台）
   //   'auditor' = 审核专家模式（Phase 5：金融级审批与审计，三栏布局）
   //   'analyst' = 数据专家模式（Phase 7：NL2SQL + 数据网格 + 图表 + 报表导出，四象限）
   // 持久化到 localStorage：用户上次关闭时的 mode 会保留到下次启动
@@ -84,11 +97,16 @@ interface UIState {
   activityId: ActivityId;
 
   // Phase 2G V1.3：左侧 SideBar 显示内容模式
-  //   'auto'       —— 按 WorkMode 自动决定（'full' → SystemAssetTree 系统资产；'operator' → BusinessFeatureTree 业务功能点）
-  //   'system'     —— 强制显示系统资产树（开发视角）
-  //   'business'   —— 强制显示业务功能点树（运营视角）
+  //   Phase 2H 起由 devPanelMode 接管：'assets' | 'files' | 'features'
+  //   （保留字段用于 localStorage 旧值迁移）
   // 持久化：用户上次的选择保留到下次启动
   leftPanelMode: 'auto' | 'system' | 'business';
+
+  // Phase 2H：开发模式左侧栏子切换（系统资产 / 文件列表 / 系统功能点）
+  devPanelMode: DevPanelMode;
+
+  // 右侧控制台面板宽度（可拖拽调节，240–720，默认 320；持久化）
+  rightPanelWidth: number;
 
   // 操作
   toggleCommandPalette: (open?: boolean) => void;
@@ -109,6 +127,8 @@ interface UIState {
   setPendingCollabMentionCount: (n: number) => void;
   setActivityId: (id: UIState['activityId']) => void;
   setLeftPanelMode: (m: UIState['leftPanelMode']) => void;
+  setDevPanelMode: (m: DevPanelMode) => void;
+  setRightPanelWidth: (w: number) => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -133,6 +153,8 @@ export const useUIStore = create<UIState>()(
       pendingCollabMentionCount: 0,
       activityId: 'explorer',
       leftPanelMode: 'auto',
+      devPanelMode: 'assets',
+      rightPanelWidth: 320,
 
       toggleCommandPalette: (open) =>
         set((s) => ({ commandPaletteOpen: open ?? !s.commandPaletteOpen })),
@@ -166,6 +188,8 @@ export const useUIStore = create<UIState>()(
       setPendingCollabMentionCount: (n) => set({ pendingCollabMentionCount: n }),
       setActivityId: (id) => set({ activityId: id }),
       setLeftPanelMode: (m) => set({ leftPanelMode: m }),
+      setDevPanelMode: (m) => set({ devPanelMode: m }),
+      setRightPanelWidth: (w) => set({ rightPanelWidth: Math.min(720, Math.max(240, w)) }),
     }),
     {
       name: 'eaide.ui',
@@ -180,11 +204,23 @@ export const useUIStore = create<UIState>()(
         auditorModePromptDismissed: s.auditorModePromptDismissed,
         analystModePromptDismissed: s.analystModePromptDismissed,
         leftPanelMode: s.leftPanelMode,
+        devPanelMode: s.devPanelMode,
+        rightPanelWidth: s.rightPanelWidth,
       }),
       onRehydrateStorage: () => (state) => {
         // 旧版 'audit' 占位模式 → 新版 'auditor'（Phase 5 改名）
         if (state && (state as { mode?: string }).mode === 'audit') {
           state.mode = 'auditor';
+        }
+        // 注：'operator' 是独立顶级页签（与开发模式并列），不做迁移
+        // Phase 2H：leftPanelMode 旧值 → devPanelMode（'system'→assets，'business'→features，auto→assets）
+        const st = state as {
+          leftPanelMode?: string;
+          devPanelMode?: DevPanelMode;
+        } | null;
+        if (st && !st.devPanelMode) {
+          if (st.leftPanelMode === 'business') st.devPanelMode = 'features';
+          else st.devPanelMode = 'assets';
         }
       },
     },

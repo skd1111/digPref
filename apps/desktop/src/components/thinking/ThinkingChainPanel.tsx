@@ -5,7 +5,7 @@
  * 文件操作渲染为 FileReferenceBadge（hover 预览 diff）。
  *
  * 数据流：
- *   - 挂载时 → loadLatestSession() 自动加载最近会话的思维链（Agent 未就绪时静默重试）
+ *   - 每次启动面板为空（不自动加载历史会话）
  *   - SSE trace 事件（useAgentStream）→ thinkingStore.setSessionId(runId) 切到实时会话
  *   - traceStore.steps 变化（有新节点执行）→ 防抖 300ms refresh
  *   - done 事件 → 最终 refresh
@@ -26,27 +26,10 @@ export function ThinkingChainPanel(): JSX.Element {
   const sessionId = useThinkingStore((s) => s.sessionId);
   const loading = useThinkingStore((s) => s.loading);
   const refresh = useThinkingStore((s) => s.refresh);
-  const loadLatestSession = useThinkingStore((s) => s.loadLatestSession);
   // SSE 执行链路 step 数量变化 = 后端有新节点执行 → 触发思维链刷新
   const traceCount = useTraceStore((s) => s.steps.length);
   const scrollRef = useRef<HTMLDivElement>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // 挂载时自动加载最近会话思维链；Agent 未就绪（启动竞态）时静默重试
-  useEffect(() => {
-    let cancelled = false;
-    const timers: Array<ReturnType<typeof setTimeout>> = [];
-    const tryLoad = async (attempt: number): Promise<void> => {
-      await loadLatestSession();
-      if (cancelled || useThinkingStore.getState().sessionId || attempt >= 10) return;
-      timers.push(setTimeout(() => void tryLoad(attempt + 1), 3000));
-    };
-    void tryLoad(0);
-    return () => {
-      cancelled = true;
-      timers.forEach((t) => clearTimeout(t));
-    };
-  }, [loadLatestSession]);
 
   // trace 活动防抖刷新
   useEffect(() => {

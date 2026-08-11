@@ -6,11 +6,11 @@
   - 决策融合：execution.actual_backend + spark_reasoning_backend / spark_execution_backend 字段
   - V2.0 placeholder 返回（无真实 LLM 调用）
 """
-import pytest
 
-from agent.llm.engine import RouterEngine
+import pytest
 from agent.llm.budget import BudgetController
 from agent.llm.circuit_breaker import CircuitBreakerRegistry
+from agent.llm.engine import RouterEngine
 from agent.llm.metrics import MetricsRecorder
 from agent.llm.models import LLMBackend
 from agent.llm.router import LMRouter
@@ -20,15 +20,34 @@ from agent.llm.router import LMRouter
 def multi_role_engine():
     """构造含 reasoning + execution + utility 三类后端的 Engine。"""
     backends = [
-        LLMBackend(name="ollama-utility", type="local", base_url="http://x",
-                   model_name="qwen2.5:0.5b", data_residency="local",
-                   role="utility", enabled=True),
-        LLMBackend(name="deepseek-reasoning", type="private", base_url="http://y",
-                   model_name="r1", data_residency="private",
-                   role="reasoning", enabled=True),
-        LLMBackend(name="gpt4o-execution", type="cloud", base_url="http://z",
-                   model_name="gpt-4o", data_residency="cloud",
-                   role="execution", enabled=True, api_key_ref="k"),
+        LLMBackend(
+            name="ollama-utility",
+            type="local",
+            base_url="http://x",
+            model_name="qwen2.5:0.5b",
+            data_residency="local",
+            role="utility",
+            enabled=True,
+        ),
+        LLMBackend(
+            name="deepseek-reasoning",
+            type="private",
+            base_url="http://y",
+            model_name="r1",
+            data_residency="private",
+            role="reasoning",
+            enabled=True,
+        ),
+        LLMBackend(
+            name="gpt4o-execution",
+            type="cloud",
+            base_url="http://z",
+            model_name="gpt-4o",
+            data_residency="cloud",
+            role="execution",
+            enabled=True,
+            api_key_ref="k",
+        ),
     ]
     return RouterEngine(
         backends=backends,
@@ -42,6 +61,7 @@ def multi_role_engine():
 @pytest.fixture(autouse=True)
 def _clean_router_queue():
     from agent.llm.metrics import flush_router_events
+
     flush_router_events()
     yield
     flush_router_events()
@@ -51,13 +71,15 @@ def test_spark_route_uses_role_override_twice(multi_role_engine):
     """spark_route 调 2 次 route_request（role='reasoning' + 'execution'）。"""
     import asyncio
 
-    decision = asyncio.run(multi_role_engine.spark_route(
-        task_kind="plan",
-        user_prompt="分析这个 SQL 性能问题",
-        history=[],
-        tool_specs=[],
-        request_id="spark-test",
-    ))
+    decision = asyncio.run(
+        multi_role_engine.spark_route(
+            task_kind="plan",
+            user_prompt="分析这个 SQL 性能问题",
+            history=[],
+            tool_specs=[],
+            request_id="spark-test",
+        )
+    )
     # execution 是 final decision
     assert decision.actual_backend == "gpt4o-execution"
     # reasoning 是 spark_reasoning_backend
@@ -80,12 +102,14 @@ def test_lm_router_set_spark_mode(multi_role_engine):
     # Engine 端也同步
     assert multi_role_engine.spark_enabled is True
 
-    plan_steps, explanation = asyncio.run(router.plan(
-        intent="query",
-        user_prompt="test spark mode",
-        history=[],
-        tool_specs=[],
-    ))
+    plan_steps, explanation = asyncio.run(
+        router.plan(
+            intent="query",
+            user_prompt="test spark mode",
+            history=[],
+            tool_specs=[],
+        )
+    )
     # V2.0 placeholder：空 plan + 含 "Spark V0 placeholder" 标识
     assert plan_steps == []
     assert "Spark V0 placeholder" in explanation
@@ -99,12 +123,14 @@ def test_lm_router_set_spark_mode_off_keeps_legacy(multi_role_engine, monkeypatc
     monkeypatch.setenv("EAIDE_LLM_BACKEND", "mock")
     router = LMRouter(engine=multi_role_engine)
     # 不开 spark
-    plan_steps, explanation = asyncio.run(router.plan(
-        intent="query",
-        user_prompt="test legacy",
-        history=[],
-        tool_specs=[],
-    ))
+    plan_steps, explanation = asyncio.run(
+        router.plan(
+            intent="query",
+            user_prompt="test legacy",
+            history=[],
+            tool_specs=[],
+        )
+    )
     # mock 返回固定 plan，**不含** "Spark V0 placeholder"
     assert isinstance(plan_steps, list)
     assert "Spark V0 placeholder" not in explanation
@@ -113,15 +139,18 @@ def test_lm_router_set_spark_mode_off_keeps_legacy(multi_role_engine, monkeypatc
 def test_spark_mode_emits_two_decisions(multi_role_engine):
     """spark_route 触发 2 次 emit_event('llm_route_decided')（reasoning + execution）。"""
     import asyncio
+
     from agent.llm.metrics import consume_router_events
 
-    asyncio.run(multi_role_engine.spark_route(
-        task_kind="summarise",
-        user_prompt="summarize this",
-        history=[],
-        tool_specs=[],
-        request_id="spark-emit",
-    ))
+    asyncio.run(
+        multi_role_engine.spark_route(
+            task_kind="summarise",
+            user_prompt="summarize this",
+            history=[],
+            tool_specs=[],
+            request_id="spark-emit",
+        )
+    )
     events = asyncio.run(consume_router_events(timeout_s=0.01))
     # spark_route 内调 2 次 route_request → 2 次 emit
     # 第 2 次 emit 附加 spark_mode=True 标识
@@ -131,6 +160,14 @@ def test_spark_mode_emits_two_decisions(multi_role_engine):
     payload = spark_marked[-1][1]
     assert payload["spark_reasoning_backend"] == "deepseek-reasoning"
     assert payload["spark_execution_backend"] == "gpt4o-execution"
+
+
+def test_spark_prompts_load_from_templates():
+    """spark 提示词已外置为 .md 资产（spec §4.4）。"""
+    from agent.llm.prompts import load_prompt
+
+    assert "reasoning" in load_prompt("spark_reasoning").lower()
+    assert "draft" in load_prompt("spark_execution").lower()
 
 
 def test_spark_role_override_filters_to_specific_role(multi_role_engine):
@@ -147,5 +184,6 @@ def test_spark_role_override_filters_to_specific_role(multi_role_engine):
         sensitivity=Sensitivity.PRODUCTION,  # 强制私有
         role_override="execution",  # 但 Spark 第二跳要 execution（cloud）
     )
-    assert decision.actual_backend is None, \
+    assert decision.actual_backend is None, (
         "PRODUCTION sensitivity 强制私有，不应选 cloud execution backend"
+    )

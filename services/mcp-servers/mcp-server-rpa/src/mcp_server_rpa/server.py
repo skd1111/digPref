@@ -1,4 +1,5 @@
 """MCP stdio entry — Playwright headless browser."""
+
 from __future__ import annotations
 
 import asyncio
@@ -9,7 +10,6 @@ from mcp.types import Tool
 
 from mcp_server_rpa.safety import domain_whitelist
 from mcp_server_rpa.tools import click, extract, navigate
-
 
 server = Server("mcp-server-rpa")
 

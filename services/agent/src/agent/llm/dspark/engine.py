@@ -9,6 +9,7 @@ V0 仅做：
     - 决策被调用时记一条 metrics（供 RouterDashboard 拉取）
     - 草稿模型路径缺失 → 静默降级（不允许抛异常）
 """
+
 from __future__ import annotations
 
 import logging
@@ -17,7 +18,6 @@ from collections import deque
 from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any
-
 
 logger = logging.getLogger(__name__)
 

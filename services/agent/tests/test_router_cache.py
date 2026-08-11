@@ -2,6 +2,7 @@
 
 时间用可注入的 fake clock 控制 TTL 过期，不 sleep，测试快且确定。
 """
+
 from __future__ import annotations
 
 from agent.llm.cache_l1 import L1Cache, make_key
@@ -42,9 +43,9 @@ def test_ttl_expiry():
     k = make_key("mock", "x")
     c.put(k, "v")
     clock.advance(299)
-    assert c.get(k) == "v"       # 未过期
-    clock.advance(2)             # 总 301 > 300
-    assert c.get(k) is None      # 过期 → miss + 淘汰
+    assert c.get(k) == "v"  # 未过期
+    clock.advance(2)  # 总 301 > 300
+    assert c.get(k) is None  # 过期 → miss + 淘汰
     assert c.size == 0
 
 
@@ -52,8 +53,8 @@ def test_lru_eviction():
     c = L1Cache(max_size=2)
     c.put("a", "1")
     c.put("b", "2")
-    c.get("a")            # a 变 MRU，b 变 LRU
-    c.put("c", "3")       # 超容量 → 淘汰 LRU=b
+    c.get("a")  # a 变 MRU，b 变 LRU
+    c.put("c", "3")  # 超容量 → 淘汰 LRU=b
     assert c.get("a") == "1"
     assert c.get("c") == "3"
     assert c.get("b") is None
@@ -62,8 +63,8 @@ def test_lru_eviction():
 def test_hit_rate():
     c = L1Cache()
     c.put("k", "v")
-    c.get("k")     # hit
-    c.get("k")     # hit
+    c.get("k")  # hit
+    c.get("k")  # hit
     c.get("miss")  # miss
     assert c.hit_rate == 2 / 3
 

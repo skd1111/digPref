@@ -9,13 +9,15 @@
   GET    /skills/export/all    — 导出全部（YAML 字典）
   POST   /skills/reload        — 重新扫描整个目录
 """
+
 from __future__ import annotations
 
 import yaml
 from fastapi import APIRouter, Body, File, HTTPException, UploadFile
 from fastapi.responses import Response
 
-from agent.skills.loader import SKILLS_DIR as _DEFAULT_SKILLS_DIR, SkillLoader
+from agent.skills.loader import SKILLS_DIR as _DEFAULT_SKILLS_DIR
+from agent.skills.loader import SkillLoader
 from agent.skills.schema import validate_no_dsn, validate_skill_yaml
 from agent.skills.share import export_zip, import_zip
 
@@ -111,10 +113,7 @@ def import_skill(body: dict = Body(...)) -> dict:
 @router.get("/export/all")
 def export_all() -> dict:
     return {
-        "skills": {
-            s.id: yaml.safe_dump(s.to_dict(), allow_unicode=True)
-            for s in _loader.list()
-        }
+        "skills": {s.id: yaml.safe_dump(s.to_dict(), allow_unicode=True) for s in _loader.list()}
     }
 
 

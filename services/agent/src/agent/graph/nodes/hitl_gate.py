@@ -17,6 +17,7 @@ Phase 18：首次进入先过自主性决策矩阵（dual/autonomy）：
     - async worker 不被长时间阻塞
     - Agent 重启后可恢复（Redis 持久化）
 """
+
 from __future__ import annotations
 
 import logging
@@ -43,8 +44,9 @@ async def hitl_gate_node(state: AgentState, llm: Any | None = None) -> dict:
     if call.get("server") == "builtin":
         try:
             from agent.builtin.registry import TOOL_RISK_LEVEL
+
             risk_level = TOOL_RISK_LEVEL.get(call.get("name", ""), risk_level)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     # 非写操作 + 风险等级为 read → 跳过 HITL
@@ -81,17 +83,22 @@ async def hitl_gate_node(state: AgentState, llm: Any | None = None) -> dict:
                 "approval_decision": decision,
                 "awaiting_approval": False,
                 "approval_options": None,  # Phase 18：决策后清理选项
-                "trace": [record_trace(
-                    "hitl_gate", "ok",
-                    approval_id=existing_id,
-                    decision=decision,
-                    risk_level=call.get("risk_level"),
-                )],
+                "trace": [
+                    record_trace(
+                        "hitl_gate",
+                        "ok",
+                        approval_id=existing_id,
+                        decision=decision,
+                        risk_level=call.get("risk_level"),
+                    )
+                ],
             }
         # 尚未决定 → 继续等待
         return {
             "awaiting_approval": True,
-            "trace": [record_trace("hitl_gate", "running", reason="waiting", approval_id=existing_id)],
+            "trace": [
+                record_trace("hitl_gate", "running", reason="waiting", approval_id=existing_id)
+            ],
         }
 
     # ---- 首次进入：发起审批 ----
@@ -112,9 +119,14 @@ async def hitl_gate_node(state: AgentState, llm: Any | None = None) -> dict:
             "approval_id": None,
             "approval_decision": "reject",
             "awaiting_approval": False,
-            "trace": [record_trace(
-                "hitl_gate", "fail", reason="hard_block", risk_level=risk_level,
-            )],
+            "trace": [
+                record_trace(
+                    "hitl_gate",
+                    "fail",
+                    reason="hard_block",
+                    risk_level=risk_level,
+                )
+            ],
         }
 
     if verdict.action == "approve":
@@ -124,11 +136,14 @@ async def hitl_gate_node(state: AgentState, llm: Any | None = None) -> dict:
             "approval_id": None,
             "approval_decision": "approve",
             "awaiting_approval": False,
-            "trace": [record_trace(
-                "hitl_gate", "ok",
-                reason=f"auto_approved:{verdict.decided_by}",
-                risk_level=risk_level,
-            )],
+            "trace": [
+                record_trace(
+                    "hitl_gate",
+                    "ok",
+                    reason=f"auto_approved:{verdict.decided_by}",
+                    risk_level=risk_level,
+                )
+            ],
         }
 
     # Phase 18：medium+ 风险审批生成推荐选项（失败回退二元审批，不阻塞）
@@ -151,7 +166,9 @@ async def hitl_gate_node(state: AgentState, llm: Any | None = None) -> dict:
         rec_opt = next((o for o in opts if o.get("id") == rec_id), None)
         if rec_opt is not None and rec_opt.get("label") != "不执行":
             await _audit_autonomy(
-                state, call, verdict,
+                state,
+                call,
+                verdict,
                 reason=(approval_options or {}).get("recommendationReason"),
                 option_label=rec_opt.get("label"),
             )
@@ -160,16 +177,17 @@ async def hitl_gate_node(state: AgentState, llm: Any | None = None) -> dict:
                 "approval_decision": "approve",
                 "awaiting_approval": False,
                 "approval_options": approval_options,
-                "trace": [record_trace(
-                    "hitl_gate", "ok",
-                    reason="auto_mode:recommended",
-                    risk_level=risk_level,
-                    option=rec_opt.get("label"),
-                )],
+                "trace": [
+                    record_trace(
+                        "hitl_gate",
+                        "ok",
+                        reason="auto_mode:recommended",
+                        risk_level=risk_level,
+                        option=rec_opt.get("label"),
+                    )
+                ],
             }
-        logger.warning(
-            "auto mode without valid recommended option → fail-closed to user approval"
-        )
+        logger.warning("auto mode without valid recommended option → fail-closed to user approval")
 
     await start_approval(
         approval_id=approval_id,
@@ -181,13 +199,16 @@ async def hitl_gate_node(state: AgentState, llm: Any | None = None) -> dict:
         "approval_id": approval_id,
         "awaiting_approval": True,
         "approval_options": approval_options,
-        "trace": [record_trace(
-            "hitl_gate", "running",
-            reason="requested",
-            approval_id=approval_id,
-            risk_level=call.get("risk_level"),
-            has_options=approval_options is not None,
-        )],
+        "trace": [
+            record_trace(
+                "hitl_gate",
+                "running",
+                reason="requested",
+                approval_id=approval_id,
+                risk_level=call.get("risk_level"),
+                has_options=approval_options is not None,
+            )
+        ],
     }
 
 
@@ -216,5 +237,5 @@ async def _audit_autonomy(
             },
             run_id=state.get("run_id"),
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("audit AUTO_MODE_DECISION failed: %s", exc)

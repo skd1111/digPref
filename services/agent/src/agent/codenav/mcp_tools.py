@@ -3,22 +3,25 @@
 注册为 LangGraph tool_node 的标准 Function；mcp-server（如果有）通过
 stdio 调用。本文件暴露纯 Python 函数供 FastAPI /codenav/jump / explain 复用。
 """
+
 from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
 
 from agent.codenav.llm_client import (
     CodenavLLMClient,
     build_client_from_config,
-    get_default_client,
     resolve_codenav_backend,
+    strip_think,
 )
 from agent.codenav.models import JumpResult, Symbol
 from agent.codenav.query import SymbolQuery
 
 logger = logging.getLogger(__name__)
+
+# fire-and-forget 日志推送任务强引用（防 GC 提前回收）
+_bg_log_tasks: set = set()
 
 
 def _default_db_path() -> str:
@@ -38,7 +41,8 @@ def _get_query() -> SymbolQuery:
 # MCP-style tool functions
 # ---------------------------------------------------------------------------
 
-async def search_symbol(name: str, kind: Optional[str] = None, limit: int = 10) -> list[dict]:
+
+async def search_symbol(name: str, kind: str | None = None, limit: int = 10) -> list[dict]:
     """精确/模糊查询 SQLite 符号库（< 50ms）。"""
     q = _get_query()
     return [s.__dict__ for s in q.search(name, kind=kind, limit=limit)]
@@ -81,7 +85,7 @@ async def explain_symbol(
     current_file: str,
     line: int,
     context: str,
-    selection: Optional[tuple[int, int, str]] = None,  # (start_line, end_line, text)
+    selection: tuple[int, int, str] | None = None,  # (start_line, end_line, text)
     llm_client: CodenavLLMClient | None = None,
 ) -> dict:
     """解释符号语义。
@@ -93,10 +97,12 @@ async def explain_symbol(
     Returns: {"text": str, "source": "llm"|"mock", "confidence": float, "backend": str|None}
     """
     import time
+
     t0 = time.time()
     if llm_client is None:
         # V1：先尝试同步读 feature_backend 单例（修 get_default_client 旧版 async bug）
         from agent.codenav.llm_client import get_default_client
+
         llm_client = get_default_client()
     if llm_client and llm_client.configured:
         text = await llm_client.explain_symbol(
@@ -108,6 +114,7 @@ async def explain_symbol(
         )
         latency_ms = int((time.time() - t0) * 1000)
         if text:
+            text = strip_think(text)
             _emit_log(
                 "codenav.explain",
                 symbol=symbol,
@@ -139,12 +146,14 @@ def _emit_log(category: str, **fields) -> None:
     前端 Xterm 终端订阅此事件，按 category 着色。
     """
     import asyncio
-    import json as _json
+
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
             # 在 FastAPI handler 里：把 emit 挂到 loop 上
-            loop.create_task(_push_log(category, fields))
+            task = loop.create_task(_push_log(category, fields))
+            _bg_log_tasks.add(task)
+            task.add_done_callback(_bg_log_tasks.discard)
             return
     except RuntimeError:
         pass
@@ -162,8 +171,10 @@ async def _push_log(category: str, fields: dict) -> None:
 # /codenav/jump 解析
 # ---------------------------------------------------------------------------
 
+
 def _pick_best_match(results: list[Symbol], current_file: str) -> Symbol:
     """从查询结果中挑最佳匹配：同文件 > 同目录 > 其他。"""
+
     def priority(s: Symbol) -> tuple[int, str]:
         if s.file_path == current_file:
             return (0, s.file_path)
@@ -171,6 +182,7 @@ def _pick_best_match(results: list[Symbol], current_file: str) -> Symbol:
         if os.path.dirname(s.file_path) == os.path.dirname(current_file):
             return (1, s.file_path)
         return (2, s.file_path)
+
     return min(results, key=priority)
 
 
@@ -178,7 +190,7 @@ async def resolve_jump(
     symbol: str,
     current_file: str,
     context: str = "",
-    llm_client: CodenavLLMClient | None = None,  # noqa: ARG001 (向后兼容)
+    llm_client: CodenavLLMClient | None = None,
 ) -> JumpResult:
     """符号跳转解析：纯 SQLite 索引（VSCode 风格），无 LLM 降级。
 

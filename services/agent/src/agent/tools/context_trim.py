@@ -2,10 +2,11 @@
 context budget by summarising long tool outputs (logs, query results)
 before injection.
 """
+
 from __future__ import annotations
 
 import re
-from typing import Iterable
+from collections.abc import Iterable
 
 _TOKEN_RE = re.compile(r"\S+")
 
@@ -34,5 +35,5 @@ def extract_window(text: str, *, around: str, before: int = 500, after: int = 20
     """
     idx = text.find(around)
     if idx < 0:
-        return text[-before - after:]
-    return text[max(0, idx - before): idx + len(around) + after]
+        return text[-before - after :]
+    return text[max(0, idx - before) : idx + len(around) + after]

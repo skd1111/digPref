@@ -116,12 +116,15 @@ await interrupt(approval_id="appr_abc", plan={...})
 #    → Agent 写 audit: action="approval.decision", payload={approval_id, decision}
 
 # 3. Agent resume 后调用 db.execute
-await mcp.call_tool("db.execute", {
-    "connection": "orders_pg",
-    "sql": "UPDATE orders SET status='shipped' WHERE id = $1",
-    "params": [42],
-    "approval_id": "appr_abc",   # ← 必须
-})
+await mcp.call_tool(
+    "db.execute",
+    {
+        "connection": "orders_pg",
+        "sql": "UPDATE orders SET status='shipped' WHERE id = $1",
+        "params": [42],
+        "approval_id": "appr_abc",  # ← 必须
+    },
+)
 ```
 
 `execute.run` 会**查审计表**确认存在 `approval.decision=approve` 行，否则 `ApprovalMissingError`。

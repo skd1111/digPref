@@ -22,21 +22,20 @@ Schema is intentionally simple:
         tool_name    TEXT
     );
 """
+
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 
 import aiosqlite
 
 from agent.config import settings
 from agent.observability.langsmith import enabled as langsmith_enabled
-
 
 log = logging.getLogger(__name__)
 _LOCK = asyncio.Lock()
@@ -67,23 +66,24 @@ CREATE INDEX IF NOT EXISTS idx_trace_node ON trace(node);
 
 # ---- Public API ------------------------------------------------------------
 
+
 async def record(node: str, status: str, *, run_id: str, **meta: Any) -> None:
     """Append one trace row. Fire-and-forget."""
     Path(settings.audit_db_path).parent.mkdir(parents=True, exist_ok=True)
     row = {
-        "run_id":      run_id,
-        "node":        node,
-        "status":      status,
-        "ts":          datetime.now(timezone.utc).isoformat(),
-        "thread_id":   meta.get("thread_id"),
+        "run_id": run_id,
+        "node": node,
+        "status": status,
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "thread_id": meta.get("thread_id"),
         "duration_ms": meta.get("duration_ms"),
-        "summary":     meta.get("summary"),
-        "error":       meta.get("error"),
+        "summary": meta.get("summary"),
+        "error": meta.get("error"),
         "approval_id": meta.get("approval_id"),
-        "decision":    meta.get("decision"),
-        "attempts":    meta.get("attempts"),
-        "rationale":   meta.get("rationale"),
-        "tool_name":   meta.get("tool_name"),
+        "decision": meta.get("decision"),
+        "attempts": meta.get("attempts"),
+        "rationale": meta.get("rationale"),
+        "tool_name": meta.get("tool_name"),
     }
     try:
         async with _LOCK, aiosqlite.connect(settings.audit_db_path) as db:
@@ -96,13 +96,23 @@ async def record(node: str, status: str, *, run_id: str, **meta: Any) -> None:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    row["run_id"], row["thread_id"], row["node"], row["status"], row["ts"],
-                    row["duration_ms"], row["summary"], row["error"], row["approval_id"],
-                    row["decision"], row["attempts"], row["rationale"], row["tool_name"],
+                    row["run_id"],
+                    row["thread_id"],
+                    row["node"],
+                    row["status"],
+                    row["ts"],
+                    row["duration_ms"],
+                    row["summary"],
+                    row["error"],
+                    row["approval_id"],
+                    row["decision"],
+                    row["attempts"],
+                    row["rationale"],
+                    row["tool_name"],
                 ),
             )
             await db.commit()
-    except Exception as exc:  # noqa: BLE001 — never break the agent
+    except Exception as exc:
         log.warning("trace persistence failed: %s", exc)
 
     # Best-effort LangSmith export
@@ -121,17 +131,17 @@ async def query_run(run_id: str) -> list[dict]:
         rows = await cur.fetchall()
     return [
         {
-            "node":        r[0],
-            "status":      r[1],
-            "ts":          r[2],
+            "node": r[0],
+            "status": r[1],
+            "ts": r[2],
             "duration_ms": r[3],
-            "summary":     r[4],
-            "error":       r[5],
+            "summary": r[4],
+            "error": r[5],
             "approval_id": r[6],
-            "decision":    r[7],
-            "attempts":    r[8],
-            "rationale":   r[9],
-            "tool_name":   r[10],
+            "decision": r[7],
+            "attempts": r[8],
+            "rationale": r[9],
+            "tool_name": r[10],
         }
         for r in rows
     ]
@@ -156,27 +166,30 @@ async def stream_all_runs() -> AsyncIterator[dict]:
 
 # ---- LangSmith export ------------------------------------------------------
 
+
 async def _export_to_langsmith(row: dict) -> None:
     """Best-effort POST to LangSmith. Failure is silently ignored."""
     import os
+
     import httpx
+
     endpoint = os.environ.get("LANGCHAIN_ENDPOINT", "https://api.smith.langchain.com")
     api_key = os.environ.get("LANGCHAIN_API_KEY", "")
     if not api_key:
         return
     payload = {
-        "id":       f"eaide-{row['run_id']}-{row['node']}-{int(_ts(row['ts']))}",
-        "name":     row["node"],
+        "id": f"eaide-{row['run_id']}-{row['node']}-{int(_ts(row['ts']))}",
+        "name": row["node"],
         "run_type": "chain",
         "start_time": _ts(row["ts"]),
-        "end_time":  _ts(row["ts"]) + (row.get("duration_ms") or 0) / 1000,
-        "status":    "success" if row["status"] == "ok" else "error",
+        "end_time": _ts(row["ts"]) + (row.get("duration_ms") or 0) / 1000,
+        "status": "success" if row["status"] == "ok" else "error",
         "extra": {
             "eaide_run_id": row["run_id"],
-            "eaide_node":   row["node"],
+            "eaide_node": row["node"],
             "eaide_status": row["status"],
         },
-        "error":  row.get("error"),
+        "error": row.get("error"),
     }
     try:
         async with httpx.AsyncClient(timeout=5) as c:
@@ -188,10 +201,11 @@ async def _export_to_langsmith(row: dict) -> None:
                     "Content-Type": "application/json",
                 },
             )
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
 
 def _ts(iso: str) -> float:
     from datetime import datetime
+
     return datetime.fromisoformat(iso).timestamp()

@@ -2,6 +2,7 @@
 
 Phase 4 V0：轻量 HTTP 探测，验证本地 llama-server 是否在线。
 """
+
 from __future__ import annotations
 
 import logging

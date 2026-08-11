@@ -5,12 +5,11 @@ SSE 三处同步（CLAUDE.md §4）：
   - Rust:   stream/sse_bridge.rs::channel
   - TS:     ipc/events.ts::EVT
 """
+
 from __future__ import annotations
 
 import asyncio
 from collections import deque
-from typing import Any
-
 
 _data_events: deque[tuple[str, dict]] = deque()
 _data_lock = asyncio.Lock()

@@ -1,4 +1,5 @@
 """rpa.extract —— 从当前页签提取文本 / HTML / 属性。"""
+
 from __future__ import annotations
 
 from mcp_server_rpa.browser import get_context, has_pages

@@ -5,20 +5,17 @@
   - 导出前必过 PII 脱敏
   - 导出审计（文件 MD5）
 """
-import csv
+
 import tempfile
 from pathlib import Path
 
-import pytest
-
 from agent.dataexpert.export.csv import export_csv
 from agent.dataexpert.export.watermark import (
-    generate_watermark_text,
-    embed_watermark_metadata,
-    mask_pii_columns,
     _mask_value,
+    embed_watermark_metadata,
+    generate_watermark_text,
+    mask_pii_columns,
 )
-
 
 # ---- CSV 导出：UTF-8-BOM 防乱码 ------------------------------------------------
 
@@ -76,6 +73,7 @@ def test_csv_export_row_count():
 
 # ---- 水印 ------------------------------------------------------------------------
 
+
 def test_watermark_text_format():
     """水印文本包含操作人 + 时间 + IP。"""
     wm = generate_watermark_text("admin", "192.168.1.100")
@@ -105,6 +103,7 @@ def test_embed_watermark_metadata():
 
 
 # ---- PII 脱敏 --------------------------------------------------------------------
+
 
 def test_mask_pii_phone():
     """手机号列被脱敏。"""

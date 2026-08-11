@@ -55,7 +55,7 @@ use tauri::{Emitter, State};
 use crate::logviewer::indexer::{FileIndexer, IndexProgress, IndexSummary};
 use crate::logviewer::reader::{LineReader, ReadLinesResult};
 use crate::logviewer::registry::{
-    LogViewerState, SubmitError, TaskId, TaskKind, TaskSnapshot, TaskStatus,
+    LogViewerState, SubmitError, TaskId, TaskSnapshot, TaskStatus,
 };
 use crate::logviewer::searcher::{LogSearcher, SearchMode};
 use crate::logviewer::storage::{IndexStatus, LogIndexStorage};
@@ -540,7 +540,7 @@ pub async fn logviewer_index_status(
 // V1.5 Tail -f commands
 // ===========================================================================
 
-use crate::logviewer::tailer::{TailLineEvent, TailSessionInfo};
+use crate::logviewer::tailer::TailSessionInfo;
 
 /// 启动 tail -f 监控。返回 `{ session_id }`。
 ///
@@ -601,7 +601,7 @@ pub async fn logviewer_tail_list(
 mod tests {
     use super::*;
     use crate::logviewer::indexer::IndexSummary;
-    use crate::logviewer::registry::TaskEntry;
+    use crate::logviewer::registry::{TaskEntry, TaskKind};
     use crate::logviewer::searcher::{LogSearchMatch, LogSearchResult};
     use serde_json::json;
     use std::collections::HashSet;

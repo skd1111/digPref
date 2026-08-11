@@ -5,9 +5,9 @@
 //!     * empty offset vector
 //!     * multi-line offset vectors
 //!     * "no final newline" semantics (the last offset points past the final
-//!        byte, even when no `\n` terminates the file)
+//!       byte, even when no `\n` terminates the file)
 //!     * non-ASCII log fixture content (offsets are byte-based, not
-//!        character-based, so the same roundtrip rules apply to wider gaps)
+//!       character-based, so the same roundtrip rules apply to wider gaps)
 //!   - decode rejects malformed blobs whose length is not a multiple of 8
 //!   - FileIndex roundtrip via upsert + get
 //!   - `IndexStatus::Missing` vs `Ready` mapping
@@ -112,7 +112,6 @@ fn decode_rejects_blob_shorter_than_8_bytes() {
             assert_eq!(len, 3);
             assert_eq!(expected_multiple, 8);
         }
-        other => panic!("expected BlobLength, got {:?}", other),
     }
 }
 

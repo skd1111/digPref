@@ -18,6 +18,10 @@ async def test_events_roundtrip():
 def test_channel_by_kind_contains_all():
     from agent.graph.stream import _CHANNEL_BY_KIND
 
-    for kind in (EVT_DOC_REVIEW_STARTED, EVT_DOC_REVIEW_CLASSIFIED,
-                 EVT_DOC_REVIEW_FINDINGS_READY, EVT_DOC_REVIEW_FAILED):
+    for kind in (
+        EVT_DOC_REVIEW_STARTED,
+        EVT_DOC_REVIEW_CLASSIFIED,
+        EVT_DOC_REVIEW_FINDINGS_READY,
+        EVT_DOC_REVIEW_FAILED,
+    ):
         assert kind in _CHANNEL_BY_KIND

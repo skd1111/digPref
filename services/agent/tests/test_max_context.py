@@ -11,9 +11,6 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
-
 # ---- OllamaClient -----------------------------------------------------------
 
 
@@ -25,8 +22,12 @@ def test_ollama_injects_num_ctx():
 
     async def fake_post(url, json, **kw):
         class R:
-            def raise_for_status(self): pass
-            def json(self): return {"message": {"content": "{}"}}
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"message": {"content": "{}"}}
+
         return R()
 
     async def run():
@@ -53,10 +54,14 @@ def test_ollama_no_num_ctx_when_unset():
         with patch("httpx.AsyncClient") as mc:
             client = mc.return_value.__aenter__.return_value
             client.post = AsyncMock()
-            client.post.return_value = type("R", (), {
-                "raise_for_status": lambda self: None,
-                "json": lambda self: {"message": {"content": "{}"}},
-            })()
+            client.post.return_value = type(
+                "R",
+                (),
+                {
+                    "raise_for_status": lambda self: None,
+                    "json": lambda self: {"message": {"content": "{}"}},
+                },
+            )()
             await cli._chat([{"role": "user", "content": "hi"}])
 
             payload = client.post.call_args.kwargs["json"]
@@ -75,7 +80,10 @@ def test_private_keeps_system_and_recent_turns():
 
     # max_context=512 → budget_tokens=max(256, 512-1024)=256 → budget_chars=1024
     cli = PrivateLLMClient(
-        base_url="http://x", api_key="k", model="m", max_context=512,
+        base_url="http://x",
+        api_key="k",
+        model="m",
+        max_context=512,
     )
 
     # system 占 14 chars；non-system 4 条 × 400 chars = 1600 chars → 必然超 budget
@@ -114,7 +122,10 @@ def test_private_truncates_oversized_system():
     from agent.llm.private_llm import PrivateLLMClient
 
     cli = PrivateLLMClient(
-        base_url="http://x", api_key="k", model="m", max_context=512,
+        base_url="http://x",
+        api_key="k",
+        model="m",
+        max_context=512,
     )
     huge_system = "X" * 5000
     msgs = [{"role": "system", "content": huge_system}]
@@ -130,6 +141,7 @@ def test_private_truncates_oversized_system():
 def test_router_loads_max_context_from_db(tmp_path, monkeypatch):
     """LMRouter.__init__ 应从 router.db 读 max_context 并传给 client。"""
     import sqlite3
+
     from agent.llm.router import _load_max_context_from_db
 
     # 准备 router.db + 写一行 enabled=1 的 local ollama
@@ -147,6 +159,7 @@ def test_router_loads_max_context_from_db(tmp_path, monkeypatch):
 
     # monkeypatch settings 指向 tmp db
     from agent.config import settings
+
     monkeypatch.setattr(settings, "llm_router_db_path", str(db_path))
     monkeypatch.setattr(settings, "ollama_model", "qwen2.5:14b")
 

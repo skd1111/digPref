@@ -8,12 +8,12 @@
 CLAUDE.md §2 红线：
 - 限流不绕过 `_LOCAL_ONLY_TASKS` —— 敏感任务即使配额满也要走本地（强制覆盖）
 """
+
 from __future__ import annotations
 
 import logging
 import time
 from dataclasses import dataclass
-from typing import Literal
 
 logger = logging.getLogger(__name__)
 
@@ -21,13 +21,15 @@ logger = logging.getLogger(__name__)
 @dataclass
 class BucketConfig:
     """单个令牌桶配置。"""
-    capacity: int          # 桶容量
-    refill_rate: float     # 每秒补充的令牌数
+
+    capacity: int  # 桶容量
+    refill_rate: float  # 每秒补充的令牌数
 
 
 @dataclass
 class TokenBucket:
     """单租户 × 单任务 × 单后端的令牌桶。"""
+
     capacity: int
     refill_rate: float
     tokens: float = 0.0
@@ -76,15 +78,20 @@ class TokenBucketManager:
         self._buckets: dict[tuple[str, str, str], TokenBucket] = {}
 
     def _get_bucket(
-        self, tenant: str, task_type: str, backend: str,
+        self,
+        tenant: str,
+        task_type: str,
+        backend: str,
     ) -> TokenBucket:
         key = (tenant, task_type, backend)
         if key not in self._buckets:
             cap, rate = self.backend_overrides.get(
-                backend, (self.default_capacity, self.default_refill_rate),
+                backend,
+                (self.default_capacity, self.default_refill_rate),
             )
             self._buckets[key] = TokenBucket(
-                capacity=cap, refill_rate=rate,
+                capacity=cap,
+                refill_rate=rate,
                 tokens=cap,  # 初始满
             )
         return self._buckets[key]

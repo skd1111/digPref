@@ -13,12 +13,13 @@
     `replay_tree(correlation_id)` 按时间序返回整棵决策树的事件列表，
     `build_tree(events)` 把扁平事件折成父子结构，供前端渲染 / 事后复盘。
 """
+
 from __future__ import annotations
 
 import json
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import aiosqlite
 
@@ -44,9 +45,18 @@ EVENT_JUDGE = "sub_agent_judge"
 EVENT_QUEUED = "sub_agent_queued"
 
 ALL_EVENT_TYPES: tuple[str, ...] = (
-    EVENT_SPAWN, EVENT_PROGRESS, EVENT_DONE, EVENT_RETRY, EVENT_DLQ,
-    EVENT_CANCEL, EVENT_CLOSED, EVENT_REQUEUED,
-    EVENT_HITL_REQUESTED, EVENT_HITL_DECIDED, EVENT_JUDGE, EVENT_QUEUED,
+    EVENT_SPAWN,
+    EVENT_PROGRESS,
+    EVENT_DONE,
+    EVENT_RETRY,
+    EVENT_DLQ,
+    EVENT_CANCEL,
+    EVENT_CLOSED,
+    EVENT_REQUEUED,
+    EVENT_HITL_REQUESTED,
+    EVENT_HITL_DECIDED,
+    EVENT_JUDGE,
+    EVENT_QUEUED,
 )
 
 
@@ -74,7 +84,7 @@ async def log_event(
             task_id=task_id,
             parent_task_id=parent_task_id,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("[audit_bridge] audit 写入失败 event=%s err=%s", event_type, exc)
 
 
@@ -125,16 +135,18 @@ async def replay_tree(
             payload = json.loads(row["payload"]) if row["payload"] else {}
         except (json.JSONDecodeError, TypeError):
             payload = {"_raw": row["payload"]}
-        out.append({
-            "id": row["id"],
-            "ts": row["ts"],
-            "event_type": row["event_type"] or row["action"],
-            "actor_type": row["actor_type"],
-            "task_id": row["task_id"],
-            "parent_task_id": row["parent_task_id"],
-            "run_id": row["run_id"],
-            "payload": payload,
-        })
+        out.append(
+            {
+                "id": row["id"],
+                "ts": row["ts"],
+                "event_type": row["event_type"] or row["action"],
+                "actor_type": row["actor_type"],
+                "task_id": row["task_id"],
+                "parent_task_id": row["parent_task_id"],
+                "run_id": row["run_id"],
+                "payload": payload,
+            }
+        )
     return out
 
 
@@ -152,12 +164,15 @@ def build_tree(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not tid:
             orphan_events.append(evt)
             continue
-        node = nodes.setdefault(tid, {
-            "task_id": tid,
-            "parent_task_id": evt.get("parent_task_id"),
-            "events": [],
-            "children": [],
-        })
+        node = nodes.setdefault(
+            tid,
+            {
+                "task_id": tid,
+                "parent_task_id": evt.get("parent_task_id"),
+                "events": [],
+                "children": [],
+            },
+        )
         if evt.get("parent_task_id") and not node["parent_task_id"]:
             node["parent_task_id"] = evt["parent_task_id"]
         node["events"].append(evt)
@@ -171,18 +186,18 @@ def build_tree(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             roots.append(node)
 
     if orphan_events:
-        roots.append({
-            "task_id": None,
-            "parent_task_id": None,
-            "events": orphan_events,
-            "children": [],
-        })
+        roots.append(
+            {
+                "task_id": None,
+                "parent_task_id": None,
+                "events": orphan_events,
+                "children": [],
+            }
+        )
     return roots
 
 
-async def replay_summary(
-    correlation_id: str, *, db_path: str | None = None
-) -> dict[str, Any]:
+async def replay_summary(correlation_id: str, *, db_path: str | None = None) -> dict[str, Any]:
     """回放摘要：事件计数 + 涉及的 task 数 + 是否有 DLQ / 取消。"""
     events = await replay_tree(correlation_id, db_path=db_path)
     counts: dict[str, int] = {}
@@ -204,12 +219,20 @@ async def replay_summary(
 __all__ = [
     "ACTOR_SUB_AGENT",
     "ALL_EVENT_TYPES",
-    "EVENT_SPAWN", "EVENT_PROGRESS", "EVENT_DONE", "EVENT_RETRY", "EVENT_DLQ",
-    "EVENT_CANCEL", "EVENT_CLOSED", "EVENT_REQUEUED",
-    "EVENT_HITL_REQUESTED", "EVENT_HITL_DECIDED", "EVENT_JUDGE",
+    "EVENT_CANCEL",
+    "EVENT_CLOSED",
+    "EVENT_DLQ",
+    "EVENT_DONE",
+    "EVENT_HITL_DECIDED",
+    "EVENT_HITL_REQUESTED",
+    "EVENT_JUDGE",
+    "EVENT_PROGRESS",
+    "EVENT_REQUEUED",
+    "EVENT_RETRY",
+    "EVENT_SPAWN",
+    "build_tree",
     "log_event",
     "make_correlation_id",
-    "replay_tree",
     "replay_summary",
-    "build_tree",
+    "replay_tree",
 ]

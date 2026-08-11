@@ -17,28 +17,29 @@ V1 才做：
     - 极短输出（max_tokens < short_output_threshold）跳过 DSpark
     - 草稿模型路径缺失 → 静默降级关闭
 """
+
 from __future__ import annotations
 
 from agent.llm.dspark.config import (
+    DEFAULT_POLICIES,
+    SPECULATIVE_OFF,
     DSparkConfig,
     SpeculativeMode,
     SpeculativePolicy,
-    DEFAULT_POLICIES,
-    SPECULATIVE_OFF,
 )
 from agent.llm.dspark.policy import (
     PolicyMap,
-    load_speculative_policies,
     decide_dspark,
+    load_speculative_policies,
 )
 
 __all__ = [
-    "DSparkConfig",
-    "SpeculativeMode",
-    "SpeculativePolicy",
     "DEFAULT_POLICIES",
     "SPECULATIVE_OFF",
+    "DSparkConfig",
     "PolicyMap",
-    "load_speculative_policies",
+    "SpeculativeMode",
+    "SpeculativePolicy",
     "decide_dspark",
+    "load_speculative_policies",
 ]

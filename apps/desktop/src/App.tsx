@@ -8,6 +8,7 @@ import { Component, type ReactNode } from "react";
 import { RouterProvider } from "react-router-dom";
 import { router } from "./router";
 import { useAgentStream } from "@/hooks/useAgentStream";
+import { useAgentHealth } from "@/hooks/useAgentHealth";
 import { PreviewEventBridge } from "@/components/preview/PreviewEventBridge";
 
 // ---- ErrorBoundary（防止渲染异常导致白屏）-----------------------------------
@@ -61,6 +62,8 @@ export function App(): JSX.Element {
   // chatStore / traceStore。此前该 hook 从未被任何组件调用（打包时被
   // tree-shaking 掉），导致发消息后事件无人接收、UI 无响应。
   useAgentStream();
+  // Agent /health 轮询 → uiStore.agentStatus（修复状态栏永远显示「未连接」的 bug）
+  useAgentHealth();
   // Phase 15 V0：订阅 preview://* HMR / 编译错误事件（三处同步的 TS 端）
 
   return (

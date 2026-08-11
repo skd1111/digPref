@@ -34,6 +34,9 @@ from agent.preview.session_manager import (
 
 router = APIRouter(prefix="/preview", tags=["preview"])
 
+# 后台安装任务强引用（防 GC 回收未完成任务；RUF006）
+_INSTALL_TASKS: set[asyncio.Task[None]] = set()
+
 
 def _manager(request: Request) -> SessionManager:
     """取全局 SessionManager（测试可重置）。"""
@@ -95,7 +98,9 @@ async def trigger_install(session_id: str, request: Request) -> dict[str, Any]:
         await ensure_dependencies(session.project_path, session_id)
         await mgr.set_install_progress(session_id, 100)
 
-    asyncio.create_task(_run())
+    task = asyncio.create_task(_run())
+    _INSTALL_TASKS.add(task)
+    task.add_done_callback(_INSTALL_TASKS.discard)
     return {"session_id": session_id, "install_started": True}
 
 

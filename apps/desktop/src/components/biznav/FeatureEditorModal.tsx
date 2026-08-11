@@ -15,7 +15,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import Editor from '@monaco-editor/react';
 import { useBiznavStore, selectEditorFeature } from '@/store/biznavStore';
+import { useExpertTeamStore } from '@/store/expertTeamStore';
 import type { Feature, RelatedApi, RelatedFile, RelatedTable } from '@/types/biznav';
+import type { ExpertTeam } from '@/types/expertTeam';
 import { featureToYaml } from '@/lib/yamlExport';
 
 type TabId = 'form' | 'yaml';
@@ -26,6 +28,8 @@ export function FeatureEditorModal(): JSX.Element | null {
   const closeEditor = useBiznavStore((s) => s.closeEditor);
   const updateFeature = useBiznavStore((s) => s.updateFeature);
   const feature = useBiznavStore(selectEditorFeature);
+  // 中期改造（2026-08-07）：功能点直连专家团预设（取代 Skill 绑定，运营链路全看专家团）
+  const teams = useExpertTeamStore((s) => s.teams);
 
   const [tab, setTab] = useState<TabId>('form');
   const [draft, setDraft] = useState<Feature | null>(null);
@@ -68,8 +72,40 @@ export function FeatureEditorModal(): JSX.Element | null {
     }
   };
 
-  const handleSave = (): void => {
-    updateFeature(feature.id, draft);
+  const handleSave = async (): Promise<void> => {
+    const st = useBiznavStore.getState();
+    if (st.backendReady) {
+      try {
+        await st.upsertFeature(feature.id, st.projectName, {
+          expected_version: feature.version,
+          name: draft.name,
+          description: draft.description,
+          category: draft.category,
+          skill_id: draft.skill_id,
+          expert_team_ids: draft.expert_team_ids ?? [],
+          related_files: draft.related_files.map((f) => ({
+            path: f.path,
+            role: f.role,
+          })),
+          related_apis: draft.related_apis.map((a) => ({
+            method: a.method,
+            path: a.path,
+            description: a.description,
+          })),
+          related_tables: draft.related_tables.map((t) => ({
+            name: t.name,
+            description: t.description,
+          })),
+          business_rules: draft.business_rules.map((r) => ({ text: r })),
+        });
+      } catch (e) {
+        window.alert(`保存失败（后端）：${e instanceof Error ? e.message : String(e)}`);
+        return;
+      }
+    } else {
+      // 后端不可用 → 本地演示兜底
+      updateFeature(feature.id, draft);
+    }
     setDirty(false);
     closeEditor();
   };
@@ -156,7 +192,11 @@ export function FeatureEditorModal(): JSX.Element | null {
 
         {/* Body */}
         {tab === 'form' ? (
-          <FormTab draft={draft} setField={setField} />
+          <FormTab
+            draft={draft}
+            setField={setField}
+            teams={teams}
+          />
         ) : (
           <div className="flex-1 overflow-hidden">
             <Editor
@@ -195,7 +235,7 @@ export function FeatureEditorModal(): JSX.Element | null {
           </button>
           <button
             type="button"
-            onClick={handleSave}
+            onClick={() => void handleSave()}
             disabled={!dirty || tab === 'yaml'}
             className="rounded px-3 py-1 text-ui font-semibold transition-colors"
             style={{
@@ -259,9 +299,14 @@ export function FeatureEditorModal(): JSX.Element | null {
 interface FormTabProps {
   draft: Feature;
   setField: <K extends keyof Feature>(key: K, value: Feature[K]) => void;
+  teams: ExpertTeam[];
 }
 
-function FormTab({ draft, setField }: FormTabProps): JSX.Element {
+function FormTab({
+  draft,
+  setField,
+  teams,
+}: FormTabProps): JSX.Element {
   return (
     <div className="flex-1 overflow-auto p-4" style={{ backgroundColor: '#ffffff' }}>
       {/* 基本信息 */}
@@ -304,6 +349,42 @@ function FormTab({ draft, setField }: FormTabProps): JSX.Element {
             <option value="medium">🟡 中</option>
             <option value="low">🟢 低</option>
           </select>
+        </Field>
+        {/* 中期改造（2026-08-07）：专家团预设（取代 Skill 绑定；选中业务零延迟自动选团，
+            未预设时后端拿功能点名 + 全部专家团描述让 LLM 判断） */}
+        <Field label="预设专家团（选中该业务时自动选中；不预设则由 AI 判断）">
+          {teams.length === 0 ? (
+            <div className="rounded border px-2 py-1.5 text-2xs" style={{ borderColor: '#e0e0e0', color: '#9ca3af' }}>
+              系统还没有专家团，请到 设置 → 专家团 导入/新建
+            </div>
+          ) : (
+            <div className="space-y-1">
+              {teams.map((t) => {
+                const preset = draft.expert_team_ids ?? [];
+                const checked = preset.includes(t.id);
+                return (
+                  <label key={t.id} className="flex cursor-pointer items-start gap-1.5 text-2xs" style={{ color: '#1f1f1f' }}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => {
+                        const next = checked
+                          ? preset.filter((x) => x !== t.id)
+                          : [...preset, t.id];
+                        setField('expert_team_ids', next);
+                      }}
+                      className="mt-0.5"
+                    />
+                    <span>
+                      <span className="font-semibold">{t.name}</span>
+                      <span style={{ color: '#616161' }}>（{t.id}）</span>
+                      {!t.enabled && <span style={{ color: '#cd3131' }}> · 已停用</span>}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          )}
         </Field>
       </Section>
 

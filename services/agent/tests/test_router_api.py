@@ -1,9 +1,9 @@
 """Phase 2C V2.5 路由 API 测试。"""
+
 import pytest
+from agent.llm import engine_api
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
-from agent.llm import engine_api
 
 
 @pytest.fixture
@@ -80,7 +80,7 @@ def test_create_backend_private_no_apikey_required(client):
 def test_list_backends_includes_role(client):
     r = client.get("/router/backends")
     assert r.status_code == 200
-    data = r.json()
+    r.json()
     # V2.5 加了 role 列（V0 storage 可能没 role；V0.5 还没改 storage）
 
 
@@ -90,6 +90,7 @@ def test_reset_breaker(client):
     eng = engine_api._get_engine()
     cb = eng._breakers.get_or_create("ollama-utility")
     from agent.llm.circuit_breaker import CircuitState
+
     for _ in range(5):
         cb.on_failure()
     assert cb.state == CircuitState.OPEN
@@ -167,8 +168,8 @@ def _cloud_body(name: str) -> dict:
     }
 
 
-def test_create_enabled_backend_disables_same_type(client):
-    """启用 cloud-b 后 cloud-a 自动停用，且响应返回 disabled 列表。"""
+def test_create_enabled_backend_disables_same_residency(client):
+    """同驻留只允许 1 个启用：启用 cloud-b 后 cloud-a 自动停用，且响应返回 disabled 列表。"""
     r1 = client.post("/router/backends", json=_cloud_body("cloud-a"))
     assert r1.status_code == 200
     r2 = client.post("/router/backends", json=_cloud_body("cloud-b"))
@@ -182,8 +183,32 @@ def test_create_enabled_backend_disables_same_type(client):
     assert by_name["cloud-b"]["enabled"] is True
 
 
-def test_create_enabled_private_does_not_disable_cloud(client):
-    """不同类型互不影响：启用 private 不会停用已启用的 cloud。"""
+def test_create_enabled_same_residency_different_type_disables(client):
+    """驻留 private 是内网判定依据：类型为 cloud、驻留 private 的模型也会被同驻留的 private 模型互斥停用。"""
+    cloud_private = _cloud_body("cloud-a")
+    cloud_private["data_residency"] = "private"
+    r1 = client.post("/router/backends", json=cloud_private)
+    assert r1.status_code == 200
+    r2 = client.post(
+        "/router/backends",
+        json={
+            "name": "private-b",
+            "type": "private",
+            "base_url": "http://internal.lan/v1",
+            "model_name": "deepseek-r1",
+            "data_residency": "private",
+            "role": "reasoning",
+        },
+    )
+    assert r2.status_code == 200
+    assert r2.json()["disabled"] == ["cloud-a"]
+    by_name = {b["name"]: b for b in client.get("/router/backends").json()["backends"]}
+    assert by_name["cloud-a"]["enabled"] is False
+    assert by_name["private-b"]["enabled"] is True
+
+
+def test_create_enabled_does_not_disable_other_residency(client):
+    """不同驻留互不影响：启用驻留 private 的模型不会停用已启用的 cloud 驻留模型。"""
     client.post("/router/backends", json=_cloud_body("cloud-a"))
     r = client.post(
         "/router/backends",

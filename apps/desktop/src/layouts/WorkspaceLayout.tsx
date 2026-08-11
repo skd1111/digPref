@@ -22,8 +22,8 @@
  *   - Phase 2E operator 模式：通过 [data-mode] CSS 隐藏 Bottom + Right（220ms 过渡）
  *   - 状态保留：隐藏的面板不卸载，只 height/width 0
  */
-import { useEffect } from 'react';
-import { Outlet, useNavigate } from 'react-router-dom';
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { ActivityBar } from '@/components/chrome/ActivityBar';
 import { type ActivityId } from '@/store/uiStore';
 import { MenuBar } from '@/components/chrome/MenuBar';
@@ -33,23 +33,35 @@ import { CheatSheet } from '@/components/chrome/CheatSheet';
 import { CommandPalette } from '@/components/chrome/CommandPalette';
 import { QuickOpen } from '@/components/chrome/QuickOpen';
 import { FindInFiles } from '@/components/asset-tree/FindInFiles';
-import { LeftAssetTree } from './LeftAssetTree';
 import { RightTraceView } from './RightTraceView';
+import { ProjectFileTree } from '@/components/codenav/ProjectFileTree';
+import { SystemAssetTree } from '@/components/asset-tree/SystemAssetTree';
 import { XtermDrawer } from './XtermDrawer';
 import { AuditDashboard } from '@/views/AuditDashboard';
 import { DataWorkbench } from '@/views/DataWorkbench';
 import { CollabCenter } from '@/views/CollabCenter';
+// reqflow V1：需求工作台（运营专家需求卡片管理）
+import { ReqWorkbenchView } from '@/views/ReqWorkbenchView';
 import { BusinessFeatureTree } from '@/components/asset-tree/BusinessFeatureTree';
 // Phase 6 V1.5：会话管理侧栏（穿透所有 mode；FTS5 搜索 + 会话列表 + 分支/共享/导出/恢复入口）
 import { SessionsPanel } from '@/components/sessions/SessionsPanel';
+// Phase 6 V1.6 (2026-08-06)：启动恢复面板 + SSE 订阅（压缩/记忆蒸馏事件）
+import { RecoveryPanel } from '@/components/sessions/RecoveryPanel';
+import { useSessionsStore } from '@/store/sessionsStore';
+import { useSkillsStore } from '@/store/skillsStore';
+import { useChatStore } from '@/store/chatStore';
+import { useExpertTeamStore } from '@/store/expertTeamStore';
 import { DataSourceTree } from '@/components/data/DataSourceTree';
-import { LeftPanelModeToggle } from '@/components/asset-tree/LeftPanelModeToggle';
+import { DataDictionaryPanel } from '@/components/ops/DataDictionaryPanel';
+import { LeftPanelDevSwitcher } from '@/components/asset-tree/LeftPanelDevSwitcher';
 import { useLeftPanelContent } from '@/store/leftPanel';
 import { BiznavChatBridge } from '@/components/biznav/BiznavChatBridge';
 import { FeatureDetailPanel } from '@/components/biznav/FeatureDetailPanel';
 import { FeatureEditorModal } from '@/components/biznav/FeatureEditorModal';
 import { SkillEditorModal } from '@/components/skills/SkillEditorModal';
 import { SkillImportDialog } from '@/components/skills/SkillImportDialog';
+import { OperationsWorkbench } from '@/views/OperationsWorkbench';
+import { ReqCardsRightPanel } from '@/components/reqflow/ReqCardsRightPanel';
 import { useUIStore, type WorkMode } from '@/store/uiStore';
 import { startPushMock, stopPushMock } from '@/lib/pushMock';
 
@@ -62,6 +74,10 @@ export function WorkspaceLayout(): JSX.Element {
   const mode = useUIStore((s) => s.mode);
   const xtermDrawerOpen = useUIStore((s) => s.xtermDrawerOpen);
   const navigate = useNavigate();
+  const location = useLocation();
+  // BUGFIX #66：设置页穿透所有模式——无论 operator/auditor/analyst 是否接管 center，
+  // 只要 URL 在 /settings 下就渲染 Outlet（SettingsView），避免点设置没反应
+  const settingsOpen = location.pathname.startsWith('/settings');
 
   // Phase 2E + Phase 9：mode 变化时同步 navigate('/') 清掉 settings URL
   // 解决 bug：用户在 /settings/models 切到 operator 模式时，SettingsView 仍占据 center 区域
@@ -72,6 +88,12 @@ export function WorkspaceLayout(): JSX.Element {
       navigate('/', { replace: true });
     }
   }, [mode, navigate]);
+
+  // 模式隔离（2026-08-11）：切模式时同步切到该模式的对话页签组，
+  // 避免专家团模式的对话串进开发模式（全局单一 activeTabId 的历史缺陷）
+  useEffect(() => {
+    useChatStore.getState().ensureModeTab(mode);
+  }, [mode]);
 
   // 全局快捷键：Ctrl+~ 切换 Xterm 抽屉（Phase 2E 逃生通道）
   useEffect(() => {
@@ -85,6 +107,13 @@ export function WorkspaceLayout(): JSX.Element {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // Phase 2H：启动即加载 Skill 列表（功能点绑定 Skill 的注入依赖该列表）
+  // 专家团资产同步加载（运营工作台自动选择 + 设置页维护依赖）
+  useEffect(() => {
+    void useSkillsStore.getState().loadSkills();
+    void useExpertTeamStore.getState().loadTeams();
+  }, []);
+
   // Phase 9 协作推送 mock：用户在 ActivityBar 选中 collab 时启动
   // 离开 / 卸载时清理（避免 HMR 泄漏）
   useEffect(() => {
@@ -95,10 +124,32 @@ export function WorkspaceLayout(): JSX.Element {
     return undefined;
   }, [active]);
 
+  // Phase 6 V1.6：会话恢复扫描 + SSE 事件订阅
+  // 启动后扫描中断会话（空闲 > 5min），needs_recovery=true 时弹 RecoveryPanel；
+  // 同时订阅 session_compression_applied / session_memory_consolidated SSE 事件。
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
+  useEffect(() => {
+    let mounted = true;
+    void useSessionsStore
+      .getState()
+      .loadRecovery({ idle_threshold_ms: 300_000, limit: 50 })
+      .then((report) => {
+        if (mounted && report?.needs_recovery && report.total > 0) {
+          setRecoveryOpen(true);
+        }
+      });
+    const unsubscribe = useSessionsStore.getState().subscribeSSE();
+    return () => {
+      mounted = false;
+      unsubscribe();
+    };
+  }, []);
+
   return (
     <div
       className="workspace-root grid h-screen w-screen select-none"
       data-mode={mode}
+      data-activity={active}
       style={{
         // 4 行：MenuBar / TopBar / Main / StatusBar
         gridTemplateRows: 'auto auto 1fr auto',
@@ -139,21 +190,33 @@ export function WorkspaceLayout(): JSX.Element {
           style={{ backgroundColor: '#ffffff', borderLeft: '1px solid #d0d0d0' }}
         >
           <section className="flex-1 overflow-hidden">
-            {/* 专家模式渲染各自独立布局，隐藏 SideBar/Bottom/Right */}
-            {mode === 'auditor' ? (
-              <AuditDashboard />
-            ) : mode === 'analyst' ? (
-              <DataWorkbench />
+            {/* 设置页穿透所有模式（BUGFIX #66）；
+                横切 activity（协作/需求/代码符号/会话管理）优先于专家模式分支，
+                保证左侧按钮在任何模式下都能覆盖当前工作台（用户要求 2026-08-07） */}
+            {settingsOpen ? (
+              <Outlet />
             ) : active === 'collab' ? (
               <CollabCenter />
+            ) : active === 'requirements' ? (
+              // reqflow V1：需求工作台（运营专家需求卡片管理，三栏布局）
+              <ReqWorkbenchView />
             ) : active === 'code-nav' ? (
               // Phase 2F V0 收尾 (2026-07-28)：代码符号搜索顶级入口全屏展示
               // SideBar 由 SideBar() 函数 early-return 折叠（让位 320px 双栏）
-              // ⚠ auditor / analyst 模式优先级高于 activity 分支 —— 在这两个模式下点 ⌘ 不会切换视图。
-              //    这与 collab 行为一致（auditor/analyst 是全接管模式）。V1 可考虑灰掉图标或加 tooltip。
               <div className="h-full">
                 <FindInFiles defaultMode="symbol" />
               </div>
+            ) : active === 'sessions' ? (
+              // 会话管理横切全模式：侧栏 SessionsPanel + 中间只读浏览会话
+              <Outlet />
+            ) : mode === 'auditor' ? (
+              <AuditDashboard />
+            ) : mode === 'analyst' ? (
+              <DataWorkbench />
+            ) : mode === 'operator' ? (
+              // Phase 2H 收尾（用户要求）：运营模式是独立顶级页签（与开发模式并列），
+              // 全屏接管：业务列表 + Chat + 工作台（SideBar 由 [data-mode] CSS 折叠）
+              <OperationsWorkbench />
             ) : (
               <Outlet />
             )}
@@ -164,9 +227,13 @@ export function WorkspaceLayout(): JSX.Element {
           <div style={{ display: 'none' }} />
         </main>
         {/* 审核/数据专家模式不需要右侧 Trace 面板（独立布局） */}
-        {mode !== 'auditor' && mode !== 'analyst' && <RightPanel />}
-        {/* Phase 2G: 功能点详情（仅 operator 模式挂载） */}
-        {mode === 'operator' && <FeatureDetailPanel />}
+        {mode !== 'auditor' && mode !== 'analyst' && mode !== 'operator' && (
+          <RightPanel />
+        )}
+        {/* Phase 2G: 功能点详情（开发 / 运营模式都挂载） */}
+        {(mode === 'full' || mode === 'operator') && (
+          <FeatureDetailPanel />
+        )}
       </div>
 
       {/* Row 4: StatusBar（跨全宽） */}
@@ -183,6 +250,17 @@ export function WorkspaceLayout(): JSX.Element {
       <XtermDrawer
         open={xtermDrawerOpen}
         onClose={() => useUIStore.getState().toggleXtermDrawer(false)}
+      />
+
+      {/* Phase 6 V1.6：启动恢复面板（检测到中断会话时弹出；恢复 = 选中会话并切到会话侧栏） */}
+      <RecoveryPanel
+        open={recoveryOpen}
+        onClose={() => setRecoveryOpen(false)}
+        onResume={(sid) => {
+          useSessionsStore.getState().setActive(sid);
+          void useSessionsStore.getState().get(sid);
+          setActive('sessions');
+        }}
       />
 
       {/* 全局 CSS：模式切换的丝滑过渡 */}
@@ -210,11 +288,22 @@ const WORKSPACE_TRANSITION_CSS = `
     pointer-events: none;
   }
 
-  /* 数据专家模式有自带左栏（数据源树），折叠外层 SideBar 避免重复 */
-  [data-mode="analyst"] .workspace-sidebar {
+  /* 专家模式自带左栏（运营/审核/数据），折叠外层 SideBar；
+     但横切 activity（sessions/search）选中时保持可见（跨全模式，用户要求 2026-08-07） */
+  [data-mode="analyst"]:not([data-activity="sessions"]):not([data-activity="search"]) .workspace-sidebar,
+  [data-mode="operator"]:not([data-activity="sessions"]):not([data-activity="search"]) .workspace-sidebar,
+  [data-mode="auditor"]:not([data-activity="sessions"]):not([data-activity="search"]) .workspace-sidebar {
     width: 0 !important;
     opacity: 0;
     pointer-events: none;
+  }
+
+  /* 数据字典是独立顶级入口：选中时即使在 operator/auditor/analyst 全接管模式下
+     也保持 SideBar 展开（覆盖下方各模式的折叠规则） */
+  .workspace-root:has(.data-dict-active) .workspace-sidebar {
+    width: 260px !important;
+    opacity: 1 !important;
+    pointer-events: auto !important;
   }
 
   /* Phase 9 协作中心：ActivityBar 选中 collab 时折叠外层 SideBar，center 区域全屏 */
@@ -249,6 +338,16 @@ function SideBar({ activity, mode }: { activity: ActivityId; mode: WorkMode }): 
       />
     );
   }
+  // reqflow V1：需求工作台全屏渲染，SideBar 折叠让位（同 code-nav）
+  if (activity === 'requirements') {
+    return (
+      <aside
+        className="workspace-sidebar"
+        style={{ width: 0, borderRight: 'none', pointerEvents: 'none' }}
+        aria-hidden
+      />
+    );
+  }
   return (
     <aside
       className="workspace-sidebar flex flex-col overflow-hidden"
@@ -260,6 +359,11 @@ function SideBar({ activity, mode }: { activity: ActivityId; mode: WorkMode }): 
       }}
     >
       <SideBarHeader activity={activity} mode={mode} />
+      {/* Phase 2H：开发模式下显示 系统资产/文件列表/系统功能点 三态子切换；
+          会话管理/数据字典等自带专属内容的 activity 不显示（用户要求 2026-08-07） */}
+      {mode === 'full' && activity !== 'sessions' && activity !== 'search' && activity !== 'collab' && activity !== 'data-dict' && (
+        <LeftPanelDevSwitcher />
+      )}
       <div className="flex-1 overflow-auto">
         {/* Phase 9 协作中心：center 区域已全屏渲染，SideBar 折叠（CSS） */}
         {activity === 'collab' ? (
@@ -270,6 +374,9 @@ function SideBar({ activity, mode }: { activity: ActivityId; mode: WorkMode }): 
         ) : activity === 'sessions' ? (
           // Phase 6 V1.5：会话管理侧栏（穿透所有 mode；FTS5 搜索 + 会话列表）
           <SessionsPanel />
+        ) : activity === 'data-dict' ? (
+          // 数据字典：独立侧栏入口（穿透所有 mode，原运营工作台右侧 tab 迁出）
+          <DataDictionaryPanel />
         ) : mode === 'analyst' ? (
           // 数据专家模式：默认 DataSourceTree（外层 SideBar 折叠由 DataWorkbench 内部管理）
           <DataSourceTree />
@@ -292,13 +399,18 @@ function SideBar({ activity, mode }: { activity: ActivityId; mode: WorkMode }): 
  */
 function LeftPanelBody({ activity }: { activity: ActivityId }): JSX.Element {
   const content = useLeftPanelContent();
+  // Phase 2H：文件列表（工程目录树，界面不变）
+  if (content === 'files') {
+    return <ProjectFileTree />;
+  }
   if (content === 'business') {
     return <BusinessFeatureTree />;
   }
   // 'system'
   return (
     <>
-      {activity === 'explorer' && <LeftAssetTree />}
+      {/* Phase 2H：系统资产 Tab 只显示资产树（文件列表是独立 Tab） */}
+      {activity === 'explorer' && <SystemAssetTree />}
       {activity === 'source-control' && (
         <PlaceholderPanel title="审计 / 版本" hint="SQL / API 调用历史 + 审计行（占位）" />
       )}
@@ -315,19 +427,26 @@ function SideBarHeader({
   activity: ActivityId;
   mode: WorkMode;
 }): JSX.Element {
-  // 运营专家模式强制显示 "业务功能点" 标题（V0 行为；V1.3 由 useLeftPanelContent 接管显示内容）
-  const title = mode === 'operator' ? '业务功能点' : TITLES[activity];
-  // V1.3 仅在 mode 允许切换的场景（'full' / 'operator'）显示 toggle 按钮
-  // analyst / auditor 模式左侧栏是独立组件（DataSourceTree / AuditDashboard），
-  // 没有"业务/系统资产"切换语义。
-  const showToggle = mode === 'full' || mode === 'operator';
+  // CRITICAL fix (2026-08-07，仿 BUGFIX #15)：hook 必须无条件调用。
+  // 旧实现把 useLeftPanelContent() 写在三元表达式里，仅 mode==='full' 时才调，
+  // 切换左侧面板（系统资产/文件列表/系统功能点）时 hook 数量变化 → React #300。
+  const content = useLeftPanelContent();
+  // Phase 2H：开发模式标题跟随 devPanelMode；但 sessions/search/collab 等自带专属内容的
+  // activity 始终用 TITLES（否则会话管理会显示成「文件列表/系统功能点」，用户要求 2026-08-07）
+  const title =
+    mode === 'full' && activity !== 'sessions' && activity !== 'search' && activity !== 'collab' && activity !== 'data-dict'
+      ? content === 'files'
+        ? '文件列表'
+        : content === 'business'
+          ? '系统功能点'
+          : TITLES[activity]
+      : TITLES[activity];
   return (
     <div
       className="flex h-[35px] items-center justify-between border-b px-4 text-ui font-semibold uppercase tracking-wide"
       style={{ borderColor: '#e0e0e0', color: '#333333' }}
     >
       <span>{title}</span>
-      {showToggle && <LeftPanelModeToggle />}
     </div>
   );
 }
@@ -345,6 +464,10 @@ const TITLES: Record<ActivityId, string> = {
   'code-nav': '代码符号',
   // Phase 6 V1.5 (2026-07-31)：会话管理顶级入口
   sessions: '会话管理',
+  // reqflow V1 (2026-08-05)：需求工作台（同 code-nav，SideBar early-return 让位）
+  requirements: '需求工作台',
+  // 数据字典：独立顶级入口（原运营工作台右侧 tab 迁出）
+  'data-dict': '数据字典',
 };
 
 function PlaceholderPanel({ title, hint }: { title: string; hint: string }): JSX.Element {
@@ -360,30 +483,72 @@ function PlaceholderPanel({ title, hint }: { title: string; hint: string }): JSX
 
 function RightPanel(): JSX.Element {
   const mode = useUIStore((s) => s.mode);
-  // 仅 'full' (开发模式) 显示；'operator' / 'auditor' 隐藏
+  const devPanelMode = useUIStore((s) => s.devPanelMode);
+  const panelWidth = useUIStore((s) => s.rightPanelWidth);
+  const setPanelWidth = useUIStore((s) => s.setRightPanelWidth);
+  // 仅 'full' (开发模式) 显示；'auditor' 隐藏
   // 'auditor' 模式有自己独立的三栏布局（Phase 5）
   const visible = mode === 'full';
+  // Phase 2H：系统功能点子模式右侧为需求卡片（默认更宽），其余保持思维链现状
+  const featuresMode = mode === 'full' && devPanelMode === 'features';
+  const contentWidth = featuresMode ? Math.max(panelWidth, 380) : panelWidth;
+
+  // 拖拽调节宽度（VSCode 风格 sash：按住左缘拖动，指针捕获避免拖出边界）
+  const [dragging, setDragging] = useState(false);
+  const dragRef = useRef<{ startX: number; startW: number } | null>(null);
+  const onSashDown = (e: ReactPointerEvent<HTMLDivElement>): void => {
+    dragRef.current = { startX: e.clientX, startW: panelWidth };
+    setDragging(true);
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onSashMove = (e: ReactPointerEvent<HTMLDivElement>): void => {
+    const d = dragRef.current;
+    if (!d) return;
+    // 面板靠右：向左拖（startX - clientX > 0）变宽
+    setPanelWidth(d.startW + (d.startX - e.clientX));
+  };
+  const onSashUp = (): void => {
+    dragRef.current = null;
+    setDragging(false);
+  };
 
   return (
     <aside
-      className="workspace-right flex flex-col overflow-hidden"
+      className="workspace-right relative flex flex-col overflow-hidden"
       style={{
-        width: visible ? 320 : 0,
+        width: visible ? contentWidth : 0,
         backgroundColor: '#f3f3f3',
         borderLeft: '1px solid #e0e0e0',
         opacity: visible ? 1 : 0,
-        transition: 'width 220ms cubic-bezier(0.4, 0, 0.2, 1), opacity 180ms ease-out',
+        transition: dragging
+          ? 'none'
+          : 'width 220ms cubic-bezier(0.4, 0, 0.2, 1), opacity 180ms ease-out',
         pointerEvents: visible ? 'auto' : 'none',
       }}
     >
+      {/* 拖拽条：左缘 5px，hover 高亮；双击恢复默认 320 */}
+      {visible && (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          title="拖动调节宽度，双击恢复默认"
+          onPointerDown={onSashDown}
+          onPointerMove={onSashMove}
+          onPointerUp={onSashUp}
+          onDoubleClick={() => setPanelWidth(320)}
+          className="absolute left-0 top-0 z-10 h-full w-[5px] hover:bg-[#0078d4]/40"
+          style={{ cursor: 'col-resize', backgroundColor: dragging ? 'rgba(0,120,212,0.4)' : 'transparent' }}
+        />
+      )}
       <div
         className="flex h-[35px] items-center border-b px-4 text-ui font-semibold uppercase tracking-wide"
         style={{ borderColor: '#e0e0e0', color: '#333333' }}
       >
-        <span>控制台</span>
+        <span>{featuresMode ? '📋 需求卡片' : '控制台'}</span>
       </div>
-      <div className="flex-1 overflow-auto">
-        <RightTraceView />
+      {/* 内容区允许选中复制（覆盖 workspace-root 的 select-none） */}
+      <div className="flex-1 select-text overflow-auto">
+        {featuresMode ? <ReqCardsRightPanel /> : <RightTraceView />}
       </div>
     </aside>
   );

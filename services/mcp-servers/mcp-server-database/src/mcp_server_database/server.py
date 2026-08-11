@@ -12,6 +12,7 @@ Dispatching order (top-down):
     6. **Error mapping** — every internal exception type maps to a stable
        JSON shape so the Agent / Auto-Repair can pattern-match on `code`.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -43,13 +44,13 @@ from mcp_server_database.tools.execute import ApprovalMissingError, ExecuteError
 from mcp_server_database.tools.query import QueryError
 from mcp_server_database.tools.schema import SchemaError
 
-
 log = logging.getLogger("mcp-server-database")
 server = Server("mcp-server-database")
 settings = Settings()
 
 
 # ---- Tool schemas ----------------------------------------------------------
+
 
 @server.list_tools()
 async def list_tools() -> list[Tool]:
@@ -61,9 +62,12 @@ async def list_tools() -> list[Tool]:
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "connection": {"type": "string", "description": "Logical connection name (e.g. 'orders_pg')."},
-                    "sql":        {"type": "string", "minLength": 1},
-                    "params":     {"type": "array", "items": {}},
+                    "connection": {
+                        "type": "string",
+                        "description": "Logical connection name (e.g. 'orders_pg').",
+                    },
+                    "sql": {"type": "string", "minLength": 1},
+                    "params": {"type": "array", "items": {}},
                     "_row_limit": {"type": "integer", "minimum": 1, "maximum": 10000},
                 },
                 "required": ["connection", "sql"],
@@ -79,10 +83,10 @@ async def list_tools() -> list[Tool]:
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "connection":   {"type": "string"},
-                    "sql":          {"type": "string", "minLength": 1},
-                    "params":       {"type": "array", "items": {}},
-                    "approval_id":  {"type": "string", "minLength": 1},
+                    "connection": {"type": "string"},
+                    "sql": {"type": "string", "minLength": 1},
+                    "params": {"type": "array", "items": {}},
+                    "approval_id": {"type": "string", "minLength": 1},
                 },
                 "required": ["connection", "sql", "approval_id"],
             },
@@ -103,6 +107,7 @@ async def list_tools() -> list[Tool]:
 
 
 # ---- Dispatcher ------------------------------------------------------------
+
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> dict:
@@ -132,20 +137,26 @@ async def call_tool(name: str, arguments: dict) -> dict:
         return _error_response(exc.code, exc.message, started, name)
     except asyncio.TimeoutError as exc:
         audit("db.tool.timeout", {"name": name, "error": str(exc)})
-        return _error_response("TIMEOUT", f"tool exceeded {settings.tool_timeout_sec}s", started, name)
-    except Exception as exc:  # noqa: BLE001 — last-resort, mapped through _map_exception
+        return _error_response(
+            "TIMEOUT", f"tool exceeded {settings.tool_timeout_sec}s", started, name
+        )
+    except Exception as exc:
         handled = _map_exception(exc)
-        audit("db.tool.error", {
-            "name": name,
-            "code": handled.code,
-            "message": handled.message,
-            "type": type(exc).__name__,
-        })
+        audit(
+            "db.tool.error",
+            {
+                "name": name,
+                "code": handled.code,
+                "message": handled.message,
+                "type": type(exc).__name__,
+            },
+        )
         log.exception("unhandled error in %s", name)
         return _error_response(handled.code, handled.message, started, name)
 
 
 # ---- Helpers ---------------------------------------------------------------
+
 
 def _prevalidate_sql(arguments: dict) -> None:
     """Run the cheapest, fail-fast checks before dispatching to the tool."""
@@ -181,6 +192,7 @@ def _error_response(code: str, message: str, started: float, name: str) -> dict:
 
 # ---- Exception → ErrorCode mapping ----------------------------------------
 
+
 class _Handled(Exception):
     code: str = "ERROR"
 
@@ -210,16 +222,18 @@ def _map_exception(exc: Exception) -> _Handled:
     return _Handled(str(exc))
 
 
-def _Handled__replace_code(self, code: str) -> "_Handled":
+def _handled_replace_code(self, code: str) -> _Handled:
     """Replace .code in place and return self."""
     self.__class__ = type(self.__class__.__name__, (self.__class__,), {"code": code})
     return self
 
+
 # Monkey-patch _Handled to support _replace_code
-_Handled._replace_code = _Handled__replace_code  # type: ignore[attr-defined]
+_Handled._replace_code = _handled_replace_code  # type: ignore[attr-defined]
 
 
 # ---- Entry point -----------------------------------------------------------
+
 
 async def main() -> None:
     logging.basicConfig(

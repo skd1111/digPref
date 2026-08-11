@@ -15,6 +15,7 @@ V1 接力（V0.5 / V1 阶段）：
   2. 所有错误统一抛 ImageProcessingError 子类，由 api 层捕获转 422/500
   3. output_path 必须不与 input_path 相同（避免覆盖原图）
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -25,15 +26,15 @@ from pathlib import Path
 from agent.image_processing.models import (
     BackendUnavailableError,
     EnhanceAlgorithm,
+    EnhancementBackend,
     EnhanceRequest,
     EnhanceResponse,
-    EnhancementBackend,
     check_file_size,
     is_supported_format,
 )
 
-
 # ---- V0 Mock Backend ------------------------------------------------------
+
 
 class MockEnhancementBackend:
     """V0 mock 超分后端 —— 不真做超分，仅复制文件 + 标注 backend='mock'。
@@ -53,6 +54,7 @@ class MockEnhancementBackend:
             # ---- 2. 格式校验 ----
             if not is_supported_format(request.input_path):
                 from agent.image_processing.models import UnsupportedFormatError
+
                 raise UnsupportedFormatError(
                     fmt=Path(request.input_path).suffix.lstrip("."),
                     supported=frozenset({"png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff"}),
@@ -111,6 +113,7 @@ class MockEnhancementBackend:
 
 # ---- V1 ONNX Backend（占位实现，V1 接力时填充）----------------------------
 
+
 class ONNXEnhancementBackend:
     """V1 ONNX 超分后端（占位实现）—— 真实集成留 V1。
 
@@ -138,6 +141,7 @@ class ONNXEnhancementBackend:
 
 
 # ---- 后端工厂 -------------------------------------------------------------
+
 
 def get_default_backend() -> EnhancementBackend:
     """获取默认超分后端（V0 = mock；V1 自动检测 ONNX Runtime 可用性）。"""

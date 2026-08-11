@@ -1,8 +1,8 @@
 """Phase 18 ModeRouter：三级判定（关键词 → 模式先验 → LLM 兜底）。"""
+
 from __future__ import annotations
 
 import pytest
-
 from agent.dual.router import ModeRouter, mode_router_node
 
 
@@ -88,3 +88,24 @@ async def test_mode_router_node_injects_dual_rules():
     out = await mode_router_node(state, llm=None)
     assert "双模式执行纪律" in out["dual_rules_addon"]
     assert "CODE" in out["dual_rules_addon"]
+
+
+async def test_mode_router_node_normal_mode_uses_condensed():
+    """正常模式（默认）注入精简版，不带完整版章节。"""
+    state = {"user_prompt": "修复这个 bug", "work_mode": "full", "inference_mode": "normal"}
+    out = await mode_router_node(state, llm=None)
+    assert "双模式执行纪律" in out["dual_rules_addon"]
+    assert "角色定义" not in out["dual_rules_addon"]
+
+
+async def test_mode_router_node_performance_mode_injects_full_prompt():
+    """性能模式注入完整版 code_work_system_prompt.md（含路由 header）。"""
+    state = {"user_prompt": "修复这个 bug", "work_mode": "full", "inference_mode": "performance"}
+    out = await mode_router_node(state, llm=None)
+    addon = out["dual_rules_addon"]
+    assert "【当前任务路由：CODE（编程框架）】" in addon
+    # 完整版特有章节（精简版没有）
+    assert "角色定义" in addon
+    assert "核心原则" in addon
+    # trace 记录性能模式标记
+    assert any(t["node"] == "mode_router" and t.get("performance") is True for t in out["trace"])

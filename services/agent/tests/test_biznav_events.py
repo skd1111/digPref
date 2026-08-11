@@ -6,12 +6,12 @@
 - flush_biznav_events 清空（测试隔离）
 - 3 个事件通道名常量正确
 """
+
 from __future__ import annotations
 
 import asyncio
 
 import pytest
-
 from agent.biznav.events import (
     EVT_EXTRACTION_DONE,
     EVT_FEATURE_AFFECTED,

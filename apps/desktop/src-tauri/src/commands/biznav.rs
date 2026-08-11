@@ -230,3 +230,17 @@ pub async fn biznav_affected(
     let resp = reqwest::get(&url).await.map_err(err)?;
     json_or_err(resp).await
 }
+
+/// GET /biznav/profile?project_name= —— 项目画像（init 风格，chat 发送时前置注入）。
+#[tauri::command]
+pub async fn biznav_profile(
+    project_name: String,
+    state: State<'_, AppState>,
+) -> CmdResult<serde_json::Value> {
+    let url = agent_url(
+        &state,
+        &format!("/biznav/profile?project_name={}", urlencoding(&project_name)),
+    );
+    let resp = reqwest::get(&url).await.map_err(err)?;
+    json_or_err(resp).await
+}

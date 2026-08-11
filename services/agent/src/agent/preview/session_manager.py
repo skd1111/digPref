@@ -264,7 +264,7 @@ class SessionManager:
     async def _persist(self, session: PreviewSession) -> None:
         from contextlib import suppress
 
-        with suppress(Exception):  # noqa: BLE001 —— 持久化失败不阻断主流程
+        with suppress(Exception):
             await self._storage.upsert_session(session)
 
     def _ensure_sweep(self) -> None:

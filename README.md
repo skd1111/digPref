@@ -8,14 +8,15 @@
 
 ## 1. 技术栈
 
-| 层 | 技术 |
-| --- | --- |
-| 桌面端 | Tauri 2.0 (Rust) + React 18 + TypeScript + Tailwind CSS |
-| 控制层 | Python 3.12 / FastAPI / LangGraph |
-| 执行层 | MCP Servers（Python，stdio / HTTP） |
-| 协议 | `packages/shared-protocol`（TS ⇄ Python 双侧镜像） |
-| 存储 | SQLite（audit / sessions / router 等多库物理隔离）+ OS Keychain 凭证 |
-| 包管理 | pnpm workspaces（JS）+ uv（Python）+ Cargo（Rust） |
+
+| 层     | 技术                                                                 |
+| ------ | -------------------------------------------------------------------- |
+| 桌面端 | Tauri 2.0 (Rust) + React 18 + TypeScript + Tailwind CSS              |
+| 控制层 | Python 3.12 / FastAPI / LangGraph                                    |
+| 执行层 | MCP Servers（Python，stdio / HTTP）                                  |
+| 协议   | `packages/shared-protocol`（TS ⇄ Python 双侧镜像）                  |
+| 存储   | SQLite（audit / sessions / router 等多库物理隔离）+ OS Keychain 凭证 |
+| 包管理 | pnpm workspaces（JS）+ uv（Python）+ Cargo（Rust）                   |
 
 ## 2. 架构分层
 
@@ -33,16 +34,18 @@
 ┌──────────────────────────────────────────────────────────────────┐
 │  控制层  Python / FastAPI / LangGraph                            │
 │   - 双框架路由: ModeRouter（Coding Agent ⇄ Work Agent）          │
-│   - 意图识别 → 工具路由 → 写操作检测 → HITL → 执行 → Auto-Repair │
-│   - LMRouter: 五维评估调度 + 多级降级 + 熔断 + 双层缓存          │
+│   - 结构化意图识别（改写/追问/风险）→ 工具路由 → 写操作检测      │
+│     → HITL → 执行 → Auto-Repair                                  │
+│   - LMRouter: 五维评估调度 + 多级降级 + 熔断 + 分层缓存(L1/L3)  │
+│   - 提示词模板体系: llm/prompts/*.md（版本化）+ JSON 四层防御     │
 │   - 多智能体 Orchestrator: 派生子 Agent 并行 + HITL 反向 interrupt│
-│   - 本地小模型 / RAG 知识库 / MACC 上下文压缩 / DSpark 推测解码   │
+│   - 本地小模型 / MACC 上下文压缩 / DSpark 推测解码 / 缓存命中率优化│
 └──────────────────────────────────────────────────────────────────┘
                           ▲ MCP (stdio / HTTP) + 内置工具
                           ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │  执行层                                                           │
-│   - 内置工具 19 个 (进程内 <1ms, 路径沙箱 7 项校验)               │
+│   - 内置工具 32 个 (进程内 <1ms, 路径沙箱 7 项校验)               │
 │   - mcp-server-database  SQL 拦截 / 语法校验 / 结果截断          │
 │   - mcp-server-rest      方法白名单 / 请求体限制                  │
 │   - mcp-server-ssh       命令黑名单 + 主机白名单                  │
@@ -62,59 +65,75 @@
 
 ### ✅ 已实现
 
-| 模块 | 说明 |
-| --- | --- |
-| 基础架构 | Tauri 桌面壳 / 四象限 IDE 布局 / LangGraph 状态机 / HITL 审批闸门 / SSE 事件桥 / SQLite 审计 |
-| 双框架智能体（Phase 18） | ModeRouter 智能路由 Coding / Work 双模式 + 任务分解 + Auto-Repair 自动修复 |
-| 内置工具层 | 19 个进程内工具（文件读写/搜索/计算器/正则/shell 等）+ 路径沙箱 + HITL 前置闸门 |
-| 智能 LLM 路由 | 五维评估调度 / 多级降级 / 熔断器 / 双层缓存 / 预算控制 / 关键任务双模型并行+裁判 |
-| Skill / MCP 生态 | Skill YAML + MCP JSON Schema / 关键词路由 / 热加载 / 多项目隔离 |
-| 多环境治理 | 4 env preset / Keyring 占位符 / PBKDF2+Fernet 加密导入导出 / 环境徽章 |
-| 代码导航 | Tree-sitter AST 索引 + SQLite 符号库 + Monaco 跳转 + AI 语义推断 |
-| 业务功能点导航 | 代码→业务功能点抽象 + YAML 热加载（运营专家模式专属） |
-| 大文件日志查看 | Rust 字节偏移索引 + 流式读取 + 进程内搜索 + GBK 编码 + AI 日志分析 |
-| 会话管理 | 会话生命周期 / Checkpoint / FTS5 全文搜索 / 分支 / 共享 / .eas 加密导出 |
-| MACC 上下文压缩 | 三层自适应压缩（工作记忆 / 情景记忆事件图谱 / 语义规则蒸馏） |
-| 多智能体调度 | Orchestrator 派生子 Agent / Worker Pool / DLQ / 限流 / 派生树硬上限 |
-| DSpark 推测解码 | Qwen2.5 草稿模型 + llama.cpp 推测解码 + 场景化策略路由 |
-| 数据专家模式（V1） | NL2SQL + 虚拟滚动 DataGrid + ECharts 可视化 + 只读铁律 |
-| 思维链可视化（V1） | 中文思维链时间线 + 文件操作追踪 + hover Diff 预览 |
+
+| 模块                     | 说明                                                                                                                                                                                                |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 基础架构                 | Tauri 桌面壳 / 四象限 IDE 布局 / LangGraph 状态机 / HITL 审批闸门 / SSE 事件桥 / SQLite 审计                                                                                                        |
+| 双框架智能体（Phase 18） | ModeRouter 智能路由 Coding / Work 双模式 + 任务分解 + Auto-Repair 自动修复                                                                                                                          |
+| 内置工具层               | 32 个进程内工具（文件读写/搜索/计算器/正则/时间日期含农历/相对日期解析/shell 等）+ 路径沙箱 + HITL 前置闸门                                                                                        |
+| 结构化意图识别           | Intent Router 一次分析产出改写句/细分意图/实体/追问信号/风险等级；三级快速路径：关键词 → 向量语义路由（semantic-router 模式，本地 embedding 零 LLM）→ LLM 分析，明确信号直达路由省掉决策器调用                                                                       |
+| 智能 LLM 路由            | 五维评估调度 / 多级降级 / 熔断器 / 分层缓存（L1 精确响应 + L3 幂等工具）/ 预算控制 / 关键任务双模型并行+裁判 / 内网或云端可达时自动切换 OpenAI 原生 Function Calling 工具循环（首消息探测一次，不可用回退提示词协议，HITL 闸门不变）                                                    |
+| 缓存命中率优化（Phase 17） | L1 精确响应缓存（接入 summarise 最终答案链，重复请求直返省一次全链 LLM 调用）+ L3 幂等只读工具结果缓存（白名单 16 工具 + write_detector 双重把关，短 TTL）+ 请求规范化稳定 key + prompt 版本化（bump 自动失效缓存）+ MCP 工具稳定排序 + Ollama keep_alive（多轮 KV 复用）+ `GET /router/cache-stats` 命中率统计 / `POST /router/cache-toggle` 一键回滚 + `llm_cache_stats` SSE 实时推送；红线：写操作 / 敏感任务 / 凭证一律不缓存 |
+| Token 用量计量           | 状态栏/顶栏「Agent: 就绪」旁徽章实时展示上传（prompt）/ 下载（completion）速率（近 30s 滑动窗口，2s 轮询）+ 当日调用次数；鼠标悬浮弹明细卡片（当日 tokens 累计 / 调用次数 / 费用总 + 按模型明细，单价取模型管理 `cost_per_1k_tokens`，本地免费模型不计费）。数据落 router.db `token_usage_daily`，跨重启保留、按日滚动；后端无 usage 字段时按字符数估算 |
+| 提示词模板体系（v2.64）  | 统一六段式`.md` 模板资产（`llm/prompts/`，运行时加载、非工程人员可直接编辑）+ JSON 输出四层防御（API 参数 → Prompt 纪律 → 容错解析 → 重试自纠错）+ 模型族适配矩阵（Claude/OpenAI/开源/国产闭源） |
+| Skill / MCP 生态         | Skill YAML + MCP JSON Schema / 关键词路由 / 热加载 / 多项目隔离                                                                                                                                     |
+| 专家团资产               | 团+成员两级结构化（不以 Skill 存在）/ 设置页独立维护（CRUD + YAML 导入导出）/ 运营工作台点业务自动选择（Skill 预设 → LLM 本地→内网→云端降级 → 关键词）+ 输入栏手选 + 会话自动注入；Skill 预设默认专家团/材料/交付物三字段；种子：`docs/expert-team-seeds/due-diligence-expert-team.yaml` |
+| 多环境治理               | 4 env preset / Keyring 占位符 / PBKDF2+Fernet 加密导入导出 / 环境徽章                                                                                                                               |
+| 代码导航                 | Tree-sitter AST 索引 + SQLite 符号库 + Monaco 跳转 + AI 语义推断                                                                                                                                    |
+| 业务功能点导航           | 代码→业务功能点抽象 + YAML 热加载（运营专家模式专属）                                                                                                                                              |
+| 需求改造工作流           | 功能点发起改造需求 + AI 可行性对齐 + 需求卡片（批次/编号/改造点/影响面/外部系统） + 版本快照 + 按批次导出 MD/Word（运营专家模式）                              |
+| 运营模式（独立页签）     | 顶部顶级页签与开发模式并列：运营工作台三栏（业务列表 16 模块导航 + Chat + 工作台）/ 功能点以 Skill 承载 / 选中业务自动注入 Skill 与专家团 / 业务记录卡片可审计                              |
+| 数据字典（公共参数）     | ActivityBar 独立入口（📖，穿透所有模式）：Skill 里写引用 key、字典维护参数值；搜索 / 分类筛选 / CRUD / seed 内置条目可显式覆盖（dict.db）                                              |
+| 选项式追问与高级设置     | AI 需确认时输出可点选选项卡片（3-5 选项/理由/推荐项/多问题页签/自定义输入）；推理模式与会话自主性迁入设置-高级设置 |
+| 大文件日志查看           | Rust 字节偏移索引 + 流式读取 + 进程内搜索 + GBK 编码 + AI 日志分析                                                                                                                                  |
+| 会话管理（V1.6）         | 会话生命周期 / Checkpoint / FTS5 全文搜索 / 分支 / 共享 / .eas 加密导出导入 / 启动中断会话恢复 / 事件哈希链校验 / 详情五 Tab 弹窗                                                                                                                             |
+| MACC 上下文压缩          | 三层自适应压缩（工作记忆 / 情景记忆事件图谱 / 语义规则蒸馏）                                                                                                                                        |
+| 多智能体调度             | Orchestrator 派生子 Agent / Worker Pool / DLQ / 限流 / 派生树硬上限                                                                                                                                 |
+| DSpark 推测解码          | Qwen2.5 草稿模型 + llama.cpp 推测解码 + 场景化策略路由                                                                                                                                              |
+| 数据专家模式（V1.1 补齐版） | NL2SQL（生成后 SELECT 白名单前置校验）+ ReadOnlyPool 真实执行（6 方言族）+ 真实 Schema 同步 + 重查询 HITL 确认 + WS/Arrow 大结果流（Rust 中继）+ 虚拟滚动 DataGrid + ECharts + 沙箱 Python 清洗（SQL 结果 df 链路）+ Excel/PDF/CSV 导出（服务端取数 + PII 脱敏 + 水印）+ 定时报表调度 + 历史分析                                                                                                                                              |
+| 思维链可视化（V1）       | 中文思维链时间线 + 文件操作追踪 + hover Diff 预览                                                                                                                                                   |
+| 文档风险审核             | PDF/DOCX/TXT/MD 解析 → LLM 分类（合同/制度/公告/标书 × 合规/法律/数据安全/资金）→ 分块风险分析 → 风险位置正文高亮 + 知识库/案例库引用依据                                                       |
 
 ### 🟡 部分实现
 
-| 模块 | 现状 | 未实现部分 |
-| --- | --- | --- |
-| 本地小模型 + 知识库 | 后端引擎已交付（RAG 检索 + 分块 + 主图接入） | 前端知识库管理界面、Sidecar 生命周期管理 |
-| 审核专家模式（金融审计） | V0 后端骨架（审批队列 + 签名链 + 合规规则） | 前端 AuditDashboard、Monaco Diff 审核、MFA、双人复核 |
-| 本地图像处理 | V0 后端骨架（6 端点 + 任务表） | ONNX 超分 / PaddleOCR / 倾斜校正真实集成、前端 UI |
-| 前端实时预览 | V0.1（Vite 管理器 + 独立预览窗口 + 设备模式） | 真实 Vite 端到端 HMR 实测收尾 |
-| 大文件日志 V1.5 | 核心读写搜索已交付 | tail -f 实时监控、ripgrep 集成、AI 分析 UI |
+
+| 模块                     | 现状                                                                                       | 未实现部分                                                      |
+| ------------------------ | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------- |
+| 本地小模型 + 知识库      | 后端引擎已交付（分块 + 主图接入；检索为占位）；**方向调整：本地不自建 RAG，未来走外部 RAG 接口 + 本地 grep** | 前端知识库管理界面、Sidecar 生命周期管理                        |
+| 审核专家模式（金融审计） | V0 后端骨架（审批队列 + 签名链 + 合规规则）+ 文档审核子功能已交付（风险高亮 + 知识库引用） | 前端 AuditDashboard 完整工作台、Monaco Diff 审核、MFA、双人复核 |
+| 本地图像处理             | V0 后端骨架（6 端点 + 任务表）                                                             | ONNX 超分 / PaddleOCR / 倾斜校正真实集成、前端 UI               |
+| 前端实时预览             | V0.1（Vite 管理器 + 独立预览窗口 + 设备模式）                                              | 真实 Vite 端到端 HMR 实测收尾                                   |
+| 大文件日志 V1.5          | 核心读写搜索已交付                                                                         | tail -f 实时监控、ripgrep 集成、AI 分析 UI                      |
 
 ### ⚪ 未实现（规划中）
 
-| 模块 | 说明 |
-| --- | --- |
-| 类 FinalShell 远程管理（2B） | SSH PTY + SFTP 双栏 + 资产树联动 |
-| 编译打包引擎（3A） | 工具链探测 + 异步构建 + SSE 实时日志 |
-| 部署流水线（3B） | 状态机部署 + 自动回滚 + 零停机 swap |
-| Arthas JVM 热更（3C） | AI 热修复 + 字节码结构校验 |
-| 部署 UI（3D） | 流水线可视化 + 实时日志 |
-| 多人协同审批（8） | 跨终端审批路由 + OA/IM 集成（需独立 Server） |
-| 任务级协作（9） | 上下文锚点 + 行级评论 + @ 提醒 |
-| 统一身份认证 IAM（10） | OIDC/LDAP/企微 + RBAC/ABAC + 数字签名 + MFA |
-| 离线授权系统（11） | 机器指纹 + License RSA 签名 + 试用管理 |
+
+| 模块                         | 说明                                         |
+| ---------------------------- | -------------------------------------------- |
+| 类 FinalShell 远程管理（2B） | SSH PTY + SFTP 双栏 + 资产树联动             |
+| 编译打包引擎（3A）           | 工具链探测 + 异步构建 + SSE 实时日志         |
+| 部署流水线（3B）             | 状态机部署 + 自动回滚 + 零停机 swap          |
+| Arthas JVM 热更（3C）        | AI 热修复 + 字节码结构校验                   |
+| 部署 UI（3D）                | 流水线可视化 + 实时日志                      |
+| 多人协同审批（8）            | 跨终端审批路由 + OA/IM 集成（需独立 Server） |
+| 任务级协作（9）              | 上下文锚点 + 行级评论 + @ 提醒               |
+| 统一身份认证 IAM（10）       | OIDC/LDAP/企微 + RBAC/ABAC + 数字签名 + MFA  |
+| 离线授权系统（11）           | 机器指纹 + License RSA 签名 + 试用管理       |
 
 ## 4. 安全红线（绝对不可妥协）
 
-| 红线 | 实现位置 |
-| --- | --- |
-| HITL 强制审批（写操作不可绕过） | `services/agent/src/agent/graph/nodes/hitl_gate.py` + 前端 ApprovalCard |
-| 敏感任务强制本地模型 | `services/agent/src/agent/llm/router.py` 的 `_LOCAL_ONLY_TASKS` |
-| 凭证零落盘 | `apps/desktop/src-tauri/src/credentials/{windows,macos,linux}.rs` |
-| 全链路审计 | `services/agent/src/agent/audit/store.py`（Python + Rust 双 schema 镜像） |
-| 路径沙箱 | `path_sandbox` 7 项校验（Python / Rust 双侧实现） |
-| MCP 层安全 | 各 `services/mcp-servers/*/safety/` 子模块（SQL 拦截 / 白名单 / 黑名单） |
-| SSE 事件契约 | `graph/stream.py` + `sse_bridge.rs` + `ipc/events.ts` 三处强制同步 |
+
+| 红线                            | 实现位置                                                                  |
+| ------------------------------- | ------------------------------------------------------------------------- |
+| HITL 强制审批（写操作不可绕过） | `services/agent/src/agent/graph/nodes/hitl_gate.py` + 前端 ApprovalCard   |
+| SQL 只读白名单（除 dev 外仅 SELECT） | `dataexpert/readonly/guard.py` 的 `enforce_select_only`（`EAIDE_ENV` + 豁免开关，fail-safe） |
+| 敏感任务强制本地模型            | `services/agent/src/agent/llm/router.py` 的 `_LOCAL_ONLY_TASKS`           |
+| 凭证零落盘                      | `apps/desktop/src-tauri/src/credentials/{windows,macos,linux}.rs`         |
+| 全链路审计                      | `services/agent/src/agent/audit/store.py`（Python + Rust 双 schema 镜像） |
+| 路径沙箱                        | `path_sandbox` 7 项校验（Python / Rust 双侧实现）                         |
+| 缓存安全（写操作/凭证不缓存）    | `llm/tool_cache.py` 白名单 + `write_detector` 双重把关；`llm/normalize.py` 稳定 key（凭证/时间戳不进 key） |
+| MCP 层安全                      | 各`services/mcp-servers/*/safety/` 子模块（SQL 拦截 / 白名单 / 黑名单）   |
+| SSE 事件契约                    | `graph/stream.py` + `sse_bridge.rs` + `ipc/events.ts` 三处强制同步        |
 
 ## 5. 目录结构
 
@@ -128,16 +147,17 @@
 │   │   └── src/agent/
 │   │       ├── graph/         # LangGraph 状态机（intent/planner/tool_runner/hitl_gate/repair…）
 │   │       ├── dual/ coding/  # Phase 18 双框架（Coding Agent / Work Agent）
-│   │       ├── llm/           # LMRouter 智能路由 + _LOCAL_ONLY_TASKS
+│   │       ├── llm/           # LMRouter 智能路由 + _LOCAL_ONLY_TASKS + prompts/*.md 模板资产 + 分层缓存（normalize/tool_cache/cache_stats）
 │   │       ├── orchestrator/  # 多智能体调度
 │   │       ├── sessions/      # 会话管理 + MACC 压缩
 │   │       ├── knowledge/     # RAG 知识库
 │   │       ├── builtin/       # 内置工具层
-│   │       ├── dataexpert/    # 数据专家模式（NL2SQL + DataGrid）
+│   │       ├── dataexpert/    # 数据专家模式（NL2SQL + 只读池 + 沙箱 + 导出 + WS/Arrow 流）
 │   │       ├── trace/         # 思维链收集与文件操作追踪
-│   │       └── …              # codenav/biznav/skills/preview/audit/safety 等
+│   │       ├── …              # codenav/biznav/reqflow/skills/preview/audit/safety 等
 │   └── mcp-servers/           # 【执行层】MCP Server 矩阵（database/rest/ssh/rpa）
 ├── packages/shared-protocol/  # 跨语言协议包（TS + Python 唯一事实来源）
+├── knowledge-base/            # 文档审核知识库（合规/法律/数据安全/资金风险 + 案例库，随 exe 打包）
 ├── config/driver/             # 离线数据库驱动 wheel（不入库，构建时本地放置）
 ├── infra/                     # Docker / 脚本 / 配置模板
 ├── Makefile                   # 统一命令入口
@@ -170,6 +190,8 @@ make build
 ```
 
 > ⚠️ 数据库离线驱动（`config/driver/*.whl`，约 30MB）**不在仓库中**。完整构建前需自行将 wheel 文件放到 `config/driver/` 目录。
+>
+> 📚 文档审核知识库 `knowledge-base/` 已随 PyInstaller 打包（`eaide-agent.spec` datas）；运行时优先读工作目录下的同名目录（便于自行更新），缺失时回退到包内置副本。
 
 ## 7. 开发约定
 
@@ -179,6 +201,8 @@ make build
 - **分支模型**：主干开发，`feat/*` 短分支 → PR 合入 `main`（2 reviewer）
 - **协议同步**：线协议类型改动必须同时更新 `shared-protocol` 的 TS 与 Python 两侧
 - **SSE 事件**：新增事件名必须在 `graph/stream.py`、`stream/sse_bridge.rs`、`ipc/events.ts` 三处同步
+- **提示词模板**：LLM 提示词资产统一放在 `services/agent/src/agent/llm/prompts/*.md`（六段式结构：角色/任务/输入/输出格式/硬性约束/示例），占位符用 `{{KEY}}`；JSON 输出统一走四层防御（`agent.llm.json_discipline`）。索引与接入规范见 `docs/prompt-templates.md`、`docs/llm-prompt-sop.md`
+- **Prompt 版本化**：修改 `llm/prompts/*.md` 后必须 `bump_prompt_version()` bump 版本（自动失效 L1 缓存，防旧答案误命中）；缓存相关约束见 `docs/design/phase-17-cache-hit-rate.md`
 
 ## 8. License
 

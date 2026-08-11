@@ -13,6 +13,7 @@
 - 不持久化任何敏感字段（业务规则只是业务文本，不含密钥）
 - 软删除保留行（deleted_at = now()），硬删除级联清 feature_file_index
 """
+
 from __future__ import annotations
 
 import json
@@ -21,13 +22,10 @@ import time
 from pathlib import Path
 
 from .models import (
-    BusinessRule,
     Feature,
-    RelatedApi,
-    RelatedFile,
-    RelatedTable,
     _business_rules_from_json,
     _business_rules_to_json,
+    _expert_team_ids_from_json,
     _related_apis_from_json,
     _related_apis_to_json,
     _related_tables_from_json,
@@ -60,6 +58,30 @@ class FeatureStorage:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(self._read_schema_sql())
+        # Phase 2H 迁移：存量 biznav.db 无 skill_id 列 → ALTER 增量加列（幂等）
+        self._migrate_skill_id()
+        # 中期改造迁移：存量库无 expert_team_ids 列 → ALTER 增量加列（幂等）
+        self._migrate_expert_team_ids()
+
+    def _migrate_skill_id(self) -> None:
+        """为存量库加 skill_id 列（新库已在 CREATE TABLE 中含该列，ALTER 静默跳过）。"""
+        with self._connect() as conn:
+            try:
+                conn.execute("ALTER TABLE features ADD COLUMN skill_id TEXT")
+            except sqlite3.OperationalError as e:
+                msg = str(e).lower()
+                if "duplicate column" not in msg:
+                    raise
+
+    def _migrate_expert_team_ids(self) -> None:
+        """为存量库加 expert_team_ids 列（功能点直连专家团预设，新库已在 CREATE TABLE 中）。"""
+        with self._connect() as conn:
+            try:
+                conn.execute("ALTER TABLE features ADD COLUMN expert_team_ids TEXT")
+            except sqlite3.OperationalError as e:
+                msg = str(e).lower()
+                if "duplicate column" not in msg:
+                    raise
 
     # ---- schema ----------------------------------------------------------
 
@@ -112,9 +134,10 @@ class FeatureStorage:
                     """
                     INSERT INTO features(
                         id, name, description, category, project_name, project_root,
-                        related_files, related_apis, related_tables, business_rules,
+                        skill_id, expert_team_ids, related_files, related_apis, related_tables,
+                        business_rules,
                         source, ai_confidence, version, created_at, updated_at, deleted_at
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         feature.id,
@@ -123,6 +146,8 @@ class FeatureStorage:
                         feature.category,
                         feature.project_name,
                         feature.project_root,
+                        feature.skill_id,
+                        json.dumps(list(feature.expert_team_ids), ensure_ascii=False),
                         related_files_to_json(feature.related_files),
                         _related_apis_to_json(feature.related_apis),
                         _related_tables_to_json(feature.related_tables),
@@ -152,7 +177,8 @@ class FeatureStorage:
                     """
                     UPDATE features SET
                         name=?, description=?, category=?, project_name=?, project_root=?,
-                        related_files=?, related_apis=?, related_tables=?, business_rules=?,
+                        skill_id=?, expert_team_ids=?, related_files=?, related_apis=?,
+                        related_tables=?, business_rules=?,
                         source=?, ai_confidence=?, version=?, updated_at=?, deleted_at=?
                     WHERE id=? AND project_name=?
                     """,
@@ -162,6 +188,8 @@ class FeatureStorage:
                         feature.category,
                         feature.project_name,
                         feature.project_root,
+                        feature.skill_id,
+                        json.dumps(list(feature.expert_team_ids), ensure_ascii=False),
                         related_files_to_json(feature.related_files),
                         _related_apis_to_json(feature.related_apis),
                         _related_tables_to_json(feature.related_tables),
@@ -215,9 +243,7 @@ class FeatureStorage:
                 return None
             return self._row_to_feature(row)
 
-    def list_by_project(
-        self, project_name: str, include_deleted: bool = False
-    ) -> list[Feature]:
+    def list_by_project(self, project_name: str, include_deleted: bool = False) -> list[Feature]:
         with self._connect() as conn:
             if include_deleted:
                 rows = conn.execute(
@@ -229,6 +255,20 @@ class FeatureStorage:
                     "SELECT * FROM features WHERE project_name = ? AND deleted_at IS NULL "
                     "ORDER BY category, name",
                     (project_name,),
+                ).fetchall()
+            return [self._row_to_feature(r) for r in rows]
+
+    def list_all(self, include_deleted: bool = False) -> list[Feature]:
+        """跨项目列出全部功能点（前端 open 工程后无法确定 project_name 时的兜底查询）。"""
+        with self._connect() as conn:
+            if include_deleted:
+                rows = conn.execute(
+                    "SELECT * FROM features ORDER BY project_name, category, name"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM features WHERE deleted_at IS NULL "
+                    "ORDER BY project_name, category, name"
                 ).fetchall()
             return [self._row_to_feature(r) for r in rows]
 
@@ -256,7 +296,9 @@ class FeatureStorage:
                 (ts, ts, feature_id, project_name),
             )
             # 写 edit_history
-            after_json = json.dumps({**dict(row), "deleted_at": ts}, ensure_ascii=False, default=str)
+            after_json = json.dumps(
+                {**dict(row), "deleted_at": ts}, ensure_ascii=False, default=str
+            )
             conn.execute(
                 "INSERT INTO feature_edit_history(feature_id, project_name, before_json, after_json, edited_at, editor_id) "
                 "VALUES (?,?,?,?,?,?)",
@@ -297,9 +339,7 @@ class FeatureStorage:
                 [(feature_id, str(Path(p).as_posix())) for p in file_paths],
             )
 
-    def remove_file_index(
-        self, feature_id: str, file_paths: list[str] | None = None
-    ) -> None:
+    def remove_file_index(self, feature_id: str, file_paths: list[str] | None = None) -> None:
         with self._connect() as conn:
             if file_paths is None:
                 conn.execute(
@@ -325,9 +365,7 @@ class FeatureStorage:
                     [(feature_id, str(Path(p).as_posix())) for p in file_paths],
                 )
 
-    def find_features_by_file(
-        self, file_path: str, project_name: str
-    ) -> list[Feature]:
+    def find_features_by_file(self, file_path: str, project_name: str) -> list[Feature]:
         """JOIN 反向索引 + 软删除过滤。"""
         with self._connect() as conn:
             rows = conn.execute(
@@ -445,6 +483,33 @@ class FeatureStorage:
                 return None
             return dict(row)
 
+    # ---- project profiles（init 风格项目画像，2026-08-05）---------------
+
+    def upsert_profile(self, project_name: str, project_root: str, profile_text: str) -> None:
+        """写入/更新项目画像（按 project_name 覆盖）。"""
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO project_profiles(project_name, project_root, profile_text, updated_at)
+                VALUES (?,?,?,?)
+                ON CONFLICT(project_name) DO UPDATE SET
+                    project_root = excluded.project_root,
+                    profile_text = excluded.profile_text,
+                    updated_at   = excluded.updated_at
+                """,
+                (project_name, project_root, profile_text, now()),
+            )
+
+    def get_profile(self, project_name: str) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM project_profiles WHERE project_name = ?",
+                (project_name,),
+            ).fetchone()
+            if row is None:
+                return None
+            return dict(row)
+
     # ---- private ---------------------------------------------------------
 
     def _row_to_feature(self, row: sqlite3.Row) -> Feature:
@@ -455,6 +520,8 @@ class FeatureStorage:
             category=row["category"],
             project_name=row["project_name"],
             project_root=row["project_root"],
+            skill_id=row["skill_id"],
+            expert_team_ids=_expert_team_ids_from_json(row["expert_team_ids"]),
             related_files=related_files_from_json(row["related_files"]),
             related_apis=_related_apis_from_json(row["related_apis"]),
             related_tables=_related_tables_from_json(row["related_tables"]),

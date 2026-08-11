@@ -7,4 +7,6 @@
 
 mod sse_bridge;
 
+pub use sse_bridge::channel;
+pub use sse_bridge::HistoryMsg;
 pub use sse_bridge::SseBridge;

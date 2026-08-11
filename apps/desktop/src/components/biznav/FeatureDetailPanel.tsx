@@ -6,13 +6,14 @@
  *   - 当关 → width: 0 折叠（CSS transition 220ms）
  *   - 挂在 WorkspaceLayout 顶层（mode === 'operator' 才挂载）
  */
-import { useCallback, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useBiznavStore, selectSelectedFeature } from '@/store/biznavStore';
+import { useChatStore } from '@/store/chatStore';
+import { useReqcardStore } from '@/store/reqcardStore';
+import { useUIStore } from '@/store/uiStore';
+import { ipc } from '@/ipc/invoke';
+import { STATUS_META, type CardStatus } from '@/types/reqcard';
 import type { Feature, FeatureRisk } from '@/types/biznav';
-
-// Phase 2G V0 收尾 (2026-07-28): 演示数据横幅 + sessionStorage 持久化
-// 提醒用户当前 18 mock 不持久化（修改后重启清空），V1 接后端后会从所选项目自动加载
-const DEMO_BANNER_KEY = 'biznav.demoBannerDismissed.v1';
 
 const RISK_ICON: Record<FeatureRisk, string> = {
   high: '🔴',
@@ -54,9 +55,11 @@ function SectionTitle({
 function FeatureBody({
   feature,
   onEdit,
+  onStartReq,
 }: {
   feature: Feature;
   onEdit: () => void;
+  onStartReq: () => void;
 }): JSX.Element {
   return (
     <div className="flex-1 overflow-auto p-3" style={{ backgroundColor: '#f3f3f3' }}>
@@ -169,44 +172,102 @@ function FeatureBody({
         </div>
       </div>
 
-      {/* 编辑按钮 */}
-      <button
-        type="button"
-        onClick={onEdit}
-        className="w-full rounded px-3 py-1.5 text-ui font-semibold transition-colors"
-        style={{ backgroundColor: '#0e639c', color: '#ffffff' }}
-      >
-        ✏️ 编辑此功能点
-      </button>
+      {/* 编辑 / 发起改造需求 按钮 */}
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={onEdit}
+          className="flex-1 rounded px-3 py-1.5 text-ui font-semibold transition-colors"
+          style={{ backgroundColor: '#0e639c', color: '#ffffff' }}
+        >
+          ✏️ 编辑此功能点
+        </button>
+        <button
+          type="button"
+          onClick={onStartReq}
+          className="flex-1 rounded px-3 py-1.5 text-ui font-semibold transition-colors"
+          style={{
+            backgroundColor: '#ffffff',
+            color: '#0451a5',
+            border: '1px solid #007acc',
+          }}
+          title="基于此功能点与 AI 对齐改造需求，生成需求卡片"
+        >
+          📝 发起改造需求
+        </button>
+      </div>
     </div>
   );
 }
 
 export function FeatureDetailPanel(): JSX.Element {
-  // Phase 2G V0 收尾 (2026-07-28): demo banner 状态 + 关闭回调
-  // hooks 必须在 early-return 之前无条件调用（BUGFIX #15 教训）；本组件无 early-return
-  const [showDemoBanner, setShowDemoBanner] = useState<boolean>(() => {
-    try {
-      return sessionStorage.getItem(DEMO_BANNER_KEY) !== '1';
-    } catch {
-      // Tauri WebView 偶发 sessionStorage 不可用（隐私模式 / 磁盘满）
-      // 优雅降级：默认显示横幅
-      return true;
-    }
-  });
-  const dismissDemoBanner = useCallback((): void => {
-    try {
-      sessionStorage.setItem(DEMO_BANNER_KEY, '1');
-    } catch {
-      // 写失败忽略，保持横幅显示
-    }
-    setShowDemoBanner(false);
-  }, []);
-
   const feature = useBiznavStore(selectSelectedFeature);
   const drawerOpen = useBiznavStore((s) => s.drawerOpen);
   const closeDrawer = useBiznavStore((s) => s.closeDrawer);
   const openEditor = useBiznavStore((s) => s.openEditor);
+
+  // reqflow V1：该功能点关联的需求卡片（后端按 feature_id 过滤）
+  const [relatedCards, setRelatedCards] = useState<
+    { id: string; title: string; status: CardStatus; batch_id: string }[]
+  >([]);
+  useEffect(() => {
+    if (!feature) {
+      setRelatedCards([]);
+      return;
+    }
+    let cancelled = false;
+    ipc
+      .reqflowListCards({ featureId: feature.id })
+      .then((r) => {
+        if (cancelled) return;
+        setRelatedCards(
+          (r.cards ?? []).map((c) => ({
+            id: String(c.id),
+            title: String(c.title),
+            status: c.status as CardStatus,
+            batch_id: String(c.batch_id),
+          })),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setRelatedCards([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [feature?.id]);
+
+  /** 点击关联卡片 → 切到对应批次并选中，跳需求工作台 */
+  const handleOpenCard = async (
+    c: { id: string; batch_id: string },
+  ): Promise<void> => {
+    const store = useReqcardStore.getState();
+    await store.selectBatch(c.batch_id);
+    useReqcardStore.setState({ selectedCardId: c.id });
+    useUIStore.getState().setActivityId('requirements');
+  };
+
+  /** reqflow V1：单功能点发起改造需求（上下文写入对话 + 进入对齐模式） */
+  const handleStartReq = (): void => {
+    if (!feature) return;
+    useChatStore.getState().setAlignmentFeatures([
+      {
+        feature_id: feature.id,
+        feature_name: feature.name,
+        feature_description: feature.description,
+        ...(feature.skill_id != null ? { skill_id: feature.skill_id } : {}),
+        related_files: feature.related_files,
+        related_apis: feature.related_apis,
+        related_tables: feature.related_tables,
+        business_rules: feature.business_rules,
+        source: feature.source,
+      },
+    ]);
+    useReqcardStore.getState().startAlignment(
+      [feature.id],
+      useBiznavStore.getState().projectName,
+    );
+  };
 
   return (
     <div
@@ -244,36 +305,50 @@ export function FeatureDetailPanel(): JSX.Element {
         </div>
 
         {feature ? (
-          <>
-            {/* Phase 2G V0 收尾 (2026-07-28): 演示数据横幅 + [×] 关闭
-             * sessionStorage 而非 localStorage —— 刷新页面 / 重启进程会重现
-             * 避免用户忘记这是 mock 而修改后预期落盘 */}
-            {showDemoBanner && (
+          <div className="flex min-h-0 flex-1 flex-col">
+            <FeatureBody
+              feature={feature}
+              onEdit={() => openEditor(feature.id)}
+              onStartReq={handleStartReq}
+            />
+            {/* reqflow V1：该功能点关联的需求卡片 */}
+            {relatedCards.length > 0 && (
               <div
-                className="flex flex-shrink-0 items-start gap-2 rounded m-3 p-2 text-2xs"
-                style={{
-                  backgroundColor: '#dcdcaa20',
-                  border: '1px solid #dcdcaa',
-                }}
+                className="flex-shrink-0 border-t p-3"
+                style={{ borderColor: '#d4d4d4' }}
               >
-                <span style={{ color: '#795e26' }}>⚠️</span>
-                <div className="flex-1" style={{ color: '#1f1f1f' }}>
-                  <strong>V0 演示数据</strong>：当前显示的是 18 个 mock 功能点，
-                  修改仅保存在前端内存（重启清空）。V1 接后端后会从所选项目自动加载真实功能点。
-                </div>
-                <button
-                  type="button"
-                  onClick={dismissDemoBanner}
-                  className="rounded px-1 text-2xs"
-                  style={{ color: '#616161' }}
-                  title="关闭提示"
+                <div
+                  className="mb-1 text-2xs font-semibold uppercase tracking-wider"
+                  style={{ color: '#0451a5' }}
                 >
-                  ✕
-                </button>
+                  📋 关联需求卡片
+                </div>
+                {relatedCards.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => void handleOpenCard(c)}
+                    className="mb-1 flex w-full items-center gap-1 rounded border px-2 py-1 text-left text-2xs transition-colors hover:brightness-95"
+                    style={{
+                      backgroundColor: '#ffffff',
+                      borderColor: '#e0e0e0',
+                    }}
+                    title="在需求工作台打开"
+                  >
+                    <span className="font-mono" style={{ color: '#0451a5' }}>
+                      {c.id}
+                    </span>
+                    <span className="flex-1 truncate" style={{ color: '#1f1f1f' }}>
+                      {c.title}
+                    </span>
+                    <span style={{ color: STATUS_META[c.status].color }}>
+                      {STATUS_META[c.status].icon} {STATUS_META[c.status].label}
+                    </span>
+                  </button>
+                ))}
               </div>
             )}
-            <FeatureBody feature={feature} onEdit={() => openEditor(feature.id)} />
-          </>
+          </div>
         ) : (
           <div
             className="flex h-full flex-col items-center justify-center p-6 text-center text-2xs"
