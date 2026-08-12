@@ -34,10 +34,17 @@ jobs:
         run: |
           set -o pipefail
           uv run pytest -q 2>&1 | tee pytest.log
-      # 失败时把日志尾部写入 Step Summary（无 Actions 权限也能经 check-run API 读到）
+      # 失败时把关键行发成 annotation（无 Actions 权限也能经 check-run API 读到）
       - name: Surface failure tail
         if: failure()
-        run: tail -n 120 pytest.log >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          sed -e 's/\x1b\[[0-9;]*m//g' pytest.log > pytest.plain || true
+          {
+            echo '```'
+            tail -n 100 pytest.plain
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -E "^(FAILED|ERROR)" pytest.plain | head -10 | sed 's/^/::error::/'
 
   lint-js:
     runs-on: ubuntu-latest
@@ -66,7 +73,14 @@ jobs:
           pnpm test 2>&1 | tee vitest.log
       - name: Surface failure tail
         if: failure()
-        run: tail -n 120 vitest.log >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          sed -e 's/\x1b\[[0-9;]*m//g' vitest.log > vitest.plain || true
+          {
+            echo '```'
+            tail -n 100 vitest.plain
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -B1 -A6 -E "(FAIL|×|✗)" vitest.plain | head -40 | sed 's/^/::error::/'
 
   lint-rust:
     runs-on: ubuntu-latest
@@ -89,7 +103,14 @@ jobs:
           cd apps/desktop/src-tauri && cargo clippy --all-targets -- -D warnings 2>&1 | tee clippy.log
       - name: Surface failure tail
         if: failure()
-        run: tail -n 120 apps/desktop/src-tauri/clippy.log >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          sed -e 's/\x1b\[[0-9;]*m//g' apps/desktop/src-tauri/clippy.log > clippy.plain || true
+          {
+            echo '```'
+            tail -n 100 clippy.plain
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -A6 "^error" clippy.plain | head -40 | sed 's/^/::error::/'
 
   test-rust:
     runs-on: ubuntu-latest
@@ -112,4 +133,11 @@ jobs:
           cd apps/desktop/src-tauri && cargo test --all 2>&1 | tee cargo-test.log
       - name: Surface failure tail
         if: failure()
-        run: tail -n 120 apps/desktop/src-tauri/cargo-test.log >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          sed -e 's/\x1b\[[0-9;]*m//g' apps/desktop/src-tauri/cargo-test.log > cargo-test.plain || true
+          {
+            echo '```'
+            tail -n 100 cargo-test.plain
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -B2 -A8 "FAILED\\|panicked" cargo-test.plain | head -40 | sed 's/^/::error::/'
