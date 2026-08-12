@@ -17,7 +17,9 @@
     background-color: theme('colors.vscode.editor-bg');
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    user-select: none;
+    /* 主界面文字默认可选中复制（2026-08-11）：会话记录/面板内容等；
+       菜单栏/顶栏/页签等交互 chrome 由各组件自带 select-none 保持禁选 */
+    user-select: text;
   }
 
   /* 输入框、textarea 允许文本选择 */

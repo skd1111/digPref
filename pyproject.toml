@@ -145,4 +145,6 @@ source = ["services", "packages"]
 dev = [
     "pytest-asyncio>=1.4.0",
     "pyinstaller>=6.0",
+    "ruff>=0.16",
+    "mypy>=1.10",
 ]

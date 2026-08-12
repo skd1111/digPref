@@ -1222,6 +1222,7 @@ function DraftFieldInput({
   value,
   fileName,
   disabled,
+  expanded = false,
   onChange,
   onFilePick,
 }: {
@@ -1230,6 +1231,8 @@ function DraftFieldInput({
   /** file 类型：已选文件名 */
   fileName?: string;
   disabled: boolean;
+  /** 全屏模式：更大的控件与聚焦环（BUGFIX #93 设计感） */
+  expanded?: boolean;
   onChange: (v: string) => void;
   /** file 类型：选中文件回调 */
   onFilePick?: (f: File) => void;
@@ -1240,8 +1243,9 @@ function DraftFieldInput({
     borderColor: "#d4d4d4",
     color: "#202124",
   };
-  const commonClass =
-    "w-full rounded border px-2 py-1 text-2xs outline-none focus:border-[#10a37f] disabled:opacity-60";
+  const commonClass = expanded
+    ? "w-full rounded-md border px-3 py-2 text-2xs outline-none transition-shadow focus:border-[#10a37f] focus:ring-2 focus:ring-[#10a37f26] disabled:opacity-60"
+    : "w-full rounded border px-2 py-1 text-2xs outline-none focus:border-[#10a37f] disabled:opacity-60";
   if (field.type === "file") {
     // 证件/文件类字段（BUGFIX #85）：上传控件而非文本框；提交时自动入材料走审核
     return (
@@ -1260,7 +1264,11 @@ function DraftFieldInput({
           type="button"
           disabled={disabled}
           onClick={() => fileInputRef.current?.click()}
-          className="w-full truncate rounded border border-dashed px-2 py-1 text-2xs disabled:opacity-60"
+          className={
+            expanded
+              ? "w-full truncate rounded-md border border-dashed px-3 py-2 text-2xs transition-colors hover:border-[#10a37f] disabled:opacity-60"
+              : "w-full truncate rounded border border-dashed px-2 py-1 text-2xs disabled:opacity-60"
+          }
           style={{
             borderColor: fileName ? "#10a37f66" : "#c9d4d0",
             backgroundColor: fileName ? "#eef9f4" : "#fafcfb",
@@ -1296,7 +1304,7 @@ function DraftFieldInput({
       <textarea
         value={value}
         disabled={disabled}
-        rows={2}
+        rows={expanded ? 3 : 2}
         onChange={(e) => onChange(e.target.value)}
         placeholder={field.hint || undefined}
         className={commonClass}
@@ -1385,6 +1393,16 @@ function DraftFormCard({ draft }: { draft: OpsCaseDraft }): JSX.Element {
     setSubmitting(false);
   };
 
+  // 必填进度（全屏页头进度条 + 页脚提示，BUGFIX #93 设计感）
+  const requiredFields = draft.template.filter((f) => f.required);
+  const filledRequired = requiredFields.filter((f) =>
+    f.type === "file"
+      ? draftFiles[f.name] || (values[f.name] ?? "").trim()
+      : (values[f.name] ?? "").trim(),
+  ).length;
+  const progressPct =
+    requiredFields.length === 0 ? 100 : Math.round((filledRequired / requiredFields.length) * 100);
+
   const statusBadge = passed
     ? { label: "✓ 已验收 · 已入交付物", color: "#10a37f", bg: "#10a37f22" }
     : rejected
@@ -1398,107 +1416,289 @@ function DraftFormCard({ draft }: { draft: OpsCaseDraft }): JSX.Element {
         ? { label: "⏳ 专家审核中", color: "#0451a5", bg: "#e8f0fb" }
         : { label: "✎ 填写中", color: "#6b7280", bg: "#f3f4f6" };
 
+  // 字段网格（紧凑卡与全屏共用；全屏两列大控件，textarea 整行，BUGFIX #93）
+  const fieldGrid = (
+    <div className={expanded ? "grid grid-cols-2 gap-x-5 gap-y-4" : "grid grid-cols-2 gap-x-3 gap-y-1.5"}>
+      {draft.template.slice(0, Math.max(visibleCount, 1)).map((f) => (
+        <div key={f.name} className={f.type === "textarea" ? "col-span-2" : ""}>
+          <label
+            className={
+              expanded
+                ? "mb-1.5 flex items-center gap-1.5 text-[11px] font-medium"
+                : "mb-0.5 block text-[10px]"
+            }
+            style={{ color: expanded ? "#374151" : "#616161" }}
+          >
+            {f.label}
+            {f.required && <span style={{ color: "#cd3131" }}>*</span>}
+            {prefilledRef.current.has(f.name) && (
+              <span
+                className="rounded px-1 text-[9px]"
+                style={{ backgroundColor: "#e8f0fb", color: "#0451a5" }}
+                title="已从你上传的材料中自动预填，请核对后提交"
+              >
+                {expanded ? "🔄 自动预填" : "自动预填"}
+              </span>
+            )}
+          </label>
+          <DraftFieldInput
+            field={f}
+            value={values[f.name] ?? ""}
+            fileName={draftFiles[f.name]?.name}
+            disabled={passed || saving || submitting}
+            expanded={expanded}
+            onChange={(v) => setValues((prev) => ({ ...prev, [f.name]: v }))}
+            onFilePick={(file) => {
+              setDraftFiles((prev) => ({ ...prev, [f.name]: file }));
+              setValues((prev) => ({ ...prev, [f.name]: file.name }));
+            }}
+          />
+        </div>
+      ))}
+    </div>
+  );
+
+  // 审核意见块（BUGFIX #86）：全屏时升级为 Alert 卡片逐条完整展示，紧凑卡保持单行截断
+  const notesBlock = !reviewingDraft && reviewNotes.length > 0 && (
+    <div
+      className={expanded ? "rounded-xl border p-4" : "mb-1.5 rounded border p-1.5"}
+      style={{
+        borderColor: rejected ? "#f3c8c8" : "#e3efe9",
+        backgroundColor: rejected ? "#fdf3f3" : "#f2f7f5",
+      }}
+    >
+      <div
+        className={
+          expanded
+            ? "mb-1.5 flex items-center gap-1.5 text-[12px] font-semibold"
+            : "mb-0.5 text-[10px] font-semibold"
+        }
+        style={{ color: rejected ? "#b91c1c" : "#374151" }}
+      >
+        {expanded && <span aria-hidden="true">⚠️</span>}
+        专家审核意见（{reviewNotes.length} 条）
+      </div>
+      <div className={expanded ? "space-y-1.5" : "space-y-0.5"}>
+        {reviewNotes.map((n, i) => (
+          <div
+            key={i}
+            className={expanded ? "flex items-start gap-1.5 text-[11px]" : "truncate text-[10px]"}
+            style={{ color: rejected ? "#7f1d1d" : "#374151" }}
+            title={expanded ? undefined : n}
+          >
+            <span className="flex-shrink-0">{rejected ? "✗" : "✓"}</span>
+            <span>{n}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  const submitTitle =
+    missing.length > 0
+      ? `必填项未完成：${missing.map((m) => m.label).join("、")}`
+      : "提交后自动交给专家审核，通过即入交付物";
+  const submitLabel = submitting
+    ? "⏳ 提交审核中…"
+    : rejected
+      ? "修改后重新提交"
+      : "提交给专家审核";
+
+  // ============ 全屏模式（BUGFIX #93 设计重构）：页头 + 滚动表单区 + 常驻操作页脚 ============
+  if (expanded) {
+    const accent = passed
+      ? "#10a37f"
+      : rejected
+        ? "#cd3131"
+        : draft.status === "submitted"
+          ? "#0451a5"
+          : "#9ca3af";
+    return (
+      <div className="fixed inset-0 z-40 flex flex-col" style={{ backgroundColor: "#f4f4f2" }}>
+        {/* 页头：状态强调色条 + 标题副题 + 必填进度 + 状态徽标 + 退出 */}
+        <div
+          className="flex-shrink-0 border-b bg-white"
+          style={{ borderColor: "#e5e5e2", borderTop: `3px solid ${accent}` }}
+        >
+          <div className="mx-auto flex max-w-4xl items-center gap-3 px-6 py-3">
+            <span
+              className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-[16px]"
+              style={{ backgroundColor: "#f2f7f5" }}
+              aria-hidden="true"
+            >
+              📝
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[13px] font-semibold" style={{ color: "#1f1f1f" }}>
+                {draft.title}
+              </div>
+              <div className="mt-0.5 text-[10px]" style={{ color: "#9ca3af" }}>
+                {draft.member_key ? `出题专家：${draft.member_key} · ` : ""}
+                共 {draft.template.length} 项
+                {requiredFields.length > 0 ? ` · 必填 ${requiredFields.length} 项` : ""}
+              </div>
+            </div>
+            {requiredFields.length > 0 && (
+              <div
+                className="flex flex-shrink-0 items-center gap-1.5"
+                title={`必填进度：${filledRequired}/${requiredFields.length}`}
+              >
+                <div className="h-1.5 w-24 overflow-hidden rounded-full" style={{ backgroundColor: "#e7e5e4" }}>
+                  <div
+                    className="h-full rounded-full transition-all"
+                    style={{
+                      width: `${progressPct}%`,
+                      backgroundColor: progressPct === 100 ? "#10a37f" : "#0451a5",
+                    }}
+                  />
+                </div>
+                <span className="text-[10px]" style={{ color: "#6b7280" }}>
+                  {filledRequired}/{requiredFields.length}
+                </span>
+              </div>
+            )}
+            <span
+              className="flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold"
+              style={{ backgroundColor: statusBadge.bg, color: statusBadge.color }}
+              title={linkedFile?.review_note || undefined}
+            >
+              {statusBadge.label}
+            </span>
+            <button
+              type="button"
+              onClick={() => setExpanded(false)}
+              className="flex-shrink-0 rounded-md border px-2 py-1 text-[10px] transition-colors hover:bg-[#f5f5f4]"
+              style={{ borderColor: "#d4d4d4", color: "#616161", backgroundColor: "#ffffff" }}
+              title="退出全屏填写"
+            >
+              ✕ 退出全屏
+            </button>
+          </div>
+        </div>
+        {/* 主体：居中表单卡 + 意见 Alert + 打回对照 */}
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+          <div className="mx-auto max-w-4xl space-y-3">
+            {reviewingDraft && (
+              <div className="rounded-xl border bg-white p-3" style={{ borderColor: "#e3efe9" }}>
+                <AiThinkingIndicator compact label={`${draft.member_key || "专家"}正在审核草稿`} />
+              </div>
+            )}
+            {notesBlock}
+            <div
+              className="rounded-xl border bg-white p-6"
+              style={{ borderColor: "#e7e5e4", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}
+            >
+              {fieldGrid}
+            </div>
+            {/* 打回重提对照（BUGFIX #79）：展开上次提交内容，知道自己改哪里 */}
+            {rejected && draft.last_snapshot && (
+              <div className="rounded-xl border bg-white p-4" style={{ borderColor: "#f0efed" }}>
+                <button
+                  type="button"
+                  onClick={() => setSnapshotOpen((v) => !v)}
+                  className="text-[11px] font-medium"
+                  style={{ color: "#0451a5" }}
+                >
+                  {snapshotOpen ? "▾ 收起上次提交内容" : `▸ 对照上次提交内容（第 ${draft.submit_count ?? 1} 次提交）`}
+                </button>
+                {snapshotOpen && (
+                  <pre
+                    className="mt-2 max-h-56 overflow-auto rounded-md border p-3 text-[11px] whitespace-pre-wrap"
+                    style={{ borderColor: "#f0efed", backgroundColor: "#fafaf9", color: "#4b5563" }}
+                  >
+                    {draft.last_snapshot}
+                  </pre>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+        {/* 页脚：常驻操作栏（进度提示 + 暂存/提交） */}
+        {!passed && (
+          <div className="flex-shrink-0 border-t bg-white" style={{ borderColor: "#e5e5e2" }}>
+            <div className="mx-auto flex max-w-4xl items-center gap-3 px-6 py-3">
+              {missing.length > 0 ? (
+                <span className="min-w-0 truncate text-[10px]" style={{ color: "#b25c1a" }}>
+                  ⚠ 还有 {missing.length} 项必填未完成：{missing.map((m) => m.label).join("、")}
+                </span>
+              ) : (
+                <span className="text-[10px]" style={{ color: "#10a37f" }}>
+                  ✓ 必填项已完成，可提交专家审核
+                </span>
+              )}
+              <div className="ml-auto flex flex-shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleSave()}
+                  disabled={saving || submitting}
+                  className="rounded-md border px-4 py-1.5 text-2xs transition-colors hover:bg-[#f5f5f4] disabled:opacity-50"
+                  style={{ borderColor: "#d4d4d4", color: "#616161", backgroundColor: "#ffffff" }}
+                >
+                  {saving ? "保存中…" : "暂存"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleSubmit()}
+                  disabled={submitting || missing.length > 0}
+                  className="rounded-md px-5 py-1.5 text-2xs font-semibold transition-colors hover:bg-[#0e9272] disabled:opacity-50"
+                  style={{
+                    backgroundColor: "#10a37f",
+                    color: "#ffffff",
+                    boxShadow: "0 1px 3px rgba(16,163,127,0.35)",
+                  }}
+                  title={submitTitle}
+                >
+                  {submitLabel}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ============ 紧凑卡模式：专家卡内小空间，保持原有密度 ============
   return (
     <div
-      className={expanded ? "fixed inset-0 z-40 overflow-y-auto p-6" : "rounded-lg border p-2.5"}
+      className="rounded-lg border p-2.5"
       style={{
         borderColor: passed ? "#10a37f66" : rejected ? "#e8b4b4" : "#e0e0e0",
         backgroundColor: "#ffffff",
       }}
     >
-      <div className={expanded ? "mx-auto max-w-4xl" : ""}>
-        {/* 审核中：草稿卡内 thinking 状态，不再把意见散在材料行里（BUGFIX #86） */}
-        {reviewingDraft && (
-          <div className="mb-1.5">
-            <AiThinkingIndicator
-              compact
-              label={`${draft.member_key || "专家"}正在审核草稿`}
-            />
-          </div>
-        )}
-        {/* 审核意见：逐条展示，单行截断 + 悬浮看全文（BUGFIX #86） */}
-        {!reviewingDraft && reviewNotes.length > 0 && (
-          <div
-            className="mb-1.5 rounded border p-1.5"
-            style={{
-              borderColor: rejected ? "#e8b4b4" : "#e3efe9",
-              backgroundColor: rejected ? "#fdf5f5" : "#f2f7f5",
-            }}
-          >
-            <div className="mb-0.5 text-[10px] font-semibold" style={{ color: "#374151" }}>
-              专家审核意见（{reviewNotes.length} 条）
-            </div>
-            <div className="space-y-0.5">
-              {reviewNotes.map((n, i) => (
-                <div
-                  key={i}
-                  className="truncate text-[10px]"
-                  style={{ color: rejected ? "#7f1d1d" : "#374151" }}
-                  title={n}
-                >
-                  {rejected ? "✗" : "✓"} {n}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-        <div className="mb-1.5 flex items-center gap-2">
-          <span className={expanded ? "text-ui font-semibold" : "text-2xs font-semibold"} style={{ color: "#1f1f1f" }}>
-            {draft.title}
-          </span>
-          <span className="text-[10px]" style={{ color: "#9ca3af" }}>
-            {draft.member_key ? `出题专家：${draft.member_key}` : ""}
-          </span>
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            className="ml-auto flex-shrink-0 rounded border px-1.5 py-0.5 text-[10px]"
-            style={{ borderColor: "#d4d4d4", color: "#0451a5", backgroundColor: "#ffffff" }}
-            title={expanded ? "退出全屏填写" : "全屏填写（空间更大）"}
-          >
-            {expanded ? "✕ 退出全屏" : "⛶ 全屏"}
-          </button>
-          <span
-            className="flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold"
-            style={{ backgroundColor: statusBadge.bg, color: statusBadge.color }}
-            title={linkedFile?.review_note || undefined}
-          >
-            {statusBadge.label}
-          </span>
+      {/* 审核中：草稿卡内 thinking 状态，不再把意见散在材料行里（BUGFIX #86） */}
+      {reviewingDraft && (
+        <div className="mb-1.5">
+          <AiThinkingIndicator compact label={`${draft.member_key || "专家"}正在审核草稿`} />
         </div>
-      <div className={expanded ? "grid grid-cols-3 gap-x-4 gap-y-2.5" : "grid grid-cols-2 gap-x-3 gap-y-1.5"}>
-        {draft.template.slice(0, Math.max(visibleCount, 1)).map((f) => (
-          <div
-            key={f.name}
-            className={f.type === "textarea" ? (expanded ? "col-span-3" : "col-span-2") : ""}
-          >
-            <label className="mb-0.5 block text-[10px]" style={{ color: "#616161" }}>
-              {f.label}
-              {f.required && <span style={{ color: "#cd3131" }}> *</span>}
-              {prefilledRef.current.has(f.name) && (
-                <span
-                  className="ml-1 rounded px-1 text-[9px]"
-                  style={{ backgroundColor: "#e8f0fb", color: "#0451a5" }}
-                  title="已从你上传的材料中自动预填，请核对后提交"
-                >
-                  自动预填
-                </span>
-              )}
-            </label>
-            <DraftFieldInput
-              field={f}
-              value={values[f.name] ?? ""}
-              fileName={draftFiles[f.name]?.name}
-              disabled={passed || saving || submitting}
-              onChange={(v) => setValues((prev) => ({ ...prev, [f.name]: v }))}
-              onFilePick={(file) => {
-                setDraftFiles((prev) => ({ ...prev, [f.name]: file }));
-                setValues((prev) => ({ ...prev, [f.name]: file.name }));
-              }}
-            />
-          </div>
-        ))}
+      )}
+      {notesBlock}
+      <div className="mb-1.5 flex items-center gap-2">
+        <span className="text-2xs font-semibold" style={{ color: "#1f1f1f" }}>
+          {draft.title}
+        </span>
+        <span className="text-[10px]" style={{ color: "#9ca3af" }}>
+          {draft.member_key ? `出题专家：${draft.member_key}` : ""}
+        </span>
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          className="ml-auto flex-shrink-0 rounded border px-1.5 py-0.5 text-[10px]"
+          style={{ borderColor: "#d4d4d4", color: "#0451a5", backgroundColor: "#ffffff" }}
+          title="全屏填写（空间更大）"
+        >
+          ⛶ 全屏
+        </button>
+        <span
+          className="flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold"
+          style={{ backgroundColor: statusBadge.bg, color: statusBadge.color }}
+          title={linkedFile?.review_note || undefined}
+        >
+          {statusBadge.label}
+        </span>
       </div>
+      {fieldGrid}
       {/* 打回重提对照（BUGFIX #79）：展开上次提交内容，知道自己改哪里 */}
       {rejected && draft.last_snapshot && (
         <div className="mt-1.5">
@@ -1537,13 +1737,9 @@ function DraftFormCard({ draft }: { draft: OpsCaseDraft }): JSX.Element {
             disabled={submitting || missing.length > 0}
             className="rounded px-3 py-1 text-2xs font-semibold disabled:opacity-50"
             style={{ backgroundColor: "#10a37f", color: "#ffffff" }}
-            title={
-              missing.length > 0
-                ? `必填项未完成：${missing.map((m) => m.label).join("、")}`
-                : "提交后自动交给专家审核，通过即入交付物"
-            }
+            title={submitTitle}
           >
-            {submitting ? "⏳ 提交审核中…" : rejected ? "修改后重新提交" : "提交给专家审核"}
+            {submitLabel}
           </button>
           {missing.length > 0 && (
             <span className="text-[10px]" style={{ color: "#b25c1a" }}>
@@ -1552,7 +1748,6 @@ function DraftFormCard({ draft }: { draft: OpsCaseDraft }): JSX.Element {
           )}
         </div>
       )}
-      </div>
     </div>
   );
 }

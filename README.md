@@ -45,7 +45,7 @@
                           ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │  执行层                                                           │
-│   - 内置工具 32 个 (进程内 <1ms, 路径沙箱 7 项校验)               │
+│   - 内置工具 41 个 (进程内 <1ms, 路径沙箱 7 项校验)               │
 │   - mcp-server-database  SQL 拦截 / 语法校验 / 结果截断          │
 │   - mcp-server-rest      方法白名单 / 请求体限制                  │
 │   - mcp-server-ssh       命令黑名单 + 主机白名单                  │
@@ -70,19 +70,20 @@
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 基础架构                 | Tauri 桌面壳 / 四象限 IDE 布局 / LangGraph 状态机 / HITL 审批闸门 / SSE 事件桥 / SQLite 审计                                                                                                        |
 | 双框架智能体（Phase 18） | ModeRouter 智能路由 Coding / Work 双模式 + 任务分解 + Auto-Repair 自动修复                                                                                                                          |
-| 内置工具层               | 32 个进程内工具（文件读写/搜索/计算器/正则/时间日期含农历/相对日期解析/shell 等）+ 路径沙箱 + HITL 前置闸门                                                                                        |
+| 内置工具层               | 41 个进程内工具（文件读写/搜索/计算器/正则/时间日期含农历/相对日期解析/shell 等）+ 文档处理工具族（file_to_markdown 文件转 Markdown / Excel 查询导出 / PDF 合并拆分 / Word 生成）+ klogg 式大文件只读查看与搜索（突破 100MB 限制）+ 路径沙箱 + HITL 前置闸门                                                                                        |
 | 结构化意图识别           | Intent Router 一次分析产出改写句/细分意图/实体/追问信号/风险等级；三级快速路径：关键词 → 向量语义路由（semantic-router 模式，本地 embedding 零 LLM）→ LLM 分析，明确信号直达路由省掉决策器调用                                                                       |
 | 智能 LLM 路由            | 五维评估调度 / 多级降级 / 熔断器 / 分层缓存（L1 精确响应 + L3 幂等工具）/ 预算控制 / 关键任务双模型并行+裁判 / 内网或云端可达时自动切换 OpenAI 原生 Function Calling 工具循环（首消息探测一次，不可用回退提示词协议，HITL 闸门不变）                                                    |
 | 缓存命中率优化（Phase 17） | L1 精确响应缓存（接入 summarise 最终答案链，重复请求直返省一次全链 LLM 调用）+ L3 幂等只读工具结果缓存（白名单 16 工具 + write_detector 双重把关，短 TTL）+ 请求规范化稳定 key + prompt 版本化（bump 自动失效缓存）+ MCP 工具稳定排序 + Ollama keep_alive（多轮 KV 复用）+ `GET /router/cache-stats` 命中率统计 / `POST /router/cache-toggle` 一键回滚 + `llm_cache_stats` SSE 实时推送；红线：写操作 / 敏感任务 / 凭证一律不缓存 |
 | Token 用量计量           | 状态栏/顶栏「Agent: 就绪」旁徽章实时展示上传（prompt）/ 下载（completion）速率（近 30s 滑动窗口，2s 轮询）+ 当日调用次数；鼠标悬浮弹明细卡片（当日 tokens 累计 / 调用次数 / 费用总 + 按模型明细，单价取模型管理 `cost_per_1k_tokens`，本地免费模型不计费）。数据落 router.db `token_usage_daily`，跨重启保留、按日滚动；后端无 usage 字段时按字符数估算 |
 | 提示词模板体系（v2.64）  | 统一六段式`.md` 模板资产（`llm/prompts/`，运行时加载、非工程人员可直接编辑）+ JSON 输出四层防御（API 参数 → Prompt 纪律 → 容错解析 → 重试自纠错）+ 模型族适配矩阵（Claude/OpenAI/开源/国产闭源） |
 | Skill / MCP 生态         | Skill YAML + MCP JSON Schema / 关键词路由 / 热加载 / 多项目隔离                                                                                                                                     |
-| 专家团资产               | 团+成员两级结构化（不以 Skill 存在）/ 设置页独立维护（CRUD + YAML 导入导出）/ 运营工作台点业务自动选择（Skill 预设 → LLM 本地→内网→云端降级 → 关键词）+ 输入栏手选 + 会话自动注入；Skill 预设默认专家团/材料/交付物三字段；种子：`docs/expert-team-seeds/due-diligence-expert-team.yaml` |
+| 专家团资产               | 团+成员两级结构化（不以 Skill 存在）/ 设置页独立维护（CRUD + 导入导出）/ 运营工作台点业务自动选择（Skill 预设 → LLM 本地→内网→云端降级 → 关键词）+ 输入栏手选 + 会话自动注入；Skill 预设默认专家团/材料/交付物三字段；资产包格式 zip = 根目录 `team.yaml`（提示词/成员定义）+ `templates/`（交付物文档模板 docx/md），导入一次到位、导出整团打包；种子：`docs/expert-team-seeds/due-diligence-team.zip` |
+| 专家验收工作流（运营模式） | 取代传统大 Chat：按专家上传材料（拖拽 / Ctrl+V 粘贴入件）→ AI 审核验收（结论+关键要素+证据链，幻觉证据丢弃，低置信标红）→ 专家迷你提问（人设 + knowledge-base 制度出处引用）→ 交付标准逐项确认 → 交付物 zip 打包导出（交付文件/检查结果/问答记录/业务小结/报告初稿 docx 模板占位符渲染）+ 多文档交叉比对防呆 + 人工改判纠错样本闭环（全操作审计） |
 | 多环境治理               | 4 env preset / Keyring 占位符 / PBKDF2+Fernet 加密导入导出 / 环境徽章                                                                                                                               |
 | 代码导航                 | Tree-sitter AST 索引 + SQLite 符号库 + Monaco 跳转 + AI 语义推断                                                                                                                                    |
-| 业务功能点导航           | 代码→业务功能点抽象 + YAML 热加载（运营专家模式专属）                                                                                                                                              |
-| 需求改造工作流           | 功能点发起改造需求 + AI 可行性对齐 + 需求卡片（批次/编号/改造点/影响面/外部系统） + 版本快照 + 按批次导出 MD/Word（运营专家模式）                              |
-| 运营模式（独立页签）     | 顶部顶级页签与开发模式并列：运营工作台三栏（业务列表 16 模块导航 + Chat + 工作台）/ 功能点以 Skill 承载 / 选中业务自动注入 Skill 与专家团 / 业务记录卡片可审计                              |
+| 业务功能点导航           | 代码→业务功能点抽象 + YAML 热加载（运营模式业务列表数据源）                                                                                                                                              |
+| 需求改造工作流           | 功能点发起改造需求 + AI 可行性对齐 + 需求卡片（批次/编号/改造点/影响面/外部系统） + 版本快照 + 按批次导出 MD/Word                              |
+| 运营模式（独立页签）     | 顶部顶级页签与开发模式并列：运营工作台二栏（左业务列表 16 模块导航 + 中专家验收工作流 ExpertWorkflowPanel：专家团页签 + 横向专家卡拟人化审核，新结果未读徽标）；功能点以 Skill 承载、选中业务自动注入 Skill 与专家团；导出自动生成可审计业务记录卡片                              |
 | 数据字典（公共参数）     | ActivityBar 独立入口（📖，穿透所有模式）：Skill 里写引用 key、字典维护参数值；搜索 / 分类筛选 / CRUD / seed 内置条目可显式覆盖（dict.db）                                              |
 | 选项式追问与高级设置     | AI 需确认时输出可点选选项卡片（3-5 选项/理由/推荐项/多问题页签/自定义输入）；推理模式与会话自主性迁入设置-高级设置 |
 | 大文件日志查看           | Rust 字节偏移索引 + 流式读取 + 进程内搜索 + GBK 编码 + AI 日志分析                                                                                                                                  |
@@ -92,7 +93,7 @@
 | DSpark 推测解码          | Qwen2.5 草稿模型 + llama.cpp 推测解码 + 场景化策略路由                                                                                                                                              |
 | 数据专家模式（V1.1 补齐版） | NL2SQL（生成后 SELECT 白名单前置校验）+ ReadOnlyPool 真实执行（6 方言族）+ 真实 Schema 同步 + 重查询 HITL 确认 + WS/Arrow 大结果流（Rust 中继）+ 虚拟滚动 DataGrid + ECharts + 沙箱 Python 清洗（SQL 结果 df 链路）+ Excel/PDF/CSV 导出（服务端取数 + PII 脱敏 + 水印）+ 定时报表调度 + 历史分析                                                                                                                                              |
 | 思维链可视化（V1）       | 中文思维链时间线 + 文件操作追踪 + hover Diff 预览                                                                                                                                                   |
-| 文档风险审核             | PDF/DOCX/TXT/MD 解析 → LLM 分类（合同/制度/公告/标书 × 合规/法律/数据安全/资金）→ 分块风险分析 → 风险位置正文高亮 + 知识库/案例库引用依据                                                       |
+| 文档风险审核             | PDF/DOCX/TXT/MD 解析 → LLM 分类（合同/制度/公告/标书 × 合规/法律/数据安全/资金）→ 分块风险分析 → 风险位置正文高亮 + 知识库/案例库引用依据（审核专家模式文档审核 Tab）                                                       |
 
 ### 🟡 部分实现
 
@@ -143,7 +144,7 @@
 │   ├── src/                   # React 前端（layouts/components/store/ipc/streams）
 │   └── src-tauri/             # Rust 后端（commands/credentials/stream/audit/logviewer…）
 ├── services/
-│   ├── agent/                 # 【控制层】Python Agent（FastAPI + LangGraph，29 个模块）
+│   ├── agent/                 # 【控制层】Python Agent（FastAPI + LangGraph，30+ 模块）
 │   │   └── src/agent/
 │   │       ├── graph/         # LangGraph 状态机（intent/planner/tool_runner/hitl_gate/repair…）
 │   │       ├── dual/ coding/  # Phase 18 双框架（Coding Agent / Work Agent）
@@ -151,13 +152,14 @@
 │   │       ├── orchestrator/  # 多智能体调度
 │   │       ├── sessions/      # 会话管理 + MACC 压缩
 │   │       ├── knowledge/     # RAG 知识库
-│   │       ├── builtin/       # 内置工具层
+│   │       ├── builtin/       # 内置工具层（41 工具：文件/shell/文档处理/大文件查看等）
 │   │       ├── dataexpert/    # 数据专家模式（NL2SQL + 只读池 + 沙箱 + 导出 + WS/Arrow 流）
 │   │       ├── trace/         # 思维链收集与文件操作追踪
-│   │       ├── …              # codenav/biznav/reqflow/skills/preview/audit/safety 等
+│   │       ├── ops/ expert_teams/ # 运营验收工作流（case 存储/交叉比对/报告模板）与专家团资产包
+│   │       ├── …              # codenav/biznav/reqflow/skills/preview/doc_review/audit/safety 等
 │   └── mcp-servers/           # 【执行层】MCP Server 矩阵（database/rest/ssh/rpa）
 ├── packages/shared-protocol/  # 跨语言协议包（TS + Python 唯一事实来源）
-├── knowledge-base/            # 文档审核知识库（合规/法律/数据安全/资金风险 + 案例库，随 exe 打包）
+├── knowledge-base/            # 文档审核知识库（合规/法律/数据安全/资金风险 + 案例库，随 exe 打包；运营专家提问制度出处检索源）
 ├── config/driver/             # 离线数据库驱动 wheel（不入库，构建时本地放置）
 ├── infra/                     # Docker / 脚本 / 配置模板
 ├── Makefile                   # 统一命令入口

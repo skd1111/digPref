@@ -515,3 +515,55 @@ describe("草稿页签与审核交互（BUGFIX #86/#87）", () => {
     await waitFor(() => expect(screen.getByText(/正在审核草稿/)).toBeTruthy());
   });
 });
+
+// ---------------------------------------------------------------------------
+// 全屏表单设计重构（BUGFIX #93）：页头状态色条 + 必填进度 + 常驻操作页脚
+// ---------------------------------------------------------------------------
+
+describe("全屏草稿表单（BUGFIX #93）", () => {
+  const renderFullscreen = async () => {
+    (ipc.opsCaseGet as ReturnType<typeof vi.fn>).mockResolvedValue({
+      case_id: "bank__ops_open",
+      files: [],
+      qa: [],
+      drafts: [DRAFT],
+    });
+    useOpsCaseStore.setState({ drafts: [DRAFT as never] });
+    render(
+      <ExpertWorkflowPanel
+        selection={selection}
+        projectName="bank"
+        onSaveTeamPreset={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByText(/⛶ 全屏/));
+    await waitFor(() => expect(screen.getByText(/✕ 退出全屏/)).toBeTruthy());
+  };
+
+  it("全屏页头含副题与必填进度，页脚常驻未完成提示", async () => {
+    await renderFullscreen();
+    // 副题：出题专家 + 项数 + 必填数
+    expect(screen.getByText(/共 2 项 · 必填 1 项/)).toBeTruthy();
+    // 进度分数（未填；团页签也可能有同形计数，取至少一处）
+    expect(screen.getAllByText("0/1").length).toBeGreaterThanOrEqual(1);
+    // 页脚未完成提示
+    expect(screen.getByText(/还有 1 项必填未完成/)).toBeTruthy();
+  });
+
+  it("填完必填后进度满格，页脚切换为可提交提示", async () => {
+    await renderFullscreen();
+    // 全屏内企业名称输入框（无 placeholder 的 textbox）
+    await waitFor(() => {
+      const boxes = screen
+        .getAllByRole("textbox")
+        .filter((el) => !(el as HTMLInputElement).placeholder);
+      expect(boxes.length).toBeGreaterThanOrEqual(1);
+    });
+    const input = screen
+      .getAllByRole("textbox")
+      .filter((el) => !(el as HTMLInputElement).placeholder)[0];
+    fireEvent.change(input, { target: { value: "某某贸易有限公司" } });
+    expect(screen.getAllByText("1/1").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/必填项已完成，可提交专家审核/)).toBeTruthy();
+  });
+});

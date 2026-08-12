@@ -147,7 +147,7 @@ export function WorkspaceLayout(): JSX.Element {
 
   return (
     <div
-      className="workspace-root grid h-screen w-screen select-none"
+      className="workspace-root grid h-screen w-screen"
       data-mode={mode}
       data-activity={active}
       style={{
