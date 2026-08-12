@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -822,7 +823,10 @@ class TestPreviewAPI:
 
     def test_start_invalid_path(self, client):
         c, _ = client
-        resp = c.post("/preview/start", json={"project_path": "Z:/definitely/missing"})
+        # Windows 用不存在的盘符；Linux 用根下不存在的绝对路径
+        # （两平台上溯都找不到 package.json → 400）
+        invalid = "Z:/definitely/missing" if os.name == "nt" else "/definitely/missing"
+        resp = c.post("/preview/start", json={"project_path": invalid})
         assert resp.status_code == 400
 
     def test_list_sessions(self, client):

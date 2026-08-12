@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from agent.coding.toolchain import (
     clear_cache,
     load_toolchain_config,
@@ -31,8 +33,12 @@ def test_user_configured_path_missing_falls_through(monkeypatch, tmp_path):
 
 
 def test_path_env_resolution(monkeypatch, tmp_path):
-    fake = tmp_path / "mytool.exe"
+    # Linux 上 shutil.which 要求无扩展名且有可执行位；Windows 靠 PATHEXT 匹配 .exe
+    fake_name = "mytool.exe" if os.name == "nt" else "mytool"
+    fake = tmp_path / fake_name
     fake.write_text("")
+    if os.name != "nt":
+        fake.chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path))
     got = resolve_toolchain("mytool", configured={})
     assert got.available is True

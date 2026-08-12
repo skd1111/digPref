@@ -49,6 +49,16 @@ EAS_MAGIC = "EAIDE_ARCHIVE_SESSION"
 EAS_VERSION = 1
 MAX_EXPORT_BYTES = 50 * 1024 * 1024  # 50MB 上限（防恶意超大导出文件）
 
+# 兜底密钥进程级缓存（Keyring/env 都不可用时，保证导出/导入同钥匙）
+_FALLBACK_KEY: bytes | None = None
+
+
+def _reset_fallback_key() -> None:
+    """测试隔离：清空兜底密钥缓存。"""
+    global _FALLBACK_KEY
+    _FALLBACK_KEY = None
+
+
 # PII 脱敏正则（与 loganalysis/scrubber.py 同标准 —— 8 类）
 _PII_PATTERNS = [
     # 中国大陆手机号
@@ -100,8 +110,9 @@ def _get_or_create_key() -> bytes:
     降级链路：
         1. Keyring 可用 → 读写 KEYRING_NAME
         2. 环境变量 EAIDE_SESSION_EXPORT_KEY 存在 → 直接用
-        3. 兜底：随机生成 32 字节 url-safe base64（仅本次会话有效，
-           关闭后 .eas 无法再解 —— 测试场景可接受）
+        3. 兜底：随机生成 32 字节 url-safe base64（仅本次进程有效，
+           关闭后 .eas 无法再解 —— 测试场景可接受）；进程级缓存保证
+           同一进程内导出/导入用同一把钥匙（无 Keyring 平台如 Linux CI）
     """
     # 1. Keyring
     try:
@@ -126,11 +137,15 @@ def _get_or_create_key() -> bytes:
             return base64.urlsafe_b64decode(env_key)
         except Exception:
             pass
-    # 3. 兜底（仅本次会话）
-    if _HAS_FERNET:
-        return Fernet.generate_key()
-    # 无 cryptography：返 32 字节随机（但 .eas 无法用标准工具解开，仅自检）
-    return os.urandom(32)
+    # 3. 兜底（仅本次进程）——缓存，避免每次调用换新钥匙导致自己导出的 .eas 解不开
+    global _FALLBACK_KEY
+    if _FALLBACK_KEY is None:
+        if _HAS_FERNET:
+            _FALLBACK_KEY = Fernet.generate_key()
+        else:
+            # 无 cryptography：返 32 字节随机（但 .eas 无法用标准工具解开，仅自检）
+            _FALLBACK_KEY = os.urandom(32)
+    return _FALLBACK_KEY
 
 
 def _derive_key(passphrase: str) -> bytes:

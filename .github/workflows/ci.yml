@@ -30,7 +30,14 @@ jobs:
         with: { python-version: "3.11" }
       - run: pip install uv
       - run: uv sync --all-packages
-      - run: uv run pytest -q
+      - name: pytest
+        run: |
+          set -o pipefail
+          uv run pytest -q 2>&1 | tee pytest.log
+      # 失败时把日志尾部写入 Step Summary（无 Actions 权限也能经 check-run API 读到）
+      - name: Surface failure tail
+        if: failure()
+        run: tail -n 120 pytest.log >> "$GITHUB_STEP_SUMMARY"
 
   lint-js:
     runs-on: ubuntu-latest
@@ -53,16 +60,36 @@ jobs:
       - uses: actions/setup-node@v5
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test
+      - name: vitest
+        run: |
+          set -o pipefail
+          pnpm test 2>&1 | tee vitest.log
+      - name: Surface failure tail
+        if: failure()
+        run: tail -n 120 vitest.log >> "$GITHUB_STEP_SUMMARY"
 
   lint-rust:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+      # Tauri 2.0 Linux 构建所需系统库（ubuntu-latest 未预装 webkit2gtk）
+      - name: Install Tauri system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+            libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
+            libssl-dev libxdo-dev file
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: "apps/desktop/src-tauri -> target" }
-      - run: cd apps/desktop/src-tauri && cargo clippy --all-targets -- -D warnings
+      - name: clippy
+        run: |
+          set -o pipefail
+          cd apps/desktop/src-tauri && cargo clippy --all-targets -- -D warnings 2>&1 | tee clippy.log
+      - name: Surface failure tail
+        if: failure()
+        run: tail -n 120 apps/desktop/src-tauri/clippy.log >> "$GITHUB_STEP_SUMMARY"
 
   test-rust:
     runs-on: ubuntu-latest
@@ -70,6 +97,19 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install Tauri system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+            libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
+            libssl-dev libxdo-dev file
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: "apps/desktop/src-tauri -> target" }
-      - run: cd apps/desktop/src-tauri && cargo test --all
+      - name: cargo test
+        run: |
+          set -o pipefail
+          cd apps/desktop/src-tauri && cargo test --all 2>&1 | tee cargo-test.log
+      - name: Surface failure tail
+        if: failure()
+        run: tail -n 120 apps/desktop/src-tauri/cargo-test.log >> "$GITHUB_STEP_SUMMARY"
