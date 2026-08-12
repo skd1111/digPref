@@ -112,11 +112,14 @@ jobs:
             libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
             libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
             libssl-dev libxdo-dev file
-      # tauri_build 要求 frontendDist（../dist）与 gen/schemas 存在；CI 不构建前端，放占位
+      # tauri_build codegen 要求 frontendDist、bundle.resources 通配路径都能命中真实文件；
+      # CI 不构建前端/不携带大体积资源，放占位文件
       - name: Tauri build placeholders
         run: |
-          mkdir -p apps/desktop/dist apps/desktop/src-tauri/gen/schemas
+          mkdir -p apps/desktop/dist apps/desktop/src-tauri/gen/schemas apps/desktop/src-tauri/resources config/driver
           echo '<!doctype html><html><body>CI placeholder</body></html>' > apps/desktop/dist/index.html
+          echo placeholder > apps/desktop/src-tauri/resources/.ci-keep
+          echo placeholder > config/driver/.ci-keep
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: "apps/desktop/src-tauri -> target" }
       - name: clippy
@@ -150,8 +153,10 @@ jobs:
             libssl-dev libxdo-dev file
       - name: Tauri build placeholders
         run: |
-          mkdir -p apps/desktop/dist apps/desktop/src-tauri/gen/schemas
+          mkdir -p apps/desktop/dist apps/desktop/src-tauri/gen/schemas apps/desktop/src-tauri/resources config/driver
           echo '<!doctype html><html><body>CI placeholder</body></html>' > apps/desktop/dist/index.html
+          echo placeholder > apps/desktop/src-tauri/resources/.ci-keep
+          echo placeholder > config/driver/.ci-keep
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: "apps/desktop/src-tauri -> target" }
       - name: cargo test
