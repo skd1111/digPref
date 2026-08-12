@@ -248,7 +248,9 @@ mod tests {
         assert!(r2.is_err());
     }
 
+    // Windows 保留名用例依赖反斜杠路径解析（Linux 上 Path 不按 \\ 分段），仅 Windows 运行
     #[test]
+    #[cfg(target_os = "windows")]
     fn test_windows_reserved_name_con() {
         let r = validate_path(r"C:\CON", &[], false);
         assert!(r.is_err());
@@ -256,6 +258,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "windows")]
     fn test_windows_reserved_name_nul() {
         let r = validate_path(r"C:\NUL.txt", &[], false);
         // NUL 自身是 reserved（无扩展名也是 reserved 段）
@@ -263,9 +266,19 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "windows")]
     fn test_windows_reserved_name_com1() {
         let r = validate_path(r"C:\COM1.log", &[], false);
         assert!(r.is_err());
+    }
+
+    // 保留名检测的平台无关部分：basename 直接是保留名（任意分隔符下都成立）
+    #[test]
+    fn test_reserved_name_basename_rejected_any_platform() {
+        let r = validate_path("CON", &[], false);
+        assert!(r.is_err());
+        let r2 = validate_path("/tmp/com1.log", &[], false);
+        assert!(r2.is_err());
     }
 
     #[test]

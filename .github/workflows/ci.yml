@@ -172,4 +172,4 @@ jobs:
             tail -n 100 cargo-test.plain
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          grep -B2 -A8 "FAILED\\|panicked" cargo-test.plain | head -40 | sed 's/^/::error::/'
+          grep -E "\.\.\. FAILED|^failures:|panicked at" cargo-test.plain | head -30 | sed 's/^/::error::/'
