@@ -10,6 +10,7 @@ grep），L2 语义缓存与 embedding/检索缓存不在范围内。
 
 设计文档：docs/design/phase-17-cache-hit-rate.md §5（观测指标）
 """
+
 from __future__ import annotations
 
 import logging
@@ -34,7 +35,9 @@ def _decision_cache_stats() -> dict[str, Any]:
     try:
         conn = sqlite3.connect(str(_router_db_path()), timeout=5)
         try:
-            cur = conn.execute("SELECT COUNT(*), COALESCE(SUM(cache_hit), 0) FROM routing_decisions")
+            cur = conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(cache_hit), 0) FROM routing_decisions"
+            )
             total, hits = cur.fetchone()
             out["total_decisions"] = int(total or 0)
             out["cache_hits"] = int(hits or 0)

@@ -438,7 +438,11 @@ BUILTIN_TOOL_SCHEMAS: dict[str, dict] = {
         "properties": {
             "path": {"type": "string", "description": "大文件绝对路径（日志 / dump / 任意文本）"},
             "start_line": {"type": "integer", "description": "起始行（0-based）", "default": 0},
-            "max_lines": {"type": "integer", "description": "最多读取行数（上限 2000）", "default": 200},
+            "max_lines": {
+                "type": "integer",
+                "description": "最多读取行数（上限 2000）",
+                "default": 200,
+            },
             "tail_lines": {
                 "type": "integer",
                 "description": "传 N 时返回文件最后 N 行（忽略 start_line/max_lines）",
@@ -454,8 +458,16 @@ BUILTIN_TOOL_SCHEMAS: dict[str, dict] = {
             "pattern": {"type": "string", "description": "搜索模式（字面量或正则，≤1024 字符）"},
             "is_regex": {"type": "boolean", "description": "pattern 是否为正则", "default": False},
             "case_insensitive": {"type": "boolean", "description": "忽略大小写", "default": False},
-            "context_lines": {"type": "integer", "description": "上下文行数（上限 20）", "default": 0},
-            "max_results": {"type": "integer", "description": "最多命中数（上限 1000）", "default": 200},
+            "context_lines": {
+                "type": "integer",
+                "description": "上下文行数（上限 20）",
+                "default": 0,
+            },
+            "max_results": {
+                "type": "integer",
+                "description": "最多命中数（上限 1000）",
+                "default": 200,
+            },
             "encoding": {"type": "string", "description": "文件编码", "default": "utf-8"},
         },
         "required": ["path", "pattern"],

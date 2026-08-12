@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -83,7 +84,8 @@ def collect_project_facts(project_root: str) -> dict[str, Any]:
     # ---- 语言分布（扩展名统计） ----
     lang_count: dict[str, int] = {}
     scanned = 0
-    for _dirpath, dirnames, filenames in root.walk():
+    # os.walk 兼容 3.10/3.11（Path.walk 是 3.12+ API，而 requires-python>=3.10）
+    for _dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in _IGNORED_DIRS]
         for fn in filenames:
             if scanned >= MAX_FILES_SCANNED:

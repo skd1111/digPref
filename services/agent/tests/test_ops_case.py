@@ -665,7 +665,7 @@ async def test_review_reject_marks_locate_in_document(client, monkeypatch):
 async def test_clear_case_resets_everything(client, monkeypatch):
     """BUGFIX #85：重新开始办理 —— 清空后材料/问答/草稿全部为空。"""
     _mock_llm(monkeypatch, _DRAFT_TEMPLATE_REPLY)
-    _upload(client)          # 1 份材料
+    _upload(client)  # 1 份材料
     body = _ask_template(client)  # 1 条问答 + 1 份草稿
     assert "draft" in body
 

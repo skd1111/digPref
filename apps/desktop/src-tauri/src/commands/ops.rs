@@ -184,7 +184,7 @@ pub async fn ops_case_clear(
     feature_id: Option<String>,
     state: State<'_, AppState>,
 ) -> CmdResult<serde_json::Value> {
-    let mut url = String::from(agent_url(&state, "/ops/case"));
+    let mut url = agent_url(&state, "/ops/case");
     let mut first = true;
     let mut push = |k: &str, v: &str| {
         if first {

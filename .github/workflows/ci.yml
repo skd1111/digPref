@@ -36,8 +36,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      # 不传 version：pnpm 版本以 package.json 的 packageManager 字段为准，避免 "Multiple versions of pnpm specified" 冲突
       - uses: pnpm/action-setup@v5
-        with: { version: 9 }
       - uses: actions/setup-node@v5
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
@@ -48,8 +48,8 @@ jobs:
     needs: lint-js
     steps:
       - uses: actions/checkout@v5
+      # 不传 version：pnpm 版本以 package.json 的 packageManager 字段为准，避免 "Multiple versions of pnpm specified" 冲突
       - uses: pnpm/action-setup@v5
-        with: { version: 9 }
       - uses: actions/setup-node@v5
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile

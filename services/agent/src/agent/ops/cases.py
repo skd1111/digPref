@@ -253,15 +253,9 @@ class CaseStorage:
         import shutil
 
         with self._connect() as conn:
-            files = conn.execute(
-                "DELETE FROM case_files WHERE case_id = ?", (case_id,)
-            ).rowcount
-            qa = conn.execute(
-                "DELETE FROM case_qa WHERE case_id = ?", (case_id,)
-            ).rowcount
-            drafts = conn.execute(
-                "DELETE FROM case_drafts WHERE case_id = ?", (case_id,)
-            ).rowcount
+            files = conn.execute("DELETE FROM case_files WHERE case_id = ?", (case_id,)).rowcount
+            qa = conn.execute("DELETE FROM case_qa WHERE case_id = ?", (case_id,)).rowcount
+            drafts = conn.execute("DELETE FROM case_drafts WHERE case_id = ?", (case_id,)).rowcount
         d = Path(self._db_path).parent / "ops-cases" / slugify(case_id)
         try:
             if d.exists():

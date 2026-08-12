@@ -12,6 +12,7 @@ from agent.llm.ollama import OllamaClient, OllamaUnavailableError
 
 BASE = "http://127.0.0.1:11434"
 
+
 class _FakeAsyncClient:
     """记录构造次数；post 永远 connection refused。"""
 

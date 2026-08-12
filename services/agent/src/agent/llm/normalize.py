@@ -8,6 +8,7 @@
 
 设计文档：docs/design/phase-17-cache-hit-rate.md §3.1
 """
+
 from __future__ import annotations
 
 import hashlib

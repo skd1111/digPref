@@ -206,9 +206,7 @@ def _ollama_enabled_from_db() -> bool:
             total = int(cur.fetchone()[0])
             if total == 0:
                 return False  # 表已建但从未配过端侧后端 → 不探测
-            cur = conn.execute(
-                "SELECT COUNT(*) FROM llm_backends WHERE type='local' AND enabled=1"
-            )
+            cur = conn.execute("SELECT COUNT(*) FROM llm_backends WHERE type='local' AND enabled=1")
             return int(cur.fetchone()[0]) > 0
         finally:
             conn.close()
@@ -601,6 +599,7 @@ def _plan_contains_write(plan: list) -> bool:
         if name and is_write_call({"name": name}):
             return True
     return False
+
 
 # 原生 function calling 探测缓存哨兵（区别于缓存值 None）
 _NATIVE_UNSET = object()

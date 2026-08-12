@@ -132,13 +132,9 @@ async def test_classify_normalizes_deep_and_invalid_confidence():
     assert result.confidence == {"legal": 0.8}
 
     async def fake_llm2(kind, prompt):
-        return json.dumps(
-            {"doc_category": "other", "risk_types": [], "confidence": "high"}
-        )
+        return json.dumps({"doc_category": "other", "risk_types": [], "confidence": "high"})
 
-    result2 = await classify_document(
-        file_name="x", sample_text="y", max_chars=100, llm=fake_llm2
-    )
+    result2 = await classify_document(file_name="x", sample_text="y", max_chars=100, llm=fake_llm2)
     assert result2.confidence == {}
 
 

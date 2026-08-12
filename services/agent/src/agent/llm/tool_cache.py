@@ -10,6 +10,7 @@ Key = sha256(tool_name + canonical_json(args))；TTL 短（默认 60s）。
 范围裁剪（2026-08-10）：本地不自建 RAG（未来走外部 RAG 接口，本地检索用
 grep），故本层只做工具结果缓存，不含 embedding / 检索缓存。
 """
+
 from __future__ import annotations
 
 import hashlib
