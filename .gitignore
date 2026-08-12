@@ -25,8 +25,9 @@ docs/
 *.pem
 *.key
 *.p12
-credentials/
-vault/
+# 锚定根目录：只拦本地凭证目录，不误伤 src 下的 credentials/vault 源码
+/credentials/
+/vault/
 
 # =========================
 # Python
@@ -91,7 +92,8 @@ dist/
 *.sqlite
 *.sqlite-journal
 *.db
-audit/
+# 仅忽略仓库根的本地审计产物目录；不能误伤 src 下的 audit/credentials 源码目录
+/audit/
 logs/
 *.log
 
