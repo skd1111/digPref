@@ -5,12 +5,12 @@ Resolution order:
     2. HTTP call to Tauri IPC proxy (when running side-by-side)
     3. Encrypted YAML at ~/.eaide/secrets.yaml (development only)
 """
+
 from __future__ import annotations
 
 import os
 from pathlib import Path
 
-import httpx
 import yaml
 from cryptography.fernet import Fernet
 
@@ -31,7 +31,7 @@ def _read_dev_yaml(key: str) -> str | None:
         return None
     # Optional symmetric encryption with EAIDE_DEV_KEY env var.
     raw = path.read_bytes()
-    if (k := os.environ.get("EAIDE_DEV_KEY")):
+    if k := os.environ.get("EAIDE_DEV_KEY"):
         raw = Fernet(k.encode()).decrypt(raw)
     data = yaml.safe_load(raw) or {}
     return data.get(key)

@@ -1,4 +1,5 @@
 """Audit emitter — non-blocking write."""
+
 from __future__ import annotations
 
 import json

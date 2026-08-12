@@ -28,6 +28,8 @@ docs/
 # 锚定根目录：只拦本地凭证目录，不误伤 src 下的 credentials/vault 源码
 /credentials/
 /vault/
+# tauri-build 需要 gen/schemas 目录存在（内容自动生成），锚定根避免误伤
+/gen/
 
 # =========================
 # Python

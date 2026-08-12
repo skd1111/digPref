@@ -7,6 +7,7 @@ Rust 端 schema.sql 严格镜像（CLAUDE.md §6 红线）。
 兼容性：保留旧 `audit(action, payload)` 签名，新增 5 个可选 kwargs；旧调用方零改动。
 升级路径：对已存在的旧库执行 ALTER TABLE ADD COLUMN（捕获 "duplicate column" 错）。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -14,7 +15,6 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
 
 import aiosqlite
 
@@ -41,10 +41,10 @@ async def audit(
     *,
     run_id: str | None = None,
     correlation_id: str | None = None,
-    actor_type: Optional[str] = None,
-    event_type: Optional[str] = None,
-    task_id: Optional[str] = None,
-    parent_task_id: Optional[str] = None,
+    actor_type: str | None = None,
+    event_type: str | None = None,
+    task_id: str | None = None,
+    parent_task_id: str | None = None,
     db_path: str | None = None,
 ) -> None:
     """Append an entry to the audit log. Fire-and-forget, but durable.
@@ -95,7 +95,7 @@ async def _ensure_v15_columns(db: aiosqlite.Connection) -> None:
         col_name = col_def.split()[0]
         try:
             await db.execute(f"ALTER TABLE audit ADD COLUMN {col_def}")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             # "duplicate column name" → 已存在，忽略
             msg = str(exc).lower()
             if "duplicate column" not in msg:
@@ -110,10 +110,7 @@ async def search(query: str, limit: int = 200) -> list[dict]:
             (f"%{query}%", f"%{query}%", limit),
         )
         rows = await cur.fetchall()
-    return [
-        {"action": a, "payload": json.loads(p), "ts": t, "run_id": r}
-        for (a, p, t, r) in rows
-    ]
+    return [{"action": a, "payload": json.loads(p), "ts": t, "run_id": r} for (a, p, t, r) in rows]
 
 
 async def search_by_correlation(

@@ -6,6 +6,7 @@ SQLite insert if the file exists. SQLite is opened in append mode and the
 insert is wrapped in a try/except so a transient SQLite error never breaks
 the actual tool call.
 """
+
 from __future__ import annotations
 
 import json
@@ -27,17 +28,18 @@ def audit(action: str, payload: dict[str, Any] | None = None) -> None:
     # 1. JSONL sidecar (always)
     try:
         _write_jsonl(rec)
-    except Exception:  # noqa: BLE001 — never break the tool
+    except Exception:
         pass
 
     # 2. SQLite (best effort)
     try:
         _write_sqlite(rec)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
 
 # ---- Writers ---------------------------------------------------------------
+
 
 def _write_jsonl(rec: dict) -> None:
     path = Path(os.environ.get("EAIDE_AUDIT_JSONL", "audit.sqlite.jsonl"))
