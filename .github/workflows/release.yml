@@ -98,9 +98,27 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${{ github.ref_name }}" \
-            --repo "${{ github.repository }}" \
-            --draft \
-            --title "Enterprise AI IDE ${{ github.ref_name }}" \
-            --notes "See CHANGELOG.md（macOS 产物未签名，首次打开需右键→打开）" \
-            dist-artifacts/*
+          set -o pipefail
+          ls -laR dist-artifacts | tee artifacts-listing.txt
+          shopt -s nullglob
+          files=(dist-artifacts/*)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "no artifacts downloaded" >&2
+            exit 1
+          fi
+          TAG="${{ github.ref_name }}"
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${files[@]}" --repo "${{ github.repository }}" --clobber 2>&1 | tee release.log
+          else
+            gh release create "$TAG" \
+              --repo "${{ github.repository }}" \
+              --draft \
+              --title "Enterprise AI IDE $TAG" \
+              --notes "See CHANGELOG.md（macOS 产物未签名，首次打开需右键→打开）" \
+              "${files[@]}" 2>&1 | tee release.log
+          fi
+      - name: Surface failure
+        if: failure()
+        run: |
+          [ -f release.log ] && head -20 release.log | sed 's/^/::error::/' || true
+          [ -f artifacts-listing.txt ] && head -30 artifacts-listing.txt | sed 's/^/::error::/' || true
