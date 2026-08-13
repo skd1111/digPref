@@ -107,15 +107,25 @@ jobs:
             exit 1
           fi
           TAG="${{ github.ref_name }}"
-          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            gh release upload "$TAG" "${files[@]}" --repo "${{ github.repository }}" --clobber 2>&1 | tee release.log
-          else
+          REPO="${{ github.repository }}"
+          # 确保 release 存在（兼容旧 draft / 首次创建两种情况）
+          if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
             gh release create "$TAG" \
-              --repo "${{ github.repository }}" \
+              --repo "$REPO" \
               --draft \
               --title "Enterprise AI IDE $TAG" \
-              --notes "See CHANGELOG.md（macOS 产物未签名，首次打开需右键→打开）" \
-              "${files[@]}" 2>&1 | tee release.log
+              --notes "See CHANGELOG.md（macOS 产物未签名，首次打开需右键→打开）"
+          fi
+          # 上传产物（--clobber 同名覆盖，重复跑幂等）
+          gh release upload "$TAG" "${files[@]}" --repo "$REPO" --clobber 2>&1 | tee release.log
+          # 硬校验：API 视角确认产物真的挂上了，否则判失败（防止静默丢产物）
+          sleep 5
+          attached=$(gh api "repos/$REPO/releases/tags/$TAG" --jq '[.assets[].name] | length')
+          echo "attached assets: $attached"
+          gh api "repos/$REPO/releases/tags/$TAG" --jq '.assets[].name' | sed 's/^/  - /'
+          if [ "${attached:-0}" -lt ${#files[@]} ]; then
+            echo "expected ${#files[@]} assets but found $attached" >&2
+            exit 1
           fi
       - name: Surface failure
         if: failure()
