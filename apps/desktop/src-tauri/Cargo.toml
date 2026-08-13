@@ -1,6 +1,6 @@
 [package]
 name = "eaide-desktop"
-version = "0.1.0"
+version = "0.1.1"
 description = "Enterprise AI IDE — desktop shell"
 authors = ["EAIDE Team"]
 edition = "2021"
