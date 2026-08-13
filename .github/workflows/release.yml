@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -16,38 +17,49 @@ jobs:
         include:
           - os: macos-latest
             target: aarch64-apple-darwin
+            bundles: dmg,app
           - os: macos-latest
             target: x86_64-apple-darwin
-          - os: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
+            bundles: dmg,app
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            bundles: nsis
 
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
-        with: { version: 9 }
+      # 不传 version：pnpm 版本以 package.json 的 packageManager 字段为准
+      - uses: pnpm/action-setup@v5
       - uses: actions/setup-node@v5
         with: { node-version: 22, cache: pnpm }
 
       - uses: dtolnay/rust-toolchain@stable
         with: { targets: "${{ matrix.target }}" }
 
-      - name: Install Linux deps
-        if: matrix.os == 'ubuntu-22.04'
+      # tauri bundle.resources 通配（resources/* 与 config/driver/*）在 gitignore 后
+      # 检出里没有任何文件会直接失败；放非点号占位文件（glob 不匹配 dotfiles）。
+      # 注意：端侧 Agent 二进制（eaide-agent）需按平台另行打包后放入 resources/。
+      - name: Resource placeholders
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+          mkdir -p apps/desktop/src-tauri/resources config/driver
+          if ! ls apps/desktop/src-tauri/resources/* >/dev/null 2>&1; then
+            echo "placeholder (real agent binary is packaged separately)" > apps/desktop/src-tauri/resources/README.txt
+          fi
+          if ! ls config/driver/* >/dev/null 2>&1; then
+            echo "placeholder (python driver wheels are packaged separately)" > config/driver/README.txt
+          fi
 
       - run: pnpm install --frozen-lockfile
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          # Tauri 应用在 monorepo 子目录
+          projectPath: apps/desktop
           tagName: ${{ github.ref_name }}
           releaseName: "Enterprise AI IDE ${{ github.ref_name }}"
           releaseBody: "See CHANGELOG.md"
           releaseDraft: true
-          args: --target ${{ matrix.target }}
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
