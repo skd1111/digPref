@@ -159,11 +159,12 @@ jobs:
           fi
           # 上传产物（--clobber 同名覆盖，重复跑幂等）
           gh release upload "$TAG" "${files[@]}" --repo "$REPO" --clobber 2>&1 | tee release.log
-          # 硬校验：API 视角确认产物真的挂上了，否则判失败（防止静默丢产物）
+          # 硬校验：确认产物真的挂上了，否则判失败（防止静默丢产物）
+          # 用 gh release view（兼容 draft）；REST 的 releases/tags/ 端点对 draft 会 404
           sleep 5
-          attached=$(gh api "repos/$REPO/releases/tags/$TAG" --jq '[.assets[].name] | length')
+          attached=$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets | length')
           echo "attached assets: $attached"
-          gh api "repos/$REPO/releases/tags/$TAG" --jq '.assets[].name' | sed 's/^/  - /'
+          gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' | sed 's/^/  - /'
           if [ "${attached:-0}" -lt ${#files[@]} ]; then
             echo "expected ${#files[@]} assets but found $attached" >&2
             exit 1
