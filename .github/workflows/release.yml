@@ -107,6 +107,7 @@ jobs:
 
       # 直接调 Tauri 2 CLI（不经 tauri-apps/tauri-action —— 其 args 拼接与 v2 CLI 不兼容）
       # NODE_OPTIONS 抬堆上限：monaco/echarts 重型前端在 mac runner 上 vite build 会 OOM
+      # 重试 2 次：NSIS 打包偶发 "io: Peer disconnected" 瞬时错误
       - name: Build & bundle
         working-directory: apps/desktop
         shell: bash
@@ -114,7 +115,17 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
         run: |
           set -o pipefail
-          pnpm exec tauri build --target ${{ matrix.target }} --bundles "${{ matrix.bundles }}" 2>&1 | tee tauri-build.log
+          for attempt in 1 2 3; do
+            echo "=== tauri build attempt $attempt ==="
+            if pnpm exec tauri build --target ${{ matrix.target }} --bundles "${{ matrix.bundles }}" 2>&1 | tee tauri-build.log; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            echo "build failed, retrying in 20s..."
+            sleep 20
+          done
 
       - name: Surface failure tail
         if: failure()
@@ -132,10 +143,12 @@ jobs:
             apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
             apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
           if-no-files-found: error
+        continue-on-error: true
 
   publish:
     needs: build-tauri
-    if: ${{ always() && needs.build-tauri.result != 'failure' && needs.build-tauri.result != 'cancelled' }}
+    # 部分平台失败也照发已有产物（download 不到任何东西时由后续 guard 判失败）
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
