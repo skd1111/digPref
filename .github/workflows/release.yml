@@ -54,9 +54,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       # 直接调 Tauri 2 CLI（不经 tauri-apps/tauri-action —— 其 args 拼接与 v2 CLI 不兼容）
+      # NODE_OPTIONS 抬堆上限：monaco/echarts 重型前端在 mac runner 上 vite build 会 OOM
       - name: Build & bundle
         working-directory: apps/desktop
         shell: bash
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: |
           set -o pipefail
           pnpm exec tauri build --target ${{ matrix.target }} --bundles "${{ matrix.bundles }}" 2>&1 | tee tauri-build.log
