@@ -45,6 +45,9 @@ import { ReqWorkbenchView } from '@/views/ReqWorkbenchView';
 import { BusinessFeatureTree } from '@/components/asset-tree/BusinessFeatureTree';
 // Phase 6 V1.5：会话管理侧栏（穿透所有 mode；FTS5 搜索 + 会话列表 + 分支/共享/导出/恢复入口）
 import { SessionsPanel } from '@/components/sessions/SessionsPanel';
+// BUGFIX #67 (2026-08-13)：会话内嵌浏览视图（替换 <Outlet />；之前 router 没注册
+// /sessions/:id 子路由导致 center 区域始终显示 HomeView 欢迎页）
+import { SessionInlineView } from '@/components/sessions/SessionInlineView';
 // Phase 6 V1.6 (2026-08-06)：启动恢复面板 + SSE 订阅（压缩/记忆蒸馏事件）
 import { RecoveryPanel } from '@/components/sessions/RecoveryPanel';
 import { useSessionsStore } from '@/store/sessionsStore';
@@ -207,8 +210,10 @@ export function WorkspaceLayout(): JSX.Element {
                 <FindInFiles defaultMode="symbol" />
               </div>
             ) : active === 'sessions' ? (
-              // 会话管理横切全模式：侧栏 SessionsPanel + 中间只读浏览会话
-              <Outlet />
+              // BUGFIX #67：内嵌会话详情视图（之前 <Outlet /> 在 router 没匹配子路由，
+              // 回落到 HomeView → chatStore 没该会话 tab → 显示欢迎页。
+              // 修复后：SessionsPanel.onClick 设置 activeSessionId → 本组件订阅拉详情）
+              <SessionInlineView />
             ) : mode === 'auditor' ? (
               <AuditDashboard />
             ) : mode === 'analyst' ? (

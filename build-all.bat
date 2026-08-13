@@ -15,6 +15,15 @@ if not exist "%USERPROFILE%\.cargo\bin\cargo.exe" (
 )
 set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
 
+:: 确保 UPX 可用（exe 压缩，spec 已开 upx=True；新装的可能还没进当前 shell 的 PATH）
+where upx >nul 2>nul
+if errorlevel 1 (
+    for /d %%i in ("%LOCALAPPDATA%\Microsoft\WinGet\Packages\UPX.UPX_*") do (
+        for /d %%j in ("%%i\upx-*-win64") do set "PATH=%%j;%PATH%"
+    )
+)
+where upx >nul 2>nul && echo [INFO] UPX 已启用，产物将被压缩 || echo [WARN] 未找到 UPX，产物不压缩（winget install UPX.UPX 可安装）
+
 :: ---- Step 1: PyInstaller 构建 Agent exe ----
 echo [1/2] 构建 eaide-agent.exe ...
 cd /d d:\ditPref
