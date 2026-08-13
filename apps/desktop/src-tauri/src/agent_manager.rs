@@ -11,7 +11,7 @@
 //!   - EAIDE_AGENT_HOST / PORT      连接地址
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -33,6 +33,50 @@ use windows_sys::Win32::System::JobObjects::{
 };
 
 use crate::config::AppConfig;
+
+/// bundled Agent 候选路径（start / restart 共用）。
+///
+/// 覆盖三种布局：
+///   1) NSIS currentUser / Linux AppImage → 安装根目录扁平布局
+///   2) Tauri "resources/" 约定 → NSIS perMachine / dev hot-reload
+///   3) macOS .app → Contents/MacOS/<exe> + Contents/Resources/<资源>
+///   4) EAIDE_AGENT_EXE 环境变量（绝对路径或相对 exe_dir）
+fn bundled_agent_candidates(exe_dir: &Path) -> Vec<PathBuf> {
+    let mut v = vec![
+        exe_dir.join("eaide-agent.exe"),
+        exe_dir.join("eaide-agent"),
+        exe_dir.join("resources").join("eaide-agent.exe"),
+        exe_dir.join("resources").join("eaide-agent"),
+        // macOS .app：current_exe 在 Contents/MacOS/，资源在 Contents/Resources/
+        exe_dir.join("..").join("Resources").join("eaide-agent"),
+    ];
+    if let Ok(p) = std::env::var("EAIDE_AGENT_EXE") {
+        let pb = PathBuf::from(&p);
+        v.push(if pb.is_absolute() { pb } else { exe_dir.join(pb) });
+    }
+    v
+}
+
+/// Agent 运行时目录（cwd + EAIDE_CONFIG_DIR 的基准）。
+///
+/// Windows：安装目录（exe_dir）可写，维持原行为。
+/// macOS：.app 包内目录在 /Applications 下只读，改落到用户数据目录
+/// ~/Library/Application Support/eaide，否则 Agent 写 sqlite/配置会失败。
+fn agent_runtime_dir(exe_dir: &Path) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            let d = PathBuf::from(home)
+                .join("Library")
+                .join("Application Support")
+                .join("eaide");
+            let _ = std::fs::create_dir_all(&d);
+            return d;
+        }
+    }
+    let _ = exe_dir;
+    exe_dir.to_path_buf()
+}
 
 /// Agent 进程管理器 —— 自动管理子进程生命周期。
 pub struct AgentManager {
@@ -224,37 +268,12 @@ impl AgentManager {
             .and_then(|p| p.parent().map(|d| d.to_path_buf()))
             .unwrap_or_default();
 
-        // bundled Agent 候选路径（按优先级）
-        //  1) NSIS currentUser / Linux AppImage / macOS .app → 安装根目录扁平布局
-        //  2) Tauri's own "resources/" 约定 → NSIS perMachine / dev hot-reload
-        //  3) EAIDE_AGENT_EXE 环境变量（绝对路径或相对于 exe_dir）
-        let candidates: Vec<PathBuf> = {
-            let mut v = vec![
-                exe_dir.join("eaide-agent.exe"),
-                exe_dir.join("eaide-agent"),
-                exe_dir.join("resources").join("eaide-agent.exe"),
-                exe_dir.join("resources").join("eaide-agent"),
-            ];
-            if let Ok(p) = std::env::var("EAIDE_AGENT_EXE") {
-                let pb = PathBuf::from(&p);
-                v.push(if pb.is_absolute() {
-                    pb
-                } else {
-                    exe_dir.join(pb)
-                });
-            }
-            v
-        };
+        // bundled Agent 候选路径（含 macOS .app Contents/Resources 布局与 EAIDE_AGENT_EXE）
+        let candidates = bundled_agent_candidates(&exe_dir);
         // 列一下所有候选路径的探测结果，便于排错
         {
             let mut probe = String::new();
-            let probes: Vec<PathBuf> = vec![
-                exe_dir.join("eaide-agent.exe"),
-                exe_dir.join("eaide-agent"),
-                exe_dir.join("resources").join("eaide-agent.exe"),
-                exe_dir.join("resources").join("eaide-agent"),
-            ];
-            for p in &probes {
+            for p in &candidates {
                 probe.push_str(&format!("    {} → {}\n", p.display(), if p.exists() { "EXISTS" } else { "missing" }));
             }
             app_log(&format!("[agent_manager] bundled exe 候选探测:\n{}", probe));
@@ -277,15 +296,17 @@ impl AgentManager {
                     let k_static: &'static str = Box::leak(k.into_boxed_str());
                     envs.push((k_static, v));
                 }
-                // 让 Agent 把 envconfig 单文件写到安装目录下：<exe_dir>/config/environments.json
-                let config_dir = exe_dir.join("config");
+                // 让 Agent 把 envconfig 单文件写到运行时目录：<runtime_dir>/config/environments.json
+                // （macOS 上 .app 包内只读，runtime_dir 会落到用户数据目录）
+                let runtime_dir = agent_runtime_dir(&exe_dir);
+                let config_dir = runtime_dir.join("config");
                 let config_dir_str = config_dir.to_string_lossy().into_owned();
                 envs.push(("EAIDE_CONFIG_DIR", config_dir_str));
                 app_log(&format!(
                     "[agent_manager] 注入 EAIDE_CONFIG_DIR={}",
                     config_dir.display()
                 ));
-                (cmd, vec![], exe_dir, envs)
+                (cmd, vec![], runtime_dir, envs)
             } else {
                 // 开发模式：uv run（源码目录存在时）
                 let project_dir = find_project_dir();
@@ -509,13 +530,25 @@ pub fn kill_agent_process_tree() {
     #[cfg(not(target_os = "windows"))]
     {
         stop_agent_process();
-        // POSIX：按端口杀（lsof 或 fuser）
-        let host = std::env::var("EAIDE_AGENT_HOST").unwrap_or_else(|_| "127.0.0.1".into());
+        // POSIX：按端口杀。macOS 无 fuser，先用 lsof 拿 PID 逐个 kill
         let port = std::env::var("EAIDE_AGENT_PORT").unwrap_or_else(|_| "8765".into());
-        let _ = std::process::Command::new("fuser")
-            .args(["-k", &format!("{}/tcp", port)])
-            .output();
-        let _ = host; // suppress unused
+        let mut killed = false;
+        if let Ok(out) = std::process::Command::new("lsof")
+            .args(["-ti", &format!("tcp:{}", port)])
+            .output()
+        {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for pid in text.split_whitespace() {
+                let _ = std::process::Command::new("kill").args(["-9", pid]).output();
+                killed = true;
+            }
+        }
+        if !killed {
+            // Linux 兜底：fuser
+            let _ = std::process::Command::new("fuser")
+                .args(["-k", &format!("{}/tcp", port)])
+                .output();
+        }
     }
 }
 
@@ -590,25 +623,25 @@ pub fn restart_agent_process() {
         redacted
     ));
 
-    // 3. 找到 bundled exe
+    // 3. 找到 bundled exe（含 macOS .app Contents/Resources 布局）
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
         .unwrap_or_default();
-    let candidates = vec![
-        exe_dir.join("eaide-agent.exe"),
-        exe_dir.join("eaide-agent"),
-        exe_dir.join("resources").join("eaide-agent.exe"),
-        exe_dir.join("resources").join("eaide-agent"),
-    ];
+    let candidates = bundled_agent_candidates(&exe_dir);
     let Some(exe) = candidates.into_iter().find(|p| p.exists()) else {
-        app_log("[agent_manager] restart: 找不到 bundled eaide-agent.exe");
+        app_log("[agent_manager] restart: 找不到 bundled eaide-agent");
         return;
     };
     app_log(&format!("[agent_manager] restart: spawn 新 Agent: {}", exe.display()));
 
+    // 运行时目录（macOS 上落到用户数据目录，.app 包内只读）
+    let runtime_dir = agent_runtime_dir(&exe_dir);
+    let config_dir_str = runtime_dir.join("config").to_string_lossy().into_owned();
+
     let mut cmd = Command::new(&exe);
-    cmd.current_dir(&exe_dir)
+    cmd.current_dir(&runtime_dir)
+        .env("EAIDE_CONFIG_DIR", config_dir_str)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(target_os = "windows")]

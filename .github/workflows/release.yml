@@ -10,20 +10,55 @@ permissions:
   contents: write
 
 jobs:
-  build-tauri:
+  # ---- Python Agent 单文件二进制（PyInstaller，平台原生，不可交叉编译）----
+  build-agent:
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: macos-latest
+            artifact: agent-macos-arm64
+            binary: eaide-agent
+          - os: windows-latest
+            artifact: agent-windows
+            binary: eaide-agent.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install uv
+        run: pip install uv
+      - run: uv sync --all-packages
+      - name: PyInstaller build
+        run: uv run pyinstaller eaide-agent.spec --noconfirm --distpath agent-dist --workpath agent-build
+      - name: chmod +x
+        if: runner.os == 'macOS'
+        run: chmod +x agent-dist/eaide-agent
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: agent-dist/${{ matrix.binary }}
+          if-no-files-found: error
+
+  build-tauri:
+    needs: build-agent
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Intel Mac：GitHub 已无 x86 macOS runner，PyInstaller 无法交叉编译，
+          # 故只出 Apple Silicon 版（Intel Mac 已停产，Rosetta 用户走云端/源码模式）
+          - os: macos-latest
             target: aarch64-apple-darwin
             bundles: dmg,app
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            bundles: dmg,app
+            agent_artifact: agent-macos-arm64
+            agent_file: eaide-agent
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             bundles: nsis
+            agent_artifact: agent-windows
+            agent_file: eaide-agent.exe
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -37,16 +72,22 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with: { targets: "${{ matrix.target }}" }
 
-      # tauri bundle.resources 通配（resources/* 与 config/driver/*）在 gitignore 后
-      # 检出里没有任何文件会直接失败；放非点号占位文件（glob 不匹配 dotfiles）。
-      # 注意：端侧 Agent 二进制（eaide-agent）需按平台另行打包后放入 resources/。
+      # 端侧 Agent 二进制放入 Tauri resources（随 .app / NSIS 打包）
+      - name: Fetch agent binary
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ matrix.agent_artifact }}
+          path: apps/desktop/src-tauri/resources
+      - name: Make agent executable
+        if: runner.os == 'macOS'
+        run: chmod +x apps/desktop/src-tauri/resources/${{ matrix.agent_file }}
+
+      # tauri bundle.resources 通配（resources/* 与 config/driver/*）检出里可能无文件
+      # 导致打包失败；Agent 已就位时 resources 不再需要占位，config/driver 仍补占位
       - name: Resource placeholders
         shell: bash
         run: |
-          mkdir -p apps/desktop/src-tauri/resources config/driver
-          if ! ls apps/desktop/src-tauri/resources/* >/dev/null 2>&1; then
-            echo "placeholder (real agent binary is packaged separately)" > apps/desktop/src-tauri/resources/README.txt
-          fi
+          mkdir -p config/driver
           if ! ls config/driver/* >/dev/null 2>&1; then
             echo "placeholder (python driver wheels are packaged separately)" > config/driver/README.txt
           fi
@@ -114,7 +155,7 @@ jobs:
               --repo "$REPO" \
               --draft \
               --title "Enterprise AI IDE $TAG" \
-              --notes "See CHANGELOG.md（macOS 产物未签名，首次打开需右键→打开）"
+              --notes "See CHANGELOG.md（macOS 为 Apple Silicon 版且未签名，首次打开需右键→打开）"
           fi
           # 上传产物（--clobber 同名覆盖，重复跑幂等）
           gh release upload "$TAG" "${files[@]}" --repo "$REPO" --clobber 2>&1 | tee release.log

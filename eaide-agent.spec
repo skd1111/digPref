@@ -1,11 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
+# 跨平台 PyInstaller spec（Windows / macOS 共用）：
+#   - 路径一律正斜杠（两平台 Python 都能解析）
+#   - 未入 git 的可选数据（如内网驱动 config/driver）缺失时自动跳过
+import os
 
 
-a = Analysis(
-    ['services\\agent\\src\\agent\\main.py'],
-    pathex=['services/agent/src'],
-    binaries=[],
-    datas=[
+def _data_pairs():
+    pairs = [
         ('services/agent/src/agent/llm/prompts', 'agent/llm/prompts'),
         ('services/agent/src/agent/dual/prompts', 'agent/dual/prompts'),
         ('services/agent/src/agent/doc_review/prompts', 'agent/doc_review/prompts'),
@@ -26,10 +27,20 @@ a = Analysis(
         ('services/agent/src/agent/ops/schema.sql', 'agent/ops'),
         ('services/agent/src/agent/datadict/schema.sql', 'agent/datadict'),
         ('services/agent/src/agent/config/llm/speculative.yaml', 'config/llm'),
-        ('config/driver', 'config/driver'),
         # 文档审核知识库（风险高亮依据 / 案例库引用；运行时 cwd 缺失时回退 _MEIPASS）
         ('knowledge-base', 'knowledge-base'),
-    ],
+        # 内网数据库驱动 wheel（未入 git；CI / macOS 构建缺失时跳过，
+        # 对应 DB 驱动走 PyPI 安装的 asyncpg/aiomysql 等）
+        ('config/driver', 'config/driver'),
+    ]
+    return [(src, dst) for src, dst in pairs if os.path.exists(src)]
+
+
+a = Analysis(
+    ['services/agent/src/agent/main.py'],
+    pathex=['services/agent/src'],
+    binaries=[],
+    datas=_data_pairs(),
     hiddenimports=['uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.auto', 'uvicorn.protocols', 'uvicorn.protocols.http', 'uvicorn.lifespan', 'starlette', 'fastapi', 'httpx', 'pydantic', 'pydantic_settings', 'langgraph', 'mcp', 'aiohttp'],
     hookspath=[],
     hooksconfig={},
