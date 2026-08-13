@@ -72,7 +72,7 @@ jobs:
           grep -E "^error|Error|error\[|failed|panicked" tb.plain | head -15 | sed 's/^/::error::/'
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: bundle-${{ matrix.target }}
           path: |
@@ -87,7 +87,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           pattern: bundle-*
           merge-multiple: true
