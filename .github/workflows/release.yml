@@ -100,8 +100,8 @@ jobs:
         run: |
           set -o pipefail
           ls -laR dist-artifacts | tee artifacts-listing.txt
-          shopt -s nullglob
-          files=(dist-artifacts/*)
+          # artifact 下载后可能带子目录（dmg/、nsis/），只收集真实文件
+          mapfile -t files < <(find dist-artifacts -type f)
           if [ ${#files[@]} -eq 0 ]; then
             echo "no artifacts downloaded" >&2
             exit 1
