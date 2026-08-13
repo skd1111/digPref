@@ -5,6 +5,15 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      skip_builds:
+        description: "跳过构建，只把最近一次成功 run 的产物发到 Release（用于补发）"
+        type: boolean
+        default: false
+      tag_name:
+        description: "skip_builds 时要补发的 tag"
+        type: string
+        default: "v0.1.0"
 
 permissions:
   contents: write
@@ -12,6 +21,7 @@ permissions:
 jobs:
   # ---- Python Agent 单文件二进制（PyInstaller，平台原生，不可交叉编译）----
   build-agent:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.skip_builds) }}
     strategy:
       fail-fast: false
       matrix:
@@ -42,6 +52,7 @@ jobs:
           if-no-files-found: error
 
   build-tauri:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.skip_builds) }}
     needs: build-agent
     strategy:
       fail-fast: false
@@ -124,18 +135,40 @@ jobs:
 
   publish:
     needs: build-tauri
+    if: ${{ always() && needs.build-tauri.result != 'failure' && needs.build-tauri.result != 'cancelled' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      # tag 触发：用本次 run 的产物；dispatch+skip_builds：从最近一次成功 run 拉产物
+      - name: Resolve source run
+        id: src
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name == 'workflow_dispatch' && inputs.skip_builds }}" = "true" ]; then
+            RUN_ID=$(gh run list --repo "${{ github.repository }}" --workflow release.yml \
+              --json databaseId,conclusion,event \
+              --jq '[.[] | select(.conclusion=="success" and .event=="push")] | first | .databaseId')
+            if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+              echo "no previous successful tag run found" >&2
+              exit 1
+            fi
+            echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_id=${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/download-artifact@v8
         with:
           pattern: bundle-*
           merge-multiple: true
           path: dist-artifacts
-      # tag 触发才建 Release（手动 workflow_dispatch 只出 artifact）
-      - name: Create draft release
-        if: startsWith(github.ref, 'refs/tags/')
+          run-id: ${{ steps.src.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      # tag 触发才发 Release（直接发布，不再 draft，避免人工点 Publish 造成产物丢失；
+      # dispatch+skip_builds 走补发；普通 dispatch 只出 artifact）
+      - name: Create release
+        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.skip_builds)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -147,18 +180,20 @@ jobs:
             echo "no artifacts downloaded" >&2
             exit 1
           fi
-          TAG="${{ github.ref_name }}"
+          # dispatch 的 ref 是分支，tag 名从输入参数取
+          TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}"
           REPO="${{ github.repository }}"
-          # 确保 release 存在（兼容旧 draft / 首次创建两种情况）
+          # 确保 release 存在（已发布/草稿都兼容，不存在则直接创建为正式发布）
           if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
             gh release create "$TAG" \
               --repo "$REPO" \
-              --draft \
               --title "Enterprise AI IDE $TAG" \
               --notes "See CHANGELOG.md（macOS 为 Apple Silicon 版且未签名，首次打开需右键→打开）"
           fi
           # 上传产物（--clobber 同名覆盖，重复跑幂等）
           gh release upload "$TAG" "${files[@]}" --repo "$REPO" --clobber 2>&1 | tee release.log
+          # 若当前是草稿（历史遗留）则转正发布
+          gh release edit "$TAG" --repo "$REPO" --draft=false >/dev/null 2>&1 || true
           # 硬校验：确认产物真的挂上了，否则判失败（防止静默丢产物）
           # 用 gh release view（兼容 draft）；REST 的 releases/tags/ 端点对 draft 会 404
           sleep 5
