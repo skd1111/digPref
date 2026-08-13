@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import time
 import zipfile
 from pathlib import Path
@@ -947,7 +948,16 @@ def _knowledge_base_dir() -> Path | None:
         p = Path(override)
         return p if p.is_dir() else None
     candidate = Path(__file__).resolve().parents[5] / "knowledge-base"
-    return candidate if candidate.is_dir() else None
+    if candidate.is_dir():
+        return candidate
+    # PyInstaller 单文件打包后源码在 _MEIPASS 解压目录，parents[5] 上溯不到；
+    # 回退到 spec datas 打进来的内置副本（与 doc_review/knowledge.py 同策略）。
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        bundled = Path(meipass) / "knowledge-base"
+        if bundled.is_dir():
+            return bundled
+    return None
 
 
 _KB_STOPWORDS = frozenset(
