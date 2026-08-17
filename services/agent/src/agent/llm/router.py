@@ -1588,9 +1588,7 @@ class LMRouter:
         if self._mock_mode:
             return _fallback_decision(plan)
         prompt = (
-            SUBAGENT_ENABLEMENT_DECISION_PROMPT.replace(
-                "{{CURRENT_TIME}}", current_time_text()
-            )
+            SUBAGENT_ENABLEMENT_DECISION_PROMPT.replace("{{CURRENT_TIME}}", current_time_text())
             .replace("{{USER_INPUT}}", user_prompt[:4000])
             .replace("{{CONVERSATION_SUMMARY}}", _conversation_summary(history))
             .replace(

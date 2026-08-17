@@ -59,9 +59,7 @@ async def test_private_summarise_injects_current_time(monkeypatch):
         return {"answer": "ok", "sources": []}
 
     monkeypatch.setattr(private_mod.PrivateLLMClient, "_chat_json_with_retry", fake_chat_json)
-    client = private_mod.PrivateLLMClient(
-        base_url="http://fake.internal", api_key="k", model="m"
-    )
+    client = private_mod.PrivateLLMClient(base_url="http://fake.internal", api_key="k", model="m")
     answer, _ = await client.summarise(
         intent="query", user_prompt="今天是几月几号", plan=[], results=[]
     )

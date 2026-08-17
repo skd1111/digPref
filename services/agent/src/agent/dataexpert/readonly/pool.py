@@ -394,9 +394,7 @@ class ReadOnlyPool:
             async with conn.cursor() as cur:
                 await cur.execute("SET SESSION TRANSACTION READ ONLY")
                 await cur.execute(sql)
-                columns = (
-                    [desc[0] for desc in cur.description] if cur.description else []
-                )
+                columns = [desc[0] for desc in cur.description] if cur.description else []
                 rows = await cur.fetchall()
         # 基于 cursor 结果构造 DataFrame：不能把 aiomysql 异步连接直接喂给
         # pd.read_sql（pandas 会调 conn.execute → _ContextManager 无此属性，BUGFIX #102）
@@ -429,11 +427,7 @@ class ReadOnlyPool:
             try:
                 await cursor.execute("ALTER SESSION SET READ ONLY")
                 await cursor.execute(sql)
-                columns = (
-                    [desc[0] for desc in cursor.description]
-                    if cursor.description
-                    else []
-                )
+                columns = [desc[0] for desc in cursor.description] if cursor.description else []
                 rows = await cursor.fetchall()
             finally:
                 await cursor.close()

@@ -95,20 +95,48 @@ def workspace_dir(*, ensure: bool = True) -> Path:
 # 扩展名 → 分类（docs / data / images / other）
 _IMAGE_EXTS = frozenset(
     {
-        ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp",
-        ".svg", ".ico", ".tiff", ".tif", ".heic",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".bmp",
+        ".webp",
+        ".svg",
+        ".ico",
+        ".tiff",
+        ".tif",
+        ".heic",
     }
 )
 _DATA_EXTS = frozenset(
     {
-        ".csv", ".tsv", ".xlsx", ".xls", ".parquet", ".json",
-        ".sqlite", ".db", ".ndjson", ".jsonl", ".feather", ".arrow",
+        ".csv",
+        ".tsv",
+        ".xlsx",
+        ".xls",
+        ".parquet",
+        ".json",
+        ".sqlite",
+        ".db",
+        ".ndjson",
+        ".jsonl",
+        ".feather",
+        ".arrow",
     }
 )
 _DOC_EXTS = frozenset(
     {
-        ".md", ".txt", ".docx", ".doc", ".pdf", ".rtf",
-        ".html", ".htm", ".pptx", ".ppt", ".log",
+        ".md",
+        ".txt",
+        ".docx",
+        ".doc",
+        ".pdf",
+        ".rtf",
+        ".html",
+        ".htm",
+        ".pptx",
+        ".ppt",
+        ".log",
     }
 )
 

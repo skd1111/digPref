@@ -59,9 +59,7 @@ async def save_workspace(body: WorkspaceSaveRequest) -> dict[str, Any]:
             resolved = p.resolve(strict=False)
             resolved.mkdir(parents=True, exist_ok=True)
         except (OSError, RuntimeError) as exc:
-            raise HTTPException(
-                status_code=400, detail=f"工作空间路径不可用：{exc}"
-            ) from exc
+            raise HTTPException(status_code=400, detail=f"工作空间路径不可用：{exc}") from exc
         save_workspace_override(str(resolved))
         logger.info("workspace override saved: %s", resolved)
     else:

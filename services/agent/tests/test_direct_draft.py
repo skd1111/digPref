@@ -82,7 +82,9 @@ def test_member_output_forms_roundtrip():
 # ---- 端点层 -----------------------------------------------------------------
 
 
-def _direct(client: TestClient, output: str = "客户身份基本信息表", member: str = "客户身份识别专家"):
+def _direct(
+    client: TestClient, output: str = "客户身份基本信息表", member: str = "客户身份识别专家"
+):
     return client.post(
         "/ops/case/drafts/direct",
         json={
@@ -124,14 +126,17 @@ def test_direct_draft_no_template_rejected(fake_loader, client):
 
 
 def test_direct_draft_invalid_refs_rejected(fake_loader, client):
-    assert client.post(
-        "/ops/case/drafts/direct",
-        json={
-            "case_id": "bank__ops_open",
-            "team_id": "ghost_team",
-            "member_key": "客户身份识别专家",
-            "output_name": "x",
-        },
-    ).status_code == 404
+    assert (
+        client.post(
+            "/ops/case/drafts/direct",
+            json={
+                "case_id": "bank__ops_open",
+                "team_id": "ghost_team",
+                "member_key": "客户身份识别专家",
+                "output_name": "x",
+            },
+        ).status_code
+        == 404
+    )
     assert _direct(client, member="不存在的专家").status_code == 404
     assert _direct(client, output="不是交付物").status_code == 400
