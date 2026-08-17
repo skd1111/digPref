@@ -1,18 +1,18 @@
 """Skill loader —— 启动扫描 + 手动 load_one/remove。
 
-V0 实现选择：用 %APPDATA%\\eaide\\skills 目录（与 envconfig/config/ 同父级）。
-V1 计划：迁移到 <EAIDE_INSTALL_DIR>/skills（spec §0.5 决策）。
+存储目录：<数据根>/skills（BUGFIX #98：生产环境数据根 = 安装目录，
+与 config/ 同父级；解析见 agent/paths.py，落地 spec §0.5 决策）。
 """
 
 from __future__ import annotations
 
 import logging
-import os
 import time
 from pathlib import Path
 
 import yaml
 
+from agent.paths import data_root
 from agent.skills.models import Skill
 from agent.skills.schema import validate_skill_yaml
 
@@ -20,10 +20,8 @@ logger = logging.getLogger(__name__)
 
 
 def _default_skills_dir() -> Path:
-    """V0: 跟随 envconfig 约定（%APPDATA%\\eaide\\skills）。
-    V1: 切到 <EAIDE_INSTALL_DIR>/skills。"""
-    appdata = os.environ.get("APPDATA", str(Path.home()))
-    return Path(appdata) / "eaide" / "skills"
+    """数据根下的 skills/（生产=安装目录，BUGFIX #98）。"""
+    return data_root() / "skills"
 
 
 SKILLS_DIR = _default_skills_dir()

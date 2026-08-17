@@ -23,6 +23,7 @@ from agent.builtin.registry import (
 from agent.config import settings
 from agent.llm import tool_cache
 from agent.safety.write_detector import is_write_call
+from agent.tools.result_spill import apply_result_limits
 
 # builtin 工具的关键词（帮助编排器从摘要里选工具）
 _BUILTIN_KEYWORDS: dict[str, list[str]] = {
@@ -141,6 +142,27 @@ _BUILTIN_KEYWORDS: dict[str, list[str]] = {
         "报告",
         "文档解析",
         "markitdown",
+    ],
+    # V8 LLM 管理工具（2026-08-14：模型接入 / 连通性探测）
+    "model_config_upsert": [
+        "模型接入",
+        "连接模型",
+        "接入模型",
+        "添加模型",
+        "写配置",
+        "模型注册",
+        "内网模型",
+        "model config",
+        "onboard",
+    ],
+    "probe_chat_endpoint": [
+        "可达性",
+        "连通性测试",
+        "通不通",
+        "探测",
+        "ping",
+        "端点测试",
+        "probe",
     ],
 }
 
@@ -288,6 +310,9 @@ class ToolCatalog:
 
         Phase 17 V1：幂等只读 builtin 工具结果短 TTL 缓存（L3）。
         红线：写工具 / 待审批 / 失败结果不查不写（tool_cache 内部双重把关）。
+
+        工具结果 spill（借鉴 dsh）：超大只读结果先全文落盘、内联替换为
+        头尾预览 + 定位符，再入缓存（缓存的即模型所见版本，且内存占用小）。
         """
         if name in BUILTIN_TOOL_NAMES:
             cached = tool_cache.lookup(name, args)
@@ -295,6 +320,7 @@ class ToolCatalog:
                 return {**cached, "cache_hit": True}
             result = await self._execute_builtin(name, args, state)
             if result.get("ok") and not result.get("awaiting_approval"):
+                result = apply_result_limits(result, tool_name=name)
                 tool_cache.store(name, args, result)
             return result
         return await self._execute_mcp(name, args, state)

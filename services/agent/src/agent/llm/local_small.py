@@ -98,6 +98,8 @@ class LocalSmallLLMClient:
 
     async def classify_intent(self, text: str) -> Intent:
         """快速意图分类 —— 端侧模型擅长的简单任务。"""
+        from agent.observability.cot_log import cot as cot_log
+
         if not text or not text.strip():
             return "query"
         try:
@@ -124,16 +126,20 @@ class LocalSmallLLMClient:
                     timeout=3.0,
                     response_format={"type": "json_object"},
                 )
-                return str(msg["content"])
+                raw = str(msg["content"])
+                cot_log("local_small.classify_intent.raw", text=text, raw=raw)
+                return raw
 
             payload = await parse_with_retry(_call, lambda t: extract_json(t, want="object"))
             if not isinstance(payload, dict):
+                cot_log("local_small.classify_intent.fail_safe", text=text)
                 return "query"
             intent = payload.get("intent", "query")
             if intent not in ("query", "mutate", "orchestrate", "chitchat"):
                 return "query"
             return cast(Intent, intent)
-        except (LocalSmallUnavailableError, TypeError, KeyError):
+        except (LocalSmallUnavailableError, TypeError, KeyError) as exc:
+            cot_log("local_small.classify_intent.unavailable", text=text, error=repr(exc))
             return "query"  # 安全兜底
 
     # ---- Plan generation (端侧核心能力 #2) ---------------------------------

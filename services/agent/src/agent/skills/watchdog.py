@@ -1,7 +1,7 @@
 """SkillWatchdog —— Phase 2D V1 YAML 热加载。
 
 设计（参照 biznav.hot_reload 模式）：
-    - 监听 `%APPDATA%\\eaide\\skills\\*.yaml`
+    - 监听 `<数据根>/skills/*.yaml`（生产=安装目录，BUGFIX #98）
     - watchfiles 检测到 YAML 变更 → 防自激（written_by_pid + mtime 双校验）→
       读 YAML → loader.load_one → emit `skill_matched` SSE 事件
     - 防自激原理：loader.write_yaml() 后调 mark_written() 登记"本进程写过"；

@@ -302,9 +302,14 @@ impl AgentManager {
                 let config_dir = runtime_dir.join("config");
                 let config_dir_str = config_dir.to_string_lossy().into_owned();
                 envs.push(("EAIDE_CONFIG_DIR", config_dir_str));
+                // 数据根（BUGFIX #98）：skills / expert_teams / 各运行库统一落安装目录，
+                // 不再散落 %APPDATA%\eaide（Python 端 agent/paths.py 消费 + 存量迁移）
+                let data_root_str = runtime_dir.to_string_lossy().into_owned();
+                envs.push(("EAIDE_DATA_ROOT", data_root_str));
                 app_log(&format!(
-                    "[agent_manager] 注入 EAIDE_CONFIG_DIR={}",
-                    config_dir.display()
+                    "[agent_manager] 注入 EAIDE_CONFIG_DIR={}, EAIDE_DATA_ROOT={}",
+                    config_dir.display(),
+                    runtime_dir.display()
                 ));
                 (cmd, vec![], runtime_dir, envs)
             } else {
@@ -642,6 +647,8 @@ pub fn restart_agent_process() {
     let mut cmd = Command::new(&exe);
     cmd.current_dir(&runtime_dir)
         .env("EAIDE_CONFIG_DIR", config_dir_str)
+        // 数据根（BUGFIX #98）：与首次启动注入保持一致
+        .env("EAIDE_DATA_ROOT", runtime_dir.to_string_lossy().into_owned())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(target_os = "windows")]

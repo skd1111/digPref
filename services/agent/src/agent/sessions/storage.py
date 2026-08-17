@@ -18,11 +18,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import sqlite3
 import time
 import uuid
 from pathlib import Path
+
+from agent.paths import data_root
 
 from .models import (
     Message,
@@ -38,9 +39,8 @@ from .models import (
 
 
 def _default_db_path() -> Path:
-    """V0：跟随 envconfig 约定（%APPDATA%\\eaide\\sessions.db）。"""
-    appdata = os.environ.get("APPDATA", str(Path.home()))
-    return Path(appdata) / "eaide" / "sessions.db"
+    """数据根下的 sessions.db（BUGFIX #98：生产=安装目录）。"""
+    return data_root() / "sessions.db"
 
 
 SESSIONS_DB = _default_db_path()

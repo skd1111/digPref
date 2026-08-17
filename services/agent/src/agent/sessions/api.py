@@ -33,10 +33,11 @@ V1.5 新端点（CLAUDE.md §6 §1 HITL + §5 Keyring）：
 from __future__ import annotations
 
 import logging
-import os
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
+
+from agent.paths import data_root
 
 from .checkpointer import SessionCheckpointer
 from .knowledge_base import build_kb_context
@@ -48,8 +49,8 @@ logger = logging.getLogger(__name__)
 
 
 def _default_db_path() -> str:
-    appdata = os.environ.get("APPDATA", str(os.path.expanduser("~")))
-    return os.path.join(appdata, "eaide", "sessions.db")
+    # BUGFIX #98：统一落数据根（生产=安装目录）
+    return str(data_root() / "sessions.db")
 
 
 _storage: SessionStorage | None = None

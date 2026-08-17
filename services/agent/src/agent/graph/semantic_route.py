@@ -257,6 +257,19 @@ class SemanticIntentRouter:
             score = _cosine(qvec, vec)
             if score > best_score:
                 best_name, best_score = name, score
+        try:
+            from agent.observability.cot_log import cot as cot_log
+
+            cot_log(
+                "semantic_route.score",
+                text=prompt,
+                best_route=best_name or None,
+                best_score=round(best_score, 4),
+                threshold=threshold,
+                hit=bool(best_score >= threshold and best_name in route_map),
+            )
+        except Exception:  # 日志失败不影响路由
+            pass
         if best_score < threshold or best_name not in route_map:
             return None
 

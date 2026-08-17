@@ -153,8 +153,19 @@ async def stream_graph_events(
         # 会话上下文（2026-08-06）：history 不是 state 字段，单独取出，
         # 拼在当前用户消息之前，让 intent/编排/工具循环都能看到历史对话
         history = extra_state.pop("history", None) or []
-        if history:
-            initial_state["messages"] = list(history) + initial_state["messages"]
+        # 历史压缩摘要（2026-08-17）：断点之前的旧对话已被压缩成摘要，
+        # 作为 system 消息置于 history 之前（模型先读到背景再看近期对话）
+        history_summary = extra_state.pop("history_summary", None)
+        if history or history_summary:
+            prefix: list[dict] = []
+            if history_summary:
+                prefix.append(
+                    {
+                        "role": "system",
+                        "content": f"【前段对话摘要（更早的对话已被压缩，据此保持上下文连贯）】\n{history_summary}",
+                    }
+                )
+            initial_state["messages"] = prefix + list(history) + initial_state["messages"]
         initial_state.update(extra_state)
     # 补充初始 trace 条目
     initial_state["trace"] = [
@@ -164,13 +175,21 @@ async def stream_graph_events(
     # 跟踪已发送的 approval_id，避免每个 awaiting_approval=True 的快照
     # 都重复发送审批事件（导致 UI 出现多张审批卡片）
     emitted_approvals: set[str] = set()
+    # 跟踪已发送的 final_answer 内容（BUGFIX #115）：values 模式下工具循环
+    # 与 responder 的快照都带 final_answer，不去重会导致同一回答在 UI 出现两次
+    emitted_final_answers: set[str] = set()
+    # 已下发的 trace 条目数（用列表包装以便在 _convert_chunk 里更新）：
+    # 增量下发所有新增条目，工具循环每步操作都能进思维链（2026-08-17）
+    sent_trace_count: list[int] = [len(initial_state.get("trace") or [])]
 
     try:
         async for chunk in graph.astream(initial_state, cfg, stream_mode=["values", "updates"]):
             if not isinstance(chunk, tuple) or len(chunk) != 2:
                 continue
             mode, payload = chunk
-            for event in _convert_chunk(mode, payload, run_id, emitted_approvals):
+            for event in _convert_chunk(
+                mode, payload, run_id, emitted_approvals, sent_trace_count, emitted_final_answers
+            ):
                 yield _sse_event(event["event"], event["data"])
             # V2 增量：消费 RouterEngine emit 的路由事件并推到 SSE 流
             for evt in await _drain_router_events():
@@ -457,7 +476,14 @@ async def _drain_preview_events() -> list[dict]:
 # ---- Chunk → events --------------------------------------------------------
 
 
-def _convert_chunk(mode: str, payload: Any, run_id: str, emitted_approvals: set[str]) -> list[dict]:
+def _convert_chunk(
+    mode: str,
+    payload: Any,
+    run_id: str,
+    emitted_approvals: set[str],
+    sent_trace_count: list[int] | None = None,
+    emitted_final_answers: set[str] | None = None,
+) -> list[dict]:
     """将一个 LangGraph 流块转换为 0..N 个 AgentStreamEvent 字典。"""
     events: list[dict] = []
 
@@ -466,14 +492,22 @@ def _convert_chunk(mode: str, payload: Any, run_id: str, emitted_approvals: set[
         if isinstance(payload, dict):
             trace = payload.get("trace") or []
             if trace:
-                # 只发送最后一条 trace 条目，避免洪水
+                # 增量下发所有新增 trace 条目（2026-08-17）：工具循环一次节点
+                # 执行可能产生多条 per-tool 条目（read/write/grep…），每条都要进
+                # 思维链；无计数器时退化为旧行为（只发最后一条）
                 # Phase 16：携带 runId —— 前端思维链面板用它查 /trace/session/{runId}
-                events.append(
-                    {
-                        "event": "trace",
-                        "data": {"kind": "trace", "step": trace[-1], "runId": run_id},
-                    }
-                )
+                if sent_trace_count is not None:
+                    fresh = trace[sent_trace_count[0] :]
+                    sent_trace_count[0] = len(trace)
+                else:
+                    fresh = [trace[-1]]
+                for step in fresh:
+                    events.append(
+                        {
+                            "event": "trace",
+                            "data": {"kind": "trace", "step": step, "runId": run_id},
+                        }
+                    )
             if payload.get("awaiting_approval"):
                 approval_id = payload.get("approval_id") or ""
                 # 防止重复发送同一审批的卡片（每个快照都会触发此分支）
@@ -503,7 +537,14 @@ def _convert_chunk(mode: str, payload: Any, run_id: str, emitted_approvals: set[
                             },
                         }
                     )
-            if payload.get("final_answer"):
+            final_answer = payload.get("final_answer")
+            # 去重（BUGFIX #115）：同一内容只发一次；无去重集合时退化为旧行为。
+            # 内容变化（如后续节点覆写为新终答）仍会照常发送。
+            if final_answer and (
+                emitted_final_answers is None or final_answer not in emitted_final_answers
+            ):
+                if emitted_final_answers is not None:
+                    emitted_final_answers.add(final_answer)
                 events.append(
                     {
                         "event": "message",
@@ -512,7 +553,7 @@ def _convert_chunk(mode: str, payload: Any, run_id: str, emitted_approvals: set[
                             "message": {
                                 "id": str(uuid.uuid4()),
                                 "role": "assistant",
-                                "content": payload["final_answer"],
+                                "content": final_answer,
                             },
                         },
                     }

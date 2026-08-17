@@ -310,6 +310,24 @@ pub async fn ops_case_draft_save(
     json_or_err(resp).await
 }
 
+/// POST /ops/case/drafts/direct —— 点交付物直开草稿（零 LLM，模板来自专家团 yaml）。
+#[tauri::command]
+pub async fn ops_case_draft_direct(
+    body: serde_json::Value,
+    state: State<'_, AppState>,
+) -> CmdResult<serde_json::Value> {
+    let url = agent_url(&state, "/ops/case/drafts/direct");
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&url)
+        .timeout(std::time::Duration::from_secs(10))
+        .json(&body)
+        .send()
+        .await
+        .map_err(err)?;
+    json_or_err(resp).await
+}
+
 /// POST /ops/case/drafts/{id}/submit —— 提交草稿：自动入材料走专家审核。
 #[tauri::command]
 pub async fn ops_case_draft_submit(

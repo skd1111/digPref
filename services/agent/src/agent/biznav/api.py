@@ -31,6 +31,8 @@ from typing import Any
 from fastapi import APIRouter, Body, HTTPException, Query
 from pydantic import BaseModel
 
+from agent.paths import data_root
+
 from .audit import (
     EVT_FEATURE_DELETE,
     EVT_FEATURE_IMPORT,
@@ -93,10 +95,8 @@ class ImportRequest(BaseModel):
 
 
 def _default_db_path() -> str:
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        return os.path.join(appdata, "eaide", "biznav.db")
-    return os.path.expanduser("~/.eaide/biznav.db")
+    # BUGFIX #98：统一落数据根（生产=安装目录）
+    return str(data_root() / "biznav.db")
 
 
 _storage: FeatureStorage | None = None

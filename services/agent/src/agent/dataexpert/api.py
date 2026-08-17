@@ -28,6 +28,10 @@ from agent.dataexpert.events import (
     EVT_DATA_QUERY_RESULT,
     emit_event_sync,
 )
+from agent.dataexpert.metric_resolver import (
+    MetricResolverConfigError,
+    get_default_resolver,
+)
 from agent.dataexpert.models import generate_id, now_epoch
 from agent.dataexpert.readonly.guard import (
     WriteBlockedError,
@@ -61,6 +65,40 @@ class NL2SQLResponse(BaseModel):
     tables_used: list[str] = Field(default_factory=list)
     dictionary_context: str = ""
     error: str = ""  # 生成 SQL 未通过白名单时的降级说明
+    # v2.87 MetricResolver 透传：让前端 DataWorkbench 状态栏显示当前 resolver 类型
+    metric_source_kind: str = ""  # "dict" / "platform" / "bridge" / ""（未识别）
+    metric_confidence: float = 0.0  # 0-1
+
+
+class MetricResolveRequest(BaseModel):
+    """v2.87 · MetricResolver.resolve() 入参。
+
+    用于前端主动识别指标（譬如"识别这些问句对应的指标给提示"），
+    或 NL2SQL 前置增强（NL2SQLResponse.metric_source_kind 来源）。
+    """
+
+    question: str = Field(min_length=1, max_length=2048)
+    source_id: str = ""
+
+
+class MetricResolveResponse(BaseModel):
+    """v2.87 · MetricResolver.resolve() 出参。
+
+    ``resolved`` 为 None 表示识别失败（前端可回退到纯 NL2SQL）。
+    """
+
+    resolved: dict | None = None  # ResolvedQuery JSON（None 表示识别失败）
+    error: str = ""  # 配置错误或实现未就绪时的兜底说明
+
+
+class MetricListResponse(BaseModel):
+    """v2.87 · MetricResolver.list_metrics() 出参。
+
+    前端 DataWorkbench 左侧"指标浏览器"用。
+    """
+
+    metrics: list[dict] = Field(default_factory=list)  # MetricDef JSON 列表
+    source_kind: str = ""  # 当前 resolver 类型
 
 
 class SqlRunRequest(BaseModel):
@@ -139,6 +177,9 @@ async def sync_schema(source_id: str, body: dict | None = None) -> dict:
     pool = ReadOnlyPool(cfg)
     try:
         tables = await pool.fetch_schema()
+    except ValueError as e:
+        # 类型未配置/不支持 → 400 明确提示，不静默返回空 schema（BUGFIX #97）
+        raise HTTPException(status_code=400, detail=str(e))
     finally:
         await pool.close()
 
@@ -193,9 +234,72 @@ async def test_connection(req: TestConnectionRequest) -> dict:
         await pool.close()
 
 
+# ---- v2.87 MetricResolver 抽象层 API 端点 --------------------------------------
+# 这些端点让前端 DataWorkbench：
+#   1. 主动识别问句对应的指标（/metric/resolve）
+#   2. 列出可用指标（/metric/list）—— 左侧"指标浏览器"
+# V0 切换仅环境变量 EAIDE_METRIC_RESOLVER 生效（config/data_expert.yaml 是预留模板，
+# 当前无代码读取，yaml 接线留待 V1）；未来客户有 IMS / Quick BI / DataFinder 时换 platform 实现。
+@router.post("/metric/resolve", response_model=MetricResolveResponse)
+async def metric_resolve(req: MetricResolveRequest) -> MetricResolveResponse:
+    """v2.87 · 把自然语言问句解析为结构化查询意图（ResolvedQuery）。
+
+    返回 ``resolved`` 为 dict（Pydantic v2 model_dump）或 None（识别失败）。
+    错误场景（unknown type / platform 缺 base_url）走 ``error`` 字段兜底。
+    """
+    try:
+        resolver = get_default_resolver()
+    except MetricResolverConfigError as e:
+        return MetricResolveResponse(resolved=None, error=f"配置错误：{e}")
+
+    resolved = await resolver.resolve(
+        req.question,
+        context={"source_id": req.source_id},
+    )
+    if resolved is None:
+        return MetricResolveResponse(resolved=None, error="")
+    # ResolvedQuery.model_dump() 返回 dict（前端按 TS 镜像解析）
+    return MetricResolveResponse(resolved=resolved.model_dump(), error="")
+
+
+@router.get("/metric/list", response_model=MetricListResponse)
+async def metric_list(project: str | None = None) -> MetricListResponse:
+    """v2.87 · 列出可用指标（前端"指标浏览器"用）。
+
+    V0 默认 DictMetricResolver 返回 _DEFAULT_DICTIONARY._global 全局条目；
+    V1 PlatformMetricResolver 走 IMS HTTP API；V1.5 BridgeMetricResolver 走 dws 视图。
+    """
+    try:
+        resolver = get_default_resolver()
+    except MetricResolverConfigError:
+        # 配置错误：返空 + source_kind 空字符串；前端按需提示
+        return MetricListResponse(metrics=[], source_kind="")
+
+    # 当前 resolver 类型（"dict" / "platform" / "bridge"）
+    source_kind = type(resolver).__name__.replace("MetricResolver", "").lower()
+
+    try:
+        metrics = await resolver.list_metrics(project=project)
+    except NotImplementedError:
+        # Platform / Bridge V0 占位 —— 优雅返回空列表
+        return MetricListResponse(metrics=[], source_kind=source_kind)
+
+    return MetricListResponse(
+        metrics=[m.model_dump() for m in metrics],
+        source_kind=source_kind,
+    )
+
+
 @router.post("/nl2sql", response_model=NL2SQLResponse)
 async def nl2sql(req: NL2SQLRequest) -> NL2SQLResponse:
-    """自然语言 → SQL（不执行，返回待确认 SQL + is_heavy）。"""
+    """自然语言 → SQL（不执行，返回待确认 SQL + is_heavy）。
+
+    v2.87 设计补强：
+      1. 前置调用 ``MetricResolver.resolve()`` 识别指标（dict / platform / bridge）
+      2. 把 ``source_kind`` + ``confidence`` 透传给前端（状态栏显示）
+      3. 业务逻辑（Schema 链接 + Few-shot + 生成 SQL）保持不变 —— V0 dict 模式包装
+         现有 ``dictionary.translate()``，零业务代码改动
+    """
     from agent.dataexpert.nl2sql import dictionary, linker
     from agent.dataexpert.nl2sql.generator import to_sql
 
@@ -207,6 +311,25 @@ async def nl2sql(req: NL2SQLRequest) -> NL2SQLResponse:
         source = await storage.get_source(req.source_id)
         if source:
             schema_cache = source.get("schema_cache", [])
+
+    # ---- v2.87 指标识别（MetricResolver 抽象层） ---------------------------------
+    # 默认 DictMetricResolver（包装 dictionary.translate），失败时优雅降级
+    metric_source_kind = ""
+    metric_confidence = 0.0
+    try:
+        resolver = get_default_resolver()
+        resolved = await resolver.resolve(
+            req.question,
+            context={"source_id": req.source_id},
+        )
+        if resolved is not None:
+            metric_source_kind = resolved.source_kind
+            metric_confidence = resolved.confidence
+            # V0 简化：把 ResolvedQuery.metric.name 注入 prompt（V1 Platform 会用 SQL 模板）
+            # 此处暂不破坏既有 to_sql 签名 —— 仅作为 hint 留存
+    except (MetricResolverConfigError, NotImplementedError):
+        # 配置错误 / 占位实现抛错 —— 优雅降级到原纯 NL2SQL 流程
+        pass
 
     # Schema 链接（选 3-5 表）
     tables = await linker.select_tables(req.question, schema_cache)
@@ -227,6 +350,8 @@ async def nl2sql(req: NL2SQLRequest) -> NL2SQLResponse:
             tables_used=[t.name for t in tables],
             dictionary_context=dict_ctx,
             error=f"生成的 SQL 含非查询语句（{e.token}），已拒绝",
+            metric_source_kind=metric_source_kind,
+            metric_confidence=metric_confidence,
         )
 
     # 判断是否重查询
@@ -237,6 +362,8 @@ async def nl2sql(req: NL2SQLRequest) -> NL2SQLResponse:
         is_heavy=heavy,
         tables_used=[t.name for t in tables],
         dictionary_context=dict_ctx,
+        metric_source_kind=metric_source_kind,
+        metric_confidence=metric_confidence,
     )
 
 
@@ -276,6 +403,13 @@ async def run_sql(req: SqlRunRequest) -> dict:
         source_cfg = (source or {}).get("connection_config", {}) or {}
     if not source_cfg:
         raise HTTPException(status_code=400, detail="缺少数据源连接配置（connection 或 source_id）")
+    # 类型未配置（Rust 注入 type="" 等）→ 400 明确提示，
+    # 不允许静默走兜底返回 0 行（BUGFIX #97）
+    if not str(source_cfg.get("type") or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="数据源未配置数据库类型（db_type），请在「系统资产」中编辑该数据源并选择类型后重试",
+        )
 
     # 真实执行（pool 内部再次 enforce_readonly + inject_limit，纵深防御）
     pool = ReadOnlyPool(source_cfg)
@@ -292,6 +426,9 @@ async def run_sql(req: SqlRunRequest) -> dict:
             },
         )
         raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        # 未知数据源类型等配置错误 → 400（BUGFIX #97）
+        raise HTTPException(status_code=400, detail=str(e))
     finally:
         await pool.close()
     elapsed_ms = int((time.perf_counter() - start) * 1000)
@@ -411,16 +548,22 @@ async def chart_recommend(req: ChartRecommendRequest) -> dict:
 
 @router.post("/export/{fmt}")
 async def export_data(fmt: str, req: ExportRequest) -> dict:
-    """导出（PII 脱敏 + 水印 + 审计）。优先按 task_id 服务端取数。"""
+    """导出（PII 脱敏 + 水印 + 审计）。优先按 task_id 服务端取数。
+
+    小结果集（≤ ROW_INLINE_MAX）内联返回不落 Parquet，result_data_ref 为空；
+    此时回退用请求体的 columns/rows（BUGFIX #104），不得直接 404。
+    """
     columns, rows = req.columns, req.rows
     if req.task_id:
         task = await get_default_storage().get_task(req.task_id)
         ref = (task or {}).get("result_data_ref", "")
-        if not task or not ref:
+        if task and ref:
+            df = load_result_parquet(ref)
+            columns = [str(c) for c in df.columns]
+            rows = df.values.tolist()
+        elif not columns and not rows:
             raise HTTPException(status_code=404, detail="task result not found")
-        df = load_result_parquet(ref)
-        columns = [str(c) for c in df.columns]
-        rows = df.values.tolist()
+        # task 缺失/无 ref 但请求体带数 → 回退内联数据（小结果集导出链路）
     elif not columns and not rows:
         raise HTTPException(status_code=400, detail="task_id 或 columns/rows 必须提供其一")
 

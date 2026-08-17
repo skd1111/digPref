@@ -134,6 +134,11 @@ def _row_to_backend(row: tuple) -> LLMBackend:
         capabilities = json.loads(caps) if caps else []
     except (json.JSONDecodeError, TypeError):
         capabilities = []
+    # max_context 未显式设置（NULL）→ 全局默认上下文长度回退（两级回退）
+    if max_ctx is None:
+        from agent.llm.gen_limits import default_context_window
+
+        max_ctx = default_context_window()
     return LLMBackend(
         name=name,
         type=type_,
@@ -141,7 +146,7 @@ def _row_to_backend(row: tuple) -> LLMBackend:
         model_name=model_name,
         api_key_ref=api_key_ref,
         capabilities=capabilities,
-        max_context=max_ctx if max_ctx is not None else 8192,
+        max_context=max_ctx,
         cost_per_1k_tokens=cost if cost is not None else 0.0,
         timeout_seconds=timeout if timeout is not None else 30,
         data_residency=residency or "local",

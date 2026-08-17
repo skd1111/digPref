@@ -18,6 +18,11 @@ class ExpertMember:
     responsibilities: list[str] = field(default_factory=list)  # 主要职责
     focus_points: list[str] = field(default_factory=list)  # 关注点
     outputs: list[str] = field(default_factory=list)  # 典型输出
+    # 交付物 → 表单模板（零 LLM 直开表单，2026-08-14）：
+    # {交付物名: [{name, label, type, options, hint, required}]}，字段语义与
+    # ops 草稿 template_json 一致（_ALLOWED_FIELD_TYPES）；未定义的交付物仍走
+    # 问专家 → LLM 生成草稿链路。
+    output_forms: dict[str, list[dict]] = field(default_factory=dict)
     prompt: str = ""  # 独立 prompt
 
     def to_dict(self) -> dict:
@@ -27,17 +32,25 @@ class ExpertMember:
             "responsibilities": list(self.responsibilities),
             "focus_points": list(self.focus_points),
             "outputs": list(self.outputs),
+            "output_forms": {k: list(v) for k, v in self.output_forms.items()},
             "prompt": self.prompt,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> ExpertMember:
+        raw_forms = data.get("output_forms", {})
+        output_forms: dict[str, list[dict]] = {}
+        if isinstance(raw_forms, dict):
+            for key, fields in raw_forms.items():
+                if isinstance(fields, list):
+                    output_forms[str(key)] = [f for f in fields if isinstance(f, dict)]
         return cls(
             name=data["name"],
             role=data["role"],
             responsibilities=list(data.get("responsibilities", [])),
             focus_points=list(data.get("focus_points", [])),
             outputs=list(data.get("outputs", [])),
+            output_forms=output_forms,
             prompt=data.get("prompt", ""),
         )
 

@@ -16,6 +16,7 @@
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ModelManagementPanel } from './settings/ModelManagementPanel';
+import { GenLimitsPanel } from './settings/GenLimitsPanel';
 import { DSparkSettingsPanel } from './settings/DSparkSettingsPanel';
 import { SecretsSettingPanel } from './settings/SecretsSettingPanel';
 import { TerminalSettingPanel } from './settings/TerminalSettingPanel';
@@ -26,13 +27,16 @@ import { ExpertTeamsPanel } from '@/components/expert-teams/ExpertTeamsPanel';
 import { RouterDashboard } from '@/components/router/RouterDashboard';
 import { CodeNavSettingsPanel } from '@/components/codenav/CodeNavSettingsPanel';
 import { ToolchainSettingsPanel } from './settings/ToolchainSettingsPanel';
+import { WorkspaceSettingsPanel } from './settings/WorkspaceSettingsPanel';
 import { AdvancedSettingsPanel } from './settings/AdvancedSettingsPanel';
 
-type SectionId = 'envs' | 'models' | 'dspark' | 'secrets' | 'terminal' | 'about' | 'skills' | 'expert-teams' | 'router' | 'codenav' | 'toolchain' | 'advanced';
+type SectionId = 'envs' | 'models' | 'gen-limits' | 'dspark' | 'secrets' | 'terminal' | 'about' | 'skills' | 'expert-teams' | 'router' | 'codenav' | 'toolchain' | 'workspace' | 'advanced';
 
 const SECTIONS: { id: SectionId; label: string; icon: string }[] = [
   { id: 'envs', label: 'Environments', icon: '🌍' },
+  { id: 'workspace', label: '工作空间', icon: '📁' },
   { id: 'models', label: '模型管理', icon: '🧠' },
+  { id: 'gen-limits', label: '模型与回复', icon: '💬' },
   { id: 'dspark', label: 'DSpark 推测解码', icon: '⚡' },
   { id: 'secrets', label: 'Secrets', icon: '🔑' },
   { id: 'terminal', label: 'Terminal', icon: '⌨' },
@@ -45,7 +49,7 @@ const SECTIONS: { id: SectionId; label: string; icon: string }[] = [
   { id: 'advanced', label: '高级设置', icon: '⚙' },  // 推理模式 + 会话自主性（2026-08-05）
 ];
 
-const KNOWN_SEGS: SectionId[] = ['envs', 'models', 'dspark', 'secrets', 'terminal', 'about', 'skills', 'expert-teams', 'router', 'codenav', 'toolchain', 'advanced'];
+const KNOWN_SEGS: SectionId[] = ['envs', 'models', 'gen-limits', 'dspark', 'secrets', 'terminal', 'about', 'skills', 'expert-teams', 'router', 'codenav', 'toolchain', 'workspace', 'advanced'];
 
 export function SettingsView(): JSX.Element {
   const location = useLocation();
@@ -146,6 +150,7 @@ export function SettingsView(): JSX.Element {
         <main className="flex-1 overflow-auto p-6">
           {active === 'envs' && <EnvironmentsSettingPanel />}
           {active === 'models' && <ModelManagementPanel />}
+          {active === 'gen-limits' && <GenLimitsPanel />}
           {active === 'dspark' && <DSparkSettingsPanel />}
           {active === 'secrets' && <SecretsSettingPanel />}
           {active === 'terminal' && <TerminalSettingPanel />}
@@ -155,6 +160,7 @@ export function SettingsView(): JSX.Element {
           {active === 'router' && <RouterDashboard />}
           {active === 'codenav' && <CodeNavSettingsPanel />}
           {active === 'toolchain' && <ToolchainSettingsPanel />}
+          {active === 'workspace' && <WorkspaceSettingsPanel />}
           {active === 'advanced' && <AdvancedSettingsPanel />}
         </main>
       </div>

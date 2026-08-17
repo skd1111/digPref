@@ -663,7 +663,7 @@ class TestLocalOnlyTasksV1:
         assert "builtin_search_summarize" in _LOCAL_ONLY_TASKS
 
     def test_all_local_only_tasks_count(self):
-        """16 个本地任务：原有 14 + decompose + tool_orchestrate（编排决策接触用户内容）。"""
+        """17 个本地任务：原 16 + Phase 7 v2.87 新增 metric_resolve。"""
         from agent.llm.router import _LOCAL_ONLY_TASKS
 
         # 2026-07-29 末态：8 个；Phase 1B V1 (2026-07-30) 新增 2 → 10；
@@ -671,7 +671,9 @@ class TestLocalOnlyTasksV1:
         # Phase 2B V0 (2026-07-31) 新增 ssh_command_summary → 12；
         # Phase 7 V0 (2026-07-31) 新增 schema_link + chart_reco → 14；
         # Phase 12 V2 (2026-08-03) 新增 decompose → 15；动态工具编排 tool_orchestrate → 16
-        assert len(_LOCAL_ONLY_TASKS) == 16, f"got {_LOCAL_ONLY_TASKS}"
+        # v2.87 (2026-08-13) Phase 7 MetricResolver 抽象层新增 metric_resolve → 17
+        # (2026-08-17) 会话历史压缩 history_compress 入本地红线 → 18
+        assert len(_LOCAL_ONLY_TASKS) == 18, f"got {_LOCAL_ONLY_TASKS}"
 
 
 # ---- stream.py SSE 三处同步 ----------------------------------------------------

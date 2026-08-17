@@ -4,19 +4,28 @@
  * V1 实现：@tanstack/react-virtual 虚拟滚动，支撑 10 万行 60fps。
  * 设计红线（design §4/§13）：严禁整表进 React DOM，仅渲染可视区域行。
  * 条件格式：负数标红（呼应 Excel 导出条件格式）。
+ * 缩放（BUGFIX #105）：zoomed=true 时行高/字号放大（放大视图用）。
  */
 import { useRef, useCallback } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useDataStore, cellFor } from '@/store/dataStore';
 
-const ROW_HEIGHT = 28;
-const HEADER_HEIGHT = 30;
-
-export function DataGrid(): JSX.Element {
+export function DataGrid({
+  zoomed = false,
+  onZoom,
+}: {
+  zoomed?: boolean;
+  onZoom?: () => void;
+}): JSX.Element {
   const result = useDataStore((s) => s.result);
   const running = useDataStore((s) => s.running);
   const streaming = useDataStore((s) => s.streaming);
   const parentRef = useRef<HTMLDivElement>(null);
+
+  // 放大视图：行高 28→40、表头 30→40、字号 12px→15px（看得清）
+  const rowHeight = zoomed ? 40 : 28;
+  const headerHeight = zoomed ? 40 : 30;
+  const cellFont = zoomed ? '15px' : undefined;
 
   // 行数只进元数据（列存形态下行数据不进 rows 数组）
   const rowCount = result?.rowCount ?? 0;
@@ -24,7 +33,7 @@ export function DataGrid(): JSX.Element {
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => ROW_HEIGHT,
+    estimateSize: () => rowHeight,
     overscan: 20,
   });
 
@@ -40,15 +49,16 @@ export function DataGrid(): JSX.Element {
             color: negative ? '#cd3131' : num ? '#b5cea8' : '#1f1f1f',
             textAlign: num ? 'right' : 'left',
             borderBottom: '1px solid #e0e0e0',
-            height: ROW_HEIGHT,
-            lineHeight: `${ROW_HEIGHT}px`,
+            height: rowHeight,
+            lineHeight: `${rowHeight}px`,
+            ...(cellFont ? { fontSize: cellFont } : {}),
           }}
         >
           {cell}
         </td>
       );
     },
-    [],
+    [rowHeight, cellFont],
   );
 
   return (
@@ -56,12 +66,25 @@ export function DataGrid(): JSX.Element {
       <PanelHeader
         title="📋 数据网格"
         right={
-          result ? (
-            <span className="text-2xs" style={{ color: '#616161' }}>
-              {result.rowCount.toLocaleString()} 行 · {result.elapsedMs}ms
-              {result.truncated ? ' · ⚠ 已截断' : ''}
-            </span>
-          ) : null
+          <div className="flex items-center gap-2">
+            {result ? (
+              <span className="text-2xs" style={{ color: '#616161' }}>
+                {result.rowCount.toLocaleString()} 行 · {result.elapsedMs}ms
+                {result.truncated ? ' · ⚠ 已截断' : ''}
+              </span>
+            ) : null}
+            {onZoom ? (
+              <button
+                type="button"
+                onClick={onZoom}
+                className="rounded px-1.5 text-2xs transition-all hover:brightness-95"
+                style={{ backgroundColor: '#ececec', color: '#333333' }}
+                title={zoomed ? '退出放大' : '放大查看'}
+              >
+                ⛶
+              </button>
+            ) : null}
+          </div>
         }
       />
 
@@ -72,7 +95,7 @@ export function DataGrid(): JSX.Element {
       ) : (
         <div className="flex flex-1 flex-col overflow-hidden">
           {/* 固定表头 */}
-          <div className="flex-shrink-0 overflow-hidden" style={{ height: HEADER_HEIGHT }}>
+          <div className="flex-shrink-0 overflow-hidden" style={{ height: headerHeight }}>
             <table className="w-full border-collapse">
               <thead>
                 <tr>
@@ -84,8 +107,9 @@ export function DataGrid(): JSX.Element {
                         backgroundColor: '#ececec',
                         color: '#333333',
                         borderBottom: '1px solid #d4d4d4',
-                        height: HEADER_HEIGHT,
-                        lineHeight: `${HEADER_HEIGHT}px`,
+                        height: headerHeight,
+                        lineHeight: `${headerHeight}px`,
+                        ...(zoomed ? { fontSize: '14px' } : {}),
                       }}
                     >
                       {c}

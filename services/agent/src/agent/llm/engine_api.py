@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, Body, HTTPException
@@ -25,6 +26,7 @@ from agent.codenav.llm_client import reset_default_client as _reset_codenav_clie
 from agent.llm.budget import BudgetController
 from agent.llm.circuit_breaker import CircuitBreakerRegistry
 from agent.llm.engine import RouterEngine
+from agent.llm.gen_limits import load_gen_limits, save_gen_limits
 from agent.llm.metrics import MetricsRecorder
 from agent.llm.models import LLMBackend, RoutingDecision, Sensitivity, TaskCategory
 from agent.llm.router import LMRouter
@@ -392,6 +394,45 @@ async def reload_max_context_endpoint() -> dict:
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"reload failed: {e}")
+
+
+# ---- 生成限制（两级回退：全局默认 ← 每模型值） ---------------------------
+
+
+class GenLimitsBody(BaseModel):
+    """PUT /router/gen-limits body：只传需要改的字段（稀疏 patch）。"""
+
+    max_output_tokens: int | None = Field(default=None, ge=1, le=1_000_000)
+    default_context_window: int | None = Field(default=None, ge=1024, le=10_000_000)
+
+
+@router.get("/gen-limits")
+async def get_gen_limits() -> dict[str, Any]:
+    """读全局生成限制（最大输出长度 / 默认上下文长度）。"""
+    return {"ok": True, "limits": load_gen_limits()}
+
+
+@router.put("/gen-limits")
+async def put_gen_limits(body: GenLimitsBody) -> dict[str, Any]:
+    """写全局生成限制（llm_kv.gen_limits）+ 热生效到 LMRouter 客户端。
+
+    语义：max_output_tokens 是输出上限（cap），只降不升调用点预算；
+    default_context_window 是后端 max_context 未显式设置时的回退。
+    """
+    patch = {k: v for k, v in body.model_dump().items() if v is not None}
+    try:
+        limits = save_gen_limits(patch)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    # 热生效：复用 reload_max_context（内部同步重读 gen_limits）
+    try:
+        from agent.main import get_runtime
+
+        get_runtime().llm.reload_max_context()
+    except Exception as e:
+        logger.warning("gen_limits_hot_reload_skipped err=%s", e)
+    logger.info("gen_limits_updated %s", limits)
+    return {"ok": True, "limits": limits}
 
 
 # ---- 测试连接（不落库，真实探测） ----------------------------------------

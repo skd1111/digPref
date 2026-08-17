@@ -104,6 +104,42 @@ def test_export_unknown_task_404(client):
     assert r.status_code == 404
 
 
+def test_export_inline_task_fallback_to_body(client):
+    """BUGFIX #104：小结果集内联不落 Parquet（result_data_ref 为空），
+    导出带 task_id + 请求体数据时必须回退用请求体，不得 404。"""
+    df = pd.DataFrame({"n": [1, 2, 3]})
+    with patch("agent.dataexpert.api.ReadOnlyPool") as pool_cls:
+        pool_cls.return_value.execute_sql = AsyncMock(return_value=df)
+        pool_cls.return_value.close = AsyncMock()
+        r = client.post(
+            "/data/sql/run",
+            json={
+                "sql": "SELECT n FROM t WHERE n <= 3",
+                "connection": {"type": "sqlite", "path": ":memory:"},
+            },
+        )
+    body = r.json()
+    assert body["row_count"] == 3
+    task_id = body["task_id"]
+    # 前端真实调用形态：task_id + 内联 columns/rows 同传
+    r2 = client.post(
+        "/data/export/csv",
+        json={"task_id": task_id, "columns": ["n"], "rows": [[1], [2], [3]], "title": "小表"},
+    )
+    assert r2.status_code == 200
+    assert r2.json()["row_count"] == 3
+
+
+def test_export_unknown_task_with_body_fallback(client):
+    """task 不存在但请求体带数 → 回退导出（前端内联结果兼容）。"""
+    r = client.post(
+        "/data/export/csv",
+        json={"task_id": "nope", "columns": ["a"], "rows": [[1]]},
+    )
+    assert r.status_code == 200
+    assert r.json()["row_count"] == 1
+
+
 def test_export_without_anything_400(client):
     r = client.post("/data/export/csv", json={})
     assert r.status_code == 400

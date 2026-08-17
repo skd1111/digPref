@@ -182,3 +182,75 @@ describe('chatStore 模式隔离', () => {
     expect(created?.mode).toBe('operator');
   });
 });
+
+describe('chatStore cleanMode（纯净对话，2026-08-14）', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useChatStore.setState((s) => ({
+      tabs: [
+        { id: 'tab-a', title: '会话A', messages: [] },
+        { id: 'tab-b', title: '会话B', messages: [] },
+      ],
+      activeTabId: 'tab-a',
+      busy: false,
+      runId: null,
+      inferenceMode: s.inferenceMode,
+    }));
+  });
+
+  it('setTabCleanMode 只影响目标页签', () => {
+    useChatStore.getState().setTabCleanMode('tab-a', true);
+    const s = useChatStore.getState();
+    expect(s.tabs.find((t) => t.id === 'tab-a')?.cleanMode).toBe(true);
+    expect(s.tabs.find((t) => t.id === 'tab-b')?.cleanMode).toBeFalsy();
+  });
+
+  it('cleanMode 随 tabs 持久化（重启不丢）', () => {
+    useChatStore.getState().setTabCleanMode('tab-a', true);
+    const state = persistedState();
+    const tabs = state?.tabs as Array<{ id: string; cleanMode?: boolean }>;
+    expect(tabs.find((t) => t.id === 'tab-a')?.cleanMode).toBe(true);
+  });
+
+  it('关闭后回落无值（等同普通会话）', () => {
+    useChatStore.getState().setTabCleanMode('tab-a', true);
+    useChatStore.getState().setTabCleanMode('tab-a', false);
+    expect(useChatStore.getState().tabs.find((t) => t.id === 'tab-a')?.cleanMode).toBe(false);
+  });
+});
+
+describe('chatStore chatModel（会话模型选择，2026-08-17）', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useChatStore.setState((s) => ({
+      tabs: [
+        { id: 'tab-a', title: '会话A', messages: [] },
+        { id: 'tab-b', title: '会话B', messages: [] },
+      ],
+      activeTabId: 'tab-a',
+      busy: false,
+      runId: null,
+      inferenceMode: s.inferenceMode,
+    }));
+  });
+
+  it('setTabChatModel 只影响目标页签', () => {
+    useChatStore.getState().setTabChatModel('tab-a', 'rd-llama');
+    const s = useChatStore.getState();
+    expect(s.tabs.find((t) => t.id === 'tab-a')?.chatModel).toBe('rd-llama');
+    expect(s.tabs.find((t) => t.id === 'tab-b')?.chatModel).toBeUndefined();
+  });
+
+  it('传 null 回落默认（字段被剥掉）', () => {
+    useChatStore.getState().setTabChatModel('tab-a', 'rd-llama');
+    useChatStore.getState().setTabChatModel('tab-a', null);
+    expect(useChatStore.getState().tabs.find((t) => t.id === 'tab-a')?.chatModel).toBeUndefined();
+  });
+
+  it('chatModel 随 tabs 持久化（重启不丢）', () => {
+    useChatStore.getState().setTabChatModel('tab-a', 'rd-llama');
+    const state = persistedState();
+    const tabs = state?.tabs as Array<{ id: string; chatModel?: string }>;
+    expect(tabs.find((t) => t.id === 'tab-a')?.chatModel).toBe('rd-llama');
+  });
+});

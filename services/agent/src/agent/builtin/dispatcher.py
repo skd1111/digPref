@@ -30,6 +30,41 @@ from agent.builtin.registry import get_default_registry
 # 兼容 V0 import（外部代码 `from agent.builtin.dispatcher import dispatcher` 不变）
 __all__ = ["ToolDispatcher", "dispatcher", "reset_default_dispatcher"]
 
+# 底层规则（用户要求 2026-08-17）：创建类工具的输出路径默认落当前工作空间，
+# 按类型自动分类建目录；用户显式指定绝对路径时尊重用户。写类工具的目标
+# 路径键名（write_file/edit_file=path；pdf_split 的 output_dir 是目录同理）。
+_CREATE_TOOL_PATH_KEYS: dict[str, tuple[str, ...]] = {
+    "write_file": ("path",),
+    "edit_file": ("path",),
+    "word_generate": ("path",),
+    "excel_export": ("path",),
+    "pdf_merge": ("output",),
+    "pdf_split": ("output_dir",),
+}
+
+
+def _apply_workspace_rule(name: str, args: dict) -> dict:
+    """创建类工具输出路径 → 当前工作空间（分类建目录）。
+
+    在 dispatch 入口统一改写 args，Rust 桥 / Python 执行 / 兜底三条链路
+    一并生效，且 SSE / 审计 / 思维链记录的都是改写后的真实落盘路径。
+    """
+    keys = _CREATE_TOOL_PATH_KEYS.get(name)
+    if not keys:
+        return args
+    try:
+        from agent.paths import resolve_output_path
+
+        rewritten = dict(args)
+        for key in keys:
+            raw = rewritten.get(key)
+            if isinstance(raw, str) and raw.strip():
+                rewritten[key] = str(resolve_output_path(raw.strip()))
+        return rewritten
+    except Exception:
+        # 工作空间解析失败不阻断工具执行（回退原路径，沙箱校验仍会兜底）
+        return args
+
 
 class ToolDispatcher:
     """内置工具统一调度器。
@@ -107,6 +142,8 @@ class ToolDispatcher:
 
         name = call.get("name") or ""
         args = call.get("args") or {}
+        # 底层规则：创建类文件默认落当前工作空间（用户指定绝对路径除外）
+        args = _apply_workspace_rule(name, args)
         run_id = state.get("run_id") if isinstance(state, dict) else None
         operator = state.get("operator") if isinstance(state, dict) else None
 

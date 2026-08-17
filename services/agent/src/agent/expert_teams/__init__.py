@@ -4,7 +4,7 @@
 - 团级：id / name / 适用场景 / 触发关键词
 - 成员级：名称 / 角色定位 / 职责 / 关注点 / 输出 / 独立 prompt
 
-存储：%APPDATA%\\eaide\\expert_teams\\*.yaml（与 skills 同模式：
+存储：<数据根>/expert_teams/*.yaml（BUGFIX #98：生产=安装目录，与 skills 同模式：
 启动一次扫描 + 导入触发 load_one()，无 watchdog）。
 """
 

@@ -73,7 +73,7 @@ async def test_generate_review_uses_enabled_cloud_backend(monkeypatch):
     captured = {}
 
     class FakeCloud:
-        def __init__(self, *, base_url, api_key, model, max_context=None):
+        def __init__(self, *, base_url, api_key, model, max_context=None, max_output_tokens=None):
             captured["base_url"] = base_url
             captured["api_key"] = api_key
             captured["model"] = model

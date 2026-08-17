@@ -17,6 +17,8 @@ import os
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from agent.paths import data_root
+
 from .models import DictItem
 from .storage import DictStorage
 
@@ -26,10 +28,8 @@ router = APIRouter(prefix="/dict", tags=["dict"])
 
 
 def _default_db_path() -> str:
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        return os.path.join(appdata, "eaide", "dict.db")
-    return os.path.expanduser("~/.eaide/dict.db")
+    # BUGFIX #98：统一落数据根（生产=安装目录）
+    return str(data_root() / "dict.db")
 
 
 _storage: DictStorage | None = None

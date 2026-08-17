@@ -33,6 +33,30 @@ EXPERT_TEAM_JSON_SCHEMA: dict = {
                     "responsibilities": {"type": "array", "items": {"type": "string"}},
                     "focus_points": {"type": "array", "items": {"type": "string"}},
                     "outputs": {"type": "array", "items": {"type": "string"}},
+                    "output_forms": {
+                        "type": "object",
+                        "maxProperties": 30,
+                        "additionalProperties": {
+                            "type": "array",
+                            "maxItems": 20,
+                            "items": {
+                                "type": "object",
+                                "required": ["name", "label"],
+                                "properties": {
+                                    "name": {"type": "string", "minLength": 1, "maxLength": 64},
+                                    "label": {"type": "string", "minLength": 1, "maxLength": 64},
+                                    "type": {"type": "string"},
+                                    "options": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "maxItems": 20,
+                                    },
+                                    "hint": {"type": "string", "maxLength": 200},
+                                    "required": {"type": "boolean"},
+                                },
+                            },
+                        },
+                    },
                     "prompt": {"type": "string", "maxLength": 4000},
                 },
             },

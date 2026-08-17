@@ -1,12 +1,12 @@
 """专家团 loader —— 启动扫描 + 手动 load_one/remove（仿 skills/loader.py）。
 
-存储目录：%APPDATA%\\eaide\\expert_teams（与 skills 目录同父级）。
+存储目录：<数据根>/expert_teams（BUGFIX #98：生产环境数据根 = 安装目录，
+与 config/ 同父级；解析见 agent/paths.py）。
 """
 
 from __future__ import annotations
 
 import logging
-import os
 import time
 from pathlib import Path
 
@@ -14,14 +14,14 @@ import yaml
 
 from agent.expert_teams.models import ExpertTeam
 from agent.expert_teams.schema import validate_expert_team_yaml
+from agent.paths import data_root
 
 logger = logging.getLogger(__name__)
 
 
 def _default_expert_teams_dir() -> Path:
-    """跟随 envconfig / skills 约定（%APPDATA%\\eaide\\expert_teams）。"""
-    appdata = os.environ.get("APPDATA", str(Path.home()))
-    return Path(appdata) / "eaide" / "expert_teams"
+    """数据根下的 expert_teams/（生产=安装目录，BUGFIX #98）。"""
+    return data_root() / "expert_teams"
 
 
 EXPERT_TEAMS_DIR = _default_expert_teams_dir()

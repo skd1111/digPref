@@ -232,6 +232,14 @@ class Settings(BaseSettings):
     builtin_http_timeout_sec: float = Field(default=10.0, ge=1.0, le=120.0)
     builtin_http_max_bytes: int = Field(default=1024 * 1024, ge=1024, le=10 * 1024 * 1024)
 
+    # ---- 工具结果剪枝与 spill 落盘（借鉴 dsh；2026-08-14）----
+    # 超大只读工具结果全文落盘 + 内联替换为「头尾预览 + 定位符」
+    tool_spill_enabled: bool = True
+    # 触发阈值（字符）：替换后内联内容固定 ≤ ~3400，不会超出 tool_loop_max_result_chars 预算
+    tool_spill_threshold_chars: int = Field(default=4000, ge=500, le=200000)
+    # spill 文件目录（相对路径 → 测试 chdir 自动隔离，与 router.db 同机制）
+    tool_spill_dir: str = "spill"
+
     # ---- Phase 16 思维链可视化与文件操作追踪 ----
     # 思维链 SQLite 路径（与 audit / router / knowledge 等 db 物理隔离）
     trace_db_path: str = "trace.db"
@@ -241,6 +249,13 @@ class Settings(BaseSettings):
     # ---- Phase 18 双框架 ----
     # 工具链路径配置（单文件 JSON：python/node/pnpm/java/javac/tsc 等本机路径）
     toolchain_config_path: str = "toolchain.json"
+    # 工作空间路径配置（单文件 JSON：{"path": ...}；空 = 默认数据根/workspace）
+    workspace_config_path: str = "workspace.json"
+    # 工作空间内分类子目录名（docs/data/images/other；改键名即改目录名）
+    workspace_subdir_docs: str = "docs"
+    workspace_subdir_data: str = "data"
+    workspace_subdir_images: str = "images"
+    workspace_subdir_other: str = "other"
 
 
 settings = Settings()

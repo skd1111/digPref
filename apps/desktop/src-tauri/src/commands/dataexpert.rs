@@ -12,6 +12,35 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
+/// 从 systems.yaml 解析数据源连接；失败/不完整时带原因直接报错（2026-08-14）。
+///
+/// 此前 `unwrap_or({})` 静默吞掉解析失败，Agent 只能报笼统的 400
+/// 「缺少数据源连接配置」，用户无法定位是哪里断了。现在：
+///   - 资产不存在 / keyring 引用解析失败 → 报错带具体原因
+///   - 关键字段缺失（db_type 或 host/path）→ fail-fast，不发请求
+fn resolve_or_explain(state: &State<'_, AppState>, sid: &str) -> AppResult<Value> {
+    let cfg = crate::commands::asset::resolve_connection_config(state, sid).map_err(|e| {
+        AppError::Config(format!(
+            "数据源连接解析失败：{}。请打开「系统资产」编辑数据源「{}」，补齐连接信息（密码为钥匙串引用时确认对应凭证存在）",
+            e, sid
+        ))
+    })?;
+    let non_empty = |key: &str| -> bool {
+        cfg.get(key)
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| !s.trim().is_empty())
+    };
+    let db_type_ok = non_empty("type");
+    let has_endpoint = non_empty("host") || non_empty("path"); // sqlite 用 path，其余用 host
+    if !db_type_ok || !has_endpoint {
+        return Err(AppError::Config(format!(
+            "数据源配置不完整（缺 db_type 或 host/path）。请打开「系统资产」编辑数据源「{}」补齐后重试",
+            sid
+        )));
+    }
+    Ok(cfg)
+}
+
 /// GET /data/sources —— 数据源列表
 #[tauri::command]
 pub async fn data_list_sources(state: State<'_, AppState>) -> AppResult<Value> {
@@ -26,8 +55,7 @@ pub async fn data_sync_schema(
     source_id: String,
 ) -> AppResult<Value> {
     let path = format!("/data/sources/{}/sync", source_id);
-    let connection = crate::commands::asset::resolve_connection_config(&state, &source_id)
-        .unwrap_or(serde_json::json!({}));
+    let connection = resolve_or_explain(&state, &source_id)?;
     let resp = state
         .agent_post(&path, serde_json::json!({ "connection": connection }))
         .await?;
@@ -57,13 +85,22 @@ pub async fn data_run_sql(
     source_id: Option<String>,
     confirmed: Option<bool>,
 ) -> AppResult<Value> {
-    // 从 systems.yaml 解析数据源连接（keyring 密码已解），凭证只在内存传递
+    // 从 systems.yaml 解析数据源连接（keyring 密码已解），凭证只在内存传递；
+    // 解析失败/配置不完整 → 直接带原因报错，不再静默发空配置给 Agent（2026-08-14）
+    //
+    // BUGFIX #52（2026-08-14）：source_id 为空时也要 fail-fast，
+    // 不再静默走「connection={} + source_id=""」触发后端笼统 400。
+    // 用户在数据专家模式未选数据源就点「执行」→ 直接告诉他「请先在左侧
+    // 数据源列表选择一个数据源」，而不是把他引向一个看似是「数据源连接配置
+    // 缺失」的误导文案。
     let connection = match source_id.as_deref() {
-        Some(sid) if !sid.is_empty() => {
-            crate::commands::asset::resolve_connection_config(&state, sid)
-                .unwrap_or(serde_json::json!({}))
+        Some(sid) if !sid.is_empty() => resolve_or_explain(&state, sid)?,
+        _ => {
+            return Err(AppError::Config(
+                "未选择数据源。请在左侧「数据源 / 表结构」列表中点击选择一个数据源后再执行查询"
+                    .to_string(),
+            ));
         }
-        _ => serde_json::json!({}),
     };
     let body = serde_json::json!({
         "sql": sql,

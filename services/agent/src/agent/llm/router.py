@@ -30,7 +30,6 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -45,6 +44,7 @@ from agent.llm.fallback import (
     LLMUnavailableError,
     with_fallback,
 )
+from agent.llm.gen_limits import load_gen_limits
 from agent.llm.json_discipline import extract_json
 from agent.llm.local_small import LocalSmallLLMClient
 from agent.llm.metrics import emit_router_event
@@ -52,6 +52,7 @@ from agent.llm.mock import MockLLMClient
 from agent.llm.normalize import build_response_cache_key
 from agent.llm.ollama import OllamaClient, OllamaUnavailableError
 from agent.llm.private_llm import PrivateLLMClient
+from agent.llm.prompts import current_time_text
 from agent.llm.types import Intent, TaskKind
 from agent.prompts import (
     DYNAMIC_TOOL_ORCHESTRATOR_PROMPT,
@@ -174,11 +175,15 @@ def _load_max_context_from_db() -> tuple[int | None, int | None]:
                 # local 后端的 model 以模型管理为准（与 load_enabled_local_backend 同源），
                 # 不再要求与 settings.ollama_model 同名，否则自定义模型时 max_context 失配
                 local_model = load_enabled_local_backend()[1]
+                from agent.llm.gen_limits import default_context_window
+
+                ctx_fallback = default_context_window()
                 for model_name, btype, max_ctx in cur.fetchall():
                     if btype == "local" and model_name == local_model:
-                        ollama_ctx = max_ctx
+                        # 行存在但 max_context 未显式设置（NULL）→ 全局默认回退（两级回退）
+                        ollama_ctx = max_ctx if max_ctx is not None else ctx_fallback
                     elif btype == "private" and model_name == (settings.private_llm_model or ""):
-                        private_ctx = max_ctx
+                        private_ctx = max_ctx if max_ctx is not None else ctx_fallback
                 return ollama_ctx, private_ctx
             finally:
                 conn.close()
@@ -553,6 +558,12 @@ _LOCAL_ONLY_TASKS: frozenset[TaskKind] = frozenset(
         "schema_link",  # 表结构 + 字段注释可能敏感
         "chart_reco",  # 图表推荐会看数据样本（可能含 PII）
         # "data_summary" 已在上方（Phase 12 时加入）
+        # Phase 7 v2.87 (2026-08-13): MetricResolver 抽象层 —— 指标识别含业务字典翻译
+        # （可能涉及敏感表结构 / 字段注释 / 客户口径），强制本地 Ollama 优先
+        "metric_resolve",
+        # 会话历史压缩 (2026-08-17)：旧对话含用户原始内容（可能含 PII / 业务敏感信息）
+        # → 本地优先，不可用时才降级（与 intent / decompose 同红线语义）
+        "history_compress",
     }
 )
 
@@ -760,6 +771,8 @@ class LMRouter:
         self.mock = MockLLMClient()
         # 从 router.db 读后端配置（含 max_context）；失败走 settings 默认
         self._ollama_max_ctx, self._private_max_ctx = _load_max_context_from_db()
+        # 全局生成限制（最大输出长度 / 默认上下文长度，llm_kv.gen_limits）
+        self._gen_limits = load_gen_limits()
         # 端侧 Ollama 地址/模型优先用「模型管理」（router.db 已启用的 local 后端），
         # 支持自定义 URL/端口；未配置时回退 settings.ollama_*（环境变量/默认）
         _local_url, _local_model = load_enabled_local_backend()
@@ -769,6 +782,7 @@ class LMRouter:
             max_context=self._ollama_max_ctx,
             # 未配置端侧模型 → 零探测零等待，降级链直接走下一级（BUGFIX #89）
             enabled=_ollama_enabled_from_db(),
+            max_output_tokens=self._gen_limits["max_output_tokens"],
         )
         self.private = (
             PrivateLLMClient(
@@ -776,6 +790,7 @@ class LMRouter:
                 api_key=settings.private_llm_api_key,
                 model=settings.private_llm_model or "",
                 max_context=self._private_max_ctx,
+                max_output_tokens=self._gen_limits["max_output_tokens"],
             )
             if settings.private_llm_base_url and settings.private_llm_api_key
             else None
@@ -787,6 +802,9 @@ class LMRouter:
         )
         # Phase 4 V0：推理模式 —— "normal"（端侧优先）或 "performance"（直走云端）
         self._inference_mode: Literal["normal", "performance"] = "normal"
+        # chat 会话模型 override（2026-08-17）：输入框模型选择器选中时由
+        # /chat/{run_id}/stream 设入；None = 按模型管理路由配置（默认行为）
+        self._chat_model_override: str | None = None
         self._mock_mode = _is_mock_mode()
 
     def reload_max_context(self) -> None:
@@ -801,6 +819,11 @@ class LMRouter:
             self.ollama.max_context = ollama_ctx
         if private_ctx is not None and self.private is not None:
             self.private.max_context = private_ctx
+        # 全局生成限制热重载（最大输出长度 / 默认上下文长度）
+        self._gen_limits = load_gen_limits()
+        self.ollama.max_output_tokens = self._gen_limits["max_output_tokens"]
+        if self.private is not None:
+            self.private.max_output_tokens = self._gen_limits["max_output_tokens"]
         local_url, local_model = load_enabled_local_backend()
         self.ollama.base_url = local_url.rstrip("/")
         self.ollama.model = local_model
@@ -838,6 +861,69 @@ class LMRouter:
             raise ValueError(f"invalid inference_mode: {mode}")
         self._inference_mode = mode
         logger.info("router_inference_mode mode=%s", mode)
+
+    # ---- chat 会话模型 override（2026-08-17）---------------------------------
+
+    @property
+    def chat_model_override(self) -> str | None:
+        return self._chat_model_override
+
+    def set_chat_model_override(self, name: str | None) -> None:
+        """设置 chat 会话级模型 override（模型管理注册表 backend 名）。
+
+        非空时 summarise（回答智能）降级链置顶该模型，优先级高于模型管理
+        路由配置；失败仍降级到默认链（对话不断摆）。None/空串 = 清除，
+        回落模型管理配置。intent/decompose 属 _LOCAL_ONLY_TASKS 敏感红线，
+        不受 override 影响；mock 模式压倒一切（既有语义不变）。
+        桌面单用户，会话级语义与 set_inference_mode 同先例。
+        """
+        cleaned = (name or "").strip() or None
+        if cleaned != self._chat_model_override:
+            logger.info("router_chat_model_override name=%s", cleaned)
+        self._chat_model_override = cleaned
+
+    async def _build_override_client(self) -> Any | None:
+        """按 override 名从模型管理注册表构建客户端；未设置/未启用/查不到返 None。
+
+        local → OllamaClient；private/cloud → PrivateLLMClient（OpenAI 兼容，
+        与 _build_private_client / _build_cloud_client 同款构建）。
+        """
+        name = self._chat_model_override
+        if not name or self._mock_mode:
+            return None
+        from agent.llm.storage import list_backends
+
+        try:
+            backends = await list_backends(enabled_only=True)
+        except Exception as exc:
+            logger.warning("chat_model_override registry lookup failed: %s", exc)
+            return None
+        for backend in backends:
+            if backend.name != name:
+                continue
+            base_url = backend.base_url.rstrip("/")
+            if base_url.endswith("/chat/completions"):
+                base_url = base_url[: -len("/chat/completions")]
+            if backend.type == "local":
+                return OllamaClient(
+                    base_url=base_url,
+                    model=backend.model_name,
+                    max_context=backend.max_context,
+                    enabled=True,
+                    max_output_tokens=self._gen_limits["max_output_tokens"],
+                )
+            client = PrivateLLMClient(
+                base_url=base_url,
+                api_key=backend.api_key_ref or "",
+                model=backend.model_name,
+                max_context=backend.max_context,
+                max_output_tokens=self._gen_limits["max_output_tokens"],
+            )
+            # Token 计量区分来源（与 _build_cloud_client 同款做法）
+            client.usage_label = f"override:{name}"
+            return client
+        logger.warning("chat_model_override backend not found/enabled: %s", name)
+        return None
 
     # ---- Chain construction -------------------------------------------------
 
@@ -989,6 +1075,9 @@ class LMRouter:
         client = self.pick(task)
         if not self._mock_mode and task in _LOCAL_ONLY_TASKS and client is self.ollama:
             return await self._route_local_first(task=task, prompt=prompt)
+        if self._mock_mode and task == "history_compress":
+            # mock 分支：返回确定性占位摘要（不走 summarise 模板，避免 JSON 包裹）
+            return "【mock】历史对话已压缩为摘要占位文本。"
         answer, _ = await self.summarise(
             intent="query",
             user_prompt=prompt,
@@ -1128,6 +1217,7 @@ class LMRouter:
                     api_key=backend.api_key_ref or "",
                     model=backend.model_name,
                     max_context=backend.max_context,
+                    max_output_tokens=load_gen_limits()["max_output_tokens"],
                 )
                 client.usage_label = "cloud"  # Token 计量区分内网 / 云端
                 return client
@@ -1154,6 +1244,7 @@ class LMRouter:
                     api_key=backend.api_key_ref or "",
                     model=backend.model_name,
                     max_context=backend.max_context,
+                    max_output_tokens=load_gen_limits()["max_output_tokens"],
                 )
         return None
 
@@ -1207,43 +1298,68 @@ class LMRouter:
         self._native_probe_cache = result
         return result
 
-    async def analyze_intent(self, text: str, history: list | None = None):
+    async def analyze_intent(self, text: str, history: list | None = None, page_context: str = ""):
         """结构化意图分析（Intent Router，2026-08-06）。
 
-        返回 IntentAnalysis：四分类 intent（下游兼容）+ 改写句 + 细分类型 +
-        实体 + 缺失字段 + 追问信号 + 风险等级。接触用户原始内容 →
-        与 intent 同属 _LOCAL_ONLY_TASKS 本地红线（只走 ollama / private）。
+        返回 IntentAnalysis.to_dict()（dict，与 semantic_route 返回契约一致）：
+        四分类 intent（下游兼容）+ 改写句 + 细分类型 + 实体 + 缺失字段 +
+        追问信号 + 风险等级。接触用户原始内容 → 与 intent 同属
+        _LOCAL_ONLY_TASKS 本地红线（只走 ollama / private）。
+
+        page_context（2026-08-14）：当前页签/场景的一行描述，非空时拼进
+        user 消息，帮模型消除“连接”这类模糊动词的场景歧义。
 
         降级链：ollama → private → 旧式 classify_intent 包装（绝不抛异常）。
+
+        BUGFIX（2026-08-17）：此前返回 IntentAnalysis 对象，而调用方
+        intent_node 用 isinstance(analysis, dict) 判定 → 分析结果被静默丢弃，
+        state.intent_analysis 永远缺失，decompose 意图快速路径从未生效；
+        统一改为返回 dict。
         """
         from agent.llm.types import IntentAnalysis  # 避免循环导入
 
         if not text or not text.strip():
             return IntentAnalysis(
                 intent="chitchat", rewritten_query="", intent_category="chat", backend="empty"
-            )
+            ).to_dict()
         chain: list[tuple[str, Any]] = []
         if not self._mock_mode:
-            chain.append(("ollama", lambda: self.ollama.analyze_intent(text, history)))
+            chain.append(
+                ("ollama", lambda: self.ollama.analyze_intent(text, history, page_context))
+            )
             if self.private is not None:
-                chain.append(("private", lambda: self.private.analyze_intent(text, history)))
+                chain.append(
+                    ("private", lambda: self.private.analyze_intent(text, history, page_context))
+                )
 
         async def _plain_fallback() -> dict:
             intent = await self.classify_intent(text)
             return IntentAnalysis.from_plain_intent(intent, text, backend="plain").to_dict()
 
         chain.append(("plain", _plain_fallback))
+        from agent.observability.cot_log import cot as cot_log
+
+        cot_log(
+            "analyze_intent.enter", text=text, chain=[name for name, _ in chain[:-1]] + ["plain"]
+        )
         result = await with_fallback(
             chain=chain,
             label="intent_analysis",
             raise_on_all_fail=False,
         )
+        cot_log(
+            "analyze_intent.result",
+            text=text,
+            final_status=result.final_status,
+            trail=result.trail,
+            value=result.value,
+        )
         if result.final_status == "ok" and isinstance(result.value, dict):
             return IntentAnalysis.from_raw(
                 result.value, fallback_text=text, backend=result.value.get("backend") or ""
-            )
+            ).to_dict()
         # 理论上不可达（plain 兜底不抛异常）——防御性返回 query
-        return IntentAnalysis.from_plain_intent("query", text, backend="defensive")
+        return IntentAnalysis.from_plain_intent("query", text, backend="defensive").to_dict()
 
     async def classify_intent(self, text: str) -> Intent:
         """向后兼容：返回最终值。降级过程静默（不抛异常）。
@@ -1251,6 +1367,8 @@ class LMRouter:
         V2 增量：当 `self._spark_mode=True` 时调 engine.spark_route（V2.0 placeholder）。
         保持 keyword 签名完全冻结（test_router_backcompat 锁）。
         """
+        from agent.observability.cot_log import cot as cot_log
+
         if self._spark_mode and self._engine is not None:
             await self._engine.spark_route(
                 task_kind="intent",
@@ -1260,8 +1378,16 @@ class LMRouter:
                 request_id=f"intent-{hash((text,))}",
             )
             # Spark V0 placeholder：固定返回 query（最常见 Intent）
+            cot_log("classify_intent.spark", text=text, result="query (spark placeholder)")
             return "query"
         result = await self.classify_intent_with_fallback(text)
+        cot_log(
+            "classify_intent.result",
+            text=text,
+            final_status=result.final_status,
+            trail=result.trail,
+            intent=result.value,
+        )
         if result.final_status == "ok":
             return result.value  # type: ignore[return-value]
         # 全失败兜底为 query（最常见，最安全）
@@ -1382,10 +1508,18 @@ class LMRouter:
                     )
                 except (ValueError, TypeError):
                     logger.warning("l1_response_cache_corrupt_drop task=summarise")
-        # 真实降级链：内网 private → 本地 ollama → 云端 cloud（用户要求：
-        # 本地/内网不可用就用云端；全部不可用抛「无可用模型」错误）。
+        # 真实降级链：会话 override 模型（最高优先级，2026-08-17）→ 内网 private
+        # → 本地 ollama → 云端 cloud（本地/内网不可用就用云端；全部不可用抛
+        # 「无可用模型」错误）。
         errors: list[str] = []
         candidates: list[tuple[str, Any]] = []
+        try:
+            override = await self._build_override_client()
+        except Exception as exc:
+            override = None
+            errors.append(f"override: registry error {exc}")
+        if override is not None:
+            candidates.append((f"override:{self._chat_model_override}", override))
         if self.private is not None:
             candidates.append(("private", self.private))
         candidates.append(("ollama", self.ollama))
@@ -1435,6 +1569,7 @@ class LMRouter:
         history: list[BaseMessage],
         available_subagents: list[dict] | None = None,
         available_tools: list[dict] | None = None,
+        page_context: str = "",
         user_permissions: dict | None = None,
         cost_latency_policy: dict | None = None,
         safety_policy: dict | None = None,
@@ -1454,7 +1589,7 @@ class LMRouter:
             return _fallback_decision(plan)
         prompt = (
             SUBAGENT_ENABLEMENT_DECISION_PROMPT.replace(
-                "{{CURRENT_TIME}}", datetime.now(timezone.utc).isoformat(timespec="seconds")
+                "{{CURRENT_TIME}}", current_time_text()
             )
             .replace("{{USER_INPUT}}", user_prompt[:4000])
             .replace("{{CONVERSATION_SUMMARY}}", _conversation_summary(history))
@@ -1466,6 +1601,7 @@ class LMRouter:
                 "{{AVAILABLE_TOOLS}}",
                 json.dumps(available_tools or [], ensure_ascii=False)[:3000],
             )
+            .replace("{{PAGE_CONTEXT}}", page_context or "（未提供）")
             .replace(
                 "{{USER_PERMISSIONS}}",
                 json.dumps(user_permissions or {}, ensure_ascii=False),
@@ -1506,6 +1642,7 @@ class LMRouter:
         full_toolset_loaded: bool,
         tool_results: list[dict],
         max_selected_tools: int = 5,
+        decision_hint: str = "",
         extra_rules: str = "",
         work_mode: str = "",
         autonomy: str = "",
@@ -1549,9 +1686,12 @@ class LMRouter:
                 json.dumps(tool_results, ensure_ascii=False)[:6000],
             )
             .replace("{{MAX_SELECTED_TOOLS}}", str(max_selected_tools))
+            .replace("{{DECISION_HINT}}", decision_hint or "（无）")
             .replace(
+                # 本地时间（BUGFIX #113）：旧实现用 UTC，国内凌晨时段日期会差一天，
+                # 与 summarise / native 循环的注入口径统一为 current_time_text()
                 "{{CURRENT_TIME}}",
-                datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                current_time_text(),
             )
             .replace("{{WORK_MODE}}", work_mode or "未知")
             .replace("{{AUTONOMY}}", autonomy or "interactive")

@@ -75,4 +75,59 @@ describe('agent stream subscription', () => {
       true,
     );
   });
+
+  it('rag_retrieve trace 与知识检索工具调用不进对话（2026-08-17 隐藏「检索知识库」卡片），执行链路不变', async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    await act(async () => {
+      root.render(<App />);
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const emit = listeners.get('agent://message');
+    expect(emit).toBeDefined();
+
+    await act(async () => {
+      // 后端 rag_retrieve 节点照常执行并下发 trace（前端只不展示）
+      emit!({
+        payload: {
+          kind: 'trace',
+          step: { id: 't-rag', node: 'rag_retrieve', status: 'ok', summary: '检索知识库' },
+        },
+      });
+      // 知识检索类工具调用 / 结果同样不进对话
+      emit!({
+        payload: { kind: 'tool_call', id: 'c-rag', call: { name: 'knowledge.retrieve' } },
+      });
+      emit!({
+        payload: {
+          kind: 'tool_result',
+          id: 'c-rag',
+          result: { name: 'knowledge.retrieve', ok: true },
+        },
+      });
+      // 对照：联网搜索仍展示搜索卡片（不误伤其他搜索类工具）
+      emit!({ payload: { kind: 'tool_call', id: 'c-web', call: { name: 'web_search' } } });
+      // 对照：普通工具仍走执行链路块
+      emit!({
+        payload: { kind: 'tool_call', id: 'c-sql', call: { name: 'database.query' } },
+      });
+    });
+
+    const tab = useChatStore
+      .getState()
+      .tabs.find((t) => t.id === useChatStore.getState().activeTabId);
+    const msgs = tab?.messages ?? [];
+    // 无「检索知识库」搜索卡片（trace 与工具链路都不注入）
+    expect(msgs.some((m) => m.kind === 'search' && m.content.includes('检索知识库'))).toBe(false);
+    expect(msgs.some((m) => m.content.includes('knowledge.retrieve'))).toBe(false);
+    // 联网搜索卡片保留
+    expect(msgs.some((m) => m.id === 'c-web' && m.kind === 'search')).toBe(true);
+    // 普通工具执行链路块保留
+    expect(msgs.some((m) => m.id === 'c-sql' && m.kind === 'execution')).toBe(true);
+  });
 });

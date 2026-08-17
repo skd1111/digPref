@@ -12,9 +12,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Awaitable, Callable
 from typing import Any
+
+logger = logging.getLogger("agent.llm.json_discipline")
 
 JSON_DISCIPLINE = """# 输出约束（严格的数据结构化引擎）
 - 仅输出 JSON 字符串，禁止任何解释、问候、Markdown 标记（不要 ``` 代码块）
@@ -260,6 +263,15 @@ async def parse_with_retry(
         text = await call(hint, last)
         data = parse(text)
         if data is not None:
+            if attempt:
+                logger.info("parse_with_retry ok after %d retry", attempt)
             return data
+        logger.warning(
+            "parse_with_retry attempt=%d/%d 解析失败，原始输出: %s",
+            attempt,
+            max_retries,
+            str(text)[:2000],
+        )
         last = text
+    logger.error("parse_with_retry 全部 %d 次尝试失败，返回 None", max_retries + 1)
     return None

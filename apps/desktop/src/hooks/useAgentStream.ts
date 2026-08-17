@@ -34,19 +34,29 @@ const CHAT_HIDDEN_TRACE_NODES = new Set([
 ]);
 
 /**
+ * 知识检索类动作判定（rag/retrieve，2026-08-17）：只进思维链 / 审计，
+ * 不注入主对话（用户不需要看到「搜索完成“检索知识库”」卡片）。
+ */
+function isKnowledgeRetrieval(name: string | undefined): boolean {
+  if (!name) return false;
+  return /rag|retrieve/.test(name.toLowerCase());
+}
+
+/**
  * 搜索/检索类工具判定（2026-08-10）：命中后不走普通执行链路块，
  * 而是在对话流中渲染 aicss 风格搜索卡片（kind='search'）。
+ * 知识检索类（rag/retrieve）除外：2026-08-17 起不再在对话展示。
  */
 function isSearchTool(name: string | undefined): boolean {
   if (!name) return false;
+  if (isKnowledgeRetrieval(name)) return false;
   const n = name.toLowerCase();
-  return /search|grep|retrieve|rag|web/.test(n);
+  return /search|grep|web/.test(n);
 }
 
 /** 搜索类工具名 → 用户可读的查询描述（搜索卡片标题） */
 function searchLabel(name: string | undefined): string {
   const n = (name ?? '').toLowerCase();
-  if (n.includes('rag') || n.includes('retrieve')) return '检索知识库';
   if (n.includes('web')) return '联网搜索';
   if (n.includes('grep')) return '搜索代码内容';
   if (n.includes('symbol')) return '检索代码符号';
@@ -82,6 +92,8 @@ export function useAgentStream(): void {
 
         case 'tool_call': {
           const toolName = evt.call?.name ?? 'tool_call';
+          // 知识检索类工具不进对话（2026-08-17，只留思维链）
+          if (isKnowledgeRetrieval(toolName)) break;
           if (isSearchTool(toolName)) {
             // 搜索类工具 → aicss 风格搜索卡片（取代普通执行链路块）
             appendChat({
@@ -107,6 +119,8 @@ export function useAgentStream(): void {
 
         case 'tool_result': {
           const resultName = evt.result?.name ?? '';
+          // 知识检索类工具结果不进对话（与 tool_call 侧对齐）
+          if (isKnowledgeRetrieval(resultName)) break;
           if (isSearchTool(resultName)) {
             // 更新对应搜索卡片为完成态（id 与 tool_call 一致）
             update(evt.id ?? '', {
@@ -137,18 +151,8 @@ export function useAgentStream(): void {
             if (evt.runId) {
               setThinkingSession(evt.runId);
             }
-            // 知识检索节点 → aicss 风格搜索卡片（2026-08-10）
-            if (evt.step.node === 'rag_retrieve') {
-              appendChat({
-                id: evt.step.id ?? `search-${Date.now()}`,
-                role: 'system',
-                kind: 'search',
-                content: evt.step.summary || '检索知识库',
-                category: 'rag_retrieve',
-                status: evt.step.status === 'running' ? 'running' : 'ok',
-              });
-              break;
-            }
+            // 知识检索节点不在对话展示（2026-08-17）：rag_retrieve 已在
+            // CHAT_HIDDEN_TRACE_NODES 黑名单，落入下方隐藏分支只进思维链
             // 2026-08-04：内部调度节点（路由 / 检索 / 分解 / 终答等）只进思维链，不进主对话
             if (CHAT_HIDDEN_TRACE_NODES.has(evt.step.node ?? '')) {
               break;

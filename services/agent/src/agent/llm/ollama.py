@@ -11,7 +11,7 @@ import httpx
 from agent.dual.prompt_loader import FINAL_ANSWER_STYLE
 from agent.llm.circuit_breaker import CircuitBreakerRegistry
 from agent.llm.json_discipline import extract_json, parse_with_retry
-from agent.llm.prompts import load_prompt
+from agent.llm.prompts import current_time_text, load_prompt
 from agent.llm.token_usage import record_ollama_usage
 from agent.llm.types import Intent
 
@@ -47,6 +47,7 @@ class OllamaClient:
         max_context: int | None = None,
         keep_alive: str = "10m",
         enabled: bool = True,
+        max_output_tokens: int | None = None,
     ) -> None:
         """Ollama 客户端初始化。
 
@@ -66,6 +67,8 @@ class OllamaClient:
         self.max_context = max_context
         self.keep_alive = keep_alive
         self.enabled = enabled
+        # 全局输出上限（gen_limits 两级回退）→ Ollama options.num_predict
+        self.max_output_tokens = max_output_tokens
 
     # ---- HTTP primitives ---------------------------------------------------
 
@@ -99,6 +102,14 @@ class OllamaClient:
             merged_options["num_ctx"] = self.max_context
         if options:
             merged_options.update(options)
+        # 最大输出长度（gen_limits 全局上限）→ num_predict；调用点显式传了则取较小值
+        if self.max_output_tokens and self.max_output_tokens > 0:
+            existing = merged_options.get("num_predict")
+            merged_options["num_predict"] = (
+                min(int(existing), self.max_output_tokens)
+                if isinstance(existing, int) and existing > 0
+                else self.max_output_tokens
+            )
         if merged_options:
             payload["options"] = merged_options
         try:
@@ -146,6 +157,9 @@ class OllamaClient:
         payload = {"model": self.model, "prompt": prompt, "stream": False}
         if format:
             payload["format"] = format
+        # 最大输出长度（gen_limits 全局上限）→ options.num_predict
+        if self.max_output_tokens and self.max_output_tokens > 0:
+            payload["options"] = {"num_predict": self.max_output_tokens}
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=5.0)) as c:
                 r = await c.post(f"{self.base_url}/api/generate", json=payload)
@@ -171,6 +185,8 @@ class OllamaClient:
     # ---- Intent classification --------------------------------------------
 
     async def classify_intent(self, text: str) -> Intent:
+        from agent.observability.cot_log import cot as cot_log
+
         async def _call(hint: str, last: str) -> str:
             user_content = text + (f"\n\n{hint}" if hint else "")
             msg = await self._chat(
@@ -186,24 +202,33 @@ class OllamaClient:
                     "required": ["intent"],
                 },
             )
-            return str(msg["content"])
+            raw = str(msg["content"])
+            cot_log("ollama.classify_intent.raw", text=text, hint=bool(hint), raw=raw)
+            return raw
 
         payload = await parse_with_retry(_call, lambda t: extract_json(t, want="object"))
         if not isinstance(payload, dict):
+            cot_log("ollama.classify_intent.fail_safe", text=text, note="解析失败 → query")
             return "query"  # fail safe — most common, lowest risk
         intent = payload.get("intent", "query")
         if intent not in ("query", "mutate", "orchestrate", "chitchat"):
+            cot_log("ollama.classify_intent.invalid", text=text, payload=payload, result="query")
             return "query"
         return cast(Intent, intent)
 
     # ---- 结构化意图分析（Intent Router，2026-08-06）-------------------------
 
-    async def analyze_intent(self, text: str, history: list | None = None) -> dict:
+    async def analyze_intent(
+        self, text: str, history: list | None = None, page_context: str = ""
+    ) -> dict:
         """结构化意图分析：改写句 + 四分类 + 细分类型 + 实体 + 追问 + 风险。
+
+        page_context（2026-08-14）：当前页签/场景一行描述，非空时拼进 user 消息。
 
         解析失败抛异常，由 LMRouter 降级链接管。
         """
         from agent.llm.types import IntentAnalysis  # 避免循环导入
+        from agent.observability.cot_log import cot as cot_log
 
         msgs: list[dict] = [{"role": "system", "content": load_prompt("intent_router")}]
         for h in (history or [])[-4:]:  # 最近 2 轮上下文
@@ -213,7 +238,10 @@ class OllamaClient:
             )
             if role in ("user", "assistant") and content:
                 msgs.append({"role": role, "content": str(content)})
-        msgs.append({"role": "user", "content": text})
+        user_content = text
+        if page_context.strip():
+            user_content = f"[页面上下文：{page_context.strip()}]\n\n{text}"
+        msgs.append({"role": "user", "content": user_content})
 
         async def _call(hint: str, last: str) -> str:
             last_content = msgs[-1]["content"] + (f"\n\n{hint}" if hint else "")
@@ -230,11 +258,15 @@ class OllamaClient:
                     "required": ["intent"],
                 },
             )
-            return str(msg["content"])
+            raw = str(msg["content"])
+            cot_log("ollama.analyze_intent.raw", text=text, hint=bool(hint), raw=raw)
+            return raw
 
         payload = await parse_with_retry(_call, lambda t: extract_json(t, want="object"))
         if not isinstance(payload, dict) or not payload:
+            cot_log("ollama.analyze_intent.parse_failed", text=text)
             raise ValueError("intent analysis output is not a JSON object")
+        cot_log("ollama.analyze_intent.parsed", text=text, payload=payload)
         return IntentAnalysis.from_raw(payload, fallback_text=text, backend="ollama").to_dict()
 
     # ---- Plan generation ---------------------------------------------------
@@ -369,6 +401,9 @@ class OllamaClient:
             user_content = (
                 f"Intent: {intent}\n"
                 f"User question: {user_prompt}\n\n"
+                # 当前时间注入（BUGFIX #112）：本地模型对「今天」无可靠感知，
+                # 不注入会凭训练知识编造日期；summarise.md §5.1 以此为唯一基准。
+                f"Current time: {current_time_text()}\n\n"
                 f"Plan executed:\n{plan_brief}\n\n"
                 f"Tool results (may be truncated):\n{results_brief}\n\n"
                 "Produce the final answer."

@@ -21,6 +21,7 @@ Phase 18：首次进入先过自主性决策矩阵（dual/autonomy）：
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from typing import Any
 
@@ -82,6 +83,7 @@ async def hitl_gate_node(state: AgentState, llm: Any | None = None) -> dict:
                 "approval_id": None,
                 "approval_decision": decision,
                 "awaiting_approval": False,
+                "approval_started_at": None,
                 "approval_options": None,  # Phase 18：决策后清理选项
                 "trace": [
                     record_trace(
@@ -93,7 +95,33 @@ async def hitl_gate_node(state: AgentState, llm: Any | None = None) -> dict:
                     )
                 ],
             }
-        # 尚未决定 → 继续等待
+        # 尚未决定 → gate 侧超时守卫（fail-closed）：后台轮询任务正常会在超时时
+        # 写入 reject；但 Agent 重启 / 任务丢失时无人写决策，不能无限等待
+        started = state.get("approval_started_at")
+        if started is None:
+            # 存量进行中的审批无时间戳 → 从当前时刻起补记，下轮开始守卫
+            return {
+                "approval_started_at": time.time(),
+                "awaiting_approval": True,
+                "trace": [
+                    record_trace("hitl_gate", "running", reason="waiting", approval_id=existing_id)
+                ],
+            }
+        if time.time() - float(started) >= settings.approval_timeout_sec:
+            await cleanup_approval(existing_id)
+            logger.warning("审批 %s gate 侧超时（无决策到达）→ 自动拒绝", existing_id)
+            return {
+                "approval_id": None,
+                "approval_decision": "reject",
+                "awaiting_approval": False,
+                "approval_started_at": None,
+                "approval_options": None,
+                "trace": [
+                    record_trace(
+                        "hitl_gate", "fail", reason="timeout_guard", approval_id=existing_id
+                    )
+                ],
+            }
         return {
             "awaiting_approval": True,
             "trace": [
@@ -189,15 +217,29 @@ async def hitl_gate_node(state: AgentState, llm: Any | None = None) -> dict:
             }
         logger.warning("auto mode without valid recommended option → fail-closed to user approval")
 
-    await start_approval(
-        approval_id=approval_id,
-        plan=call,
-        timeout_sec=settings.approval_timeout_sec,
-    )
+    try:
+        await start_approval(
+            approval_id=approval_id,
+            plan=call,
+            timeout_sec=settings.approval_timeout_sec,
+        )
+    except Exception as exc:
+        # 发起审批失败 → fail-closed 直接拒绝（绝不让写操作在审批缺失时放行）
+        logger.error("start_approval 失败 → fail-closed reject: %s", exc)
+        return {
+            "approval_id": None,
+            "approval_decision": "reject",
+            "awaiting_approval": False,
+            "approval_started_at": None,
+            "trace": [
+                record_trace("hitl_gate", "fail", reason="start_failed", approval_id=approval_id)
+            ],
+        }
 
     return {
         "approval_id": approval_id,
         "awaiting_approval": True,
+        "approval_started_at": time.time(),
         "approval_options": approval_options,
         "trace": [
             record_trace(

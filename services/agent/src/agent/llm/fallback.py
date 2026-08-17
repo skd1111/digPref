@@ -106,6 +106,8 @@ async def with_fallback(
             # V2 增量：熔断器 on_success（Half-Open 探测成功 → Closed）
             if circuit_breaker_registry is not None:
                 cb.on_success()
+            if len(trail) > 1:  # 发生过降级才记录轨迹（CoT 日志分析用）
+                logger.info("[%s] ok via %s after degradation trail=%s", label, backend_name, trail)
             return FallbackResult(
                 value=value,
                 attempts=[n for n, _ in trail],

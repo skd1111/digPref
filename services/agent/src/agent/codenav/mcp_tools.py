@@ -17,6 +17,7 @@ from agent.codenav.llm_client import (
 )
 from agent.codenav.models import JumpResult, Symbol
 from agent.codenav.query import SymbolQuery
+from agent.paths import data_root
 
 logger = logging.getLogger(__name__)
 
@@ -25,11 +26,8 @@ _bg_log_tasks: set = set()
 
 
 def _default_db_path() -> str:
-    """默认 SQLite 路径：%APPDATA%/eaide/workspace_index.db（Windows）"""
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        return os.path.join(appdata, "eaide", "workspace_index.db")
-    return os.path.expanduser("~/.eaide/workspace_index.db")
+    """默认 SQLite 路径：数据根/workspace_index.db（BUGFIX #98：生产=安装目录）"""
+    return str(data_root() / "workspace_index.db")
 
 
 def _get_query() -> SymbolQuery:

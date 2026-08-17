@@ -20,9 +20,87 @@ from typing import Any
 from agent.config import settings
 from agent.dual.repair import validate_written_files  # Phase 18 Auto-Repair
 from agent.graph.state import record_trace
+from agent.llm.json_discipline import strip_think_blocks
+from agent.llm.prompts import current_time_text
 from agent.llm.router import LMRouter
 
 logger = logging.getLogger("agent.tools.loop")
+
+
+def _decision_hint(decision: Any) -> str:
+    """把 decompose 决策压成交接提示（工具循环重建任务上下文用）。
+
+    背景（BUGFIX #108）：用户在确认卡点「确认执行」后，新一轮的 user_prompt
+    只剩一句确认文本，工具循环模型重建不出上一轮谈好的参数 → 直接 FINAL_ANSWER
+    放弃。把 decompose 已判定的模式 / 理由 / 建议工具调用 / 确认文案交给循环，
+    让它照着已确认的方案继续。非 TOOL_ONLY / 无信息时返空串（不注入）。
+    """
+    inner = decision.get("decision") if isinstance(decision, dict) else None
+    if not isinstance(inner, dict):
+        return ""
+    mode = str(inner.get("mode") or "")
+    if mode != "TOOL_ONLY":
+        return ""
+    parts: list[str] = []
+    reason = str(inner.get("reason") or "").strip()
+    if reason:
+        parts.append(f"决策理由：{reason[:300]}")
+    confirmation = str(inner.get("confirmation_message") or "").strip()
+    if confirmation:
+        parts.append(f"已向用户出示并获确认的参数方案：{confirmation[:800]}")
+    # 决策 JSON 里 tool_calls 在顶层（与 decision 平级），兼容内层写法
+    calls = decision.get("tool_calls") if isinstance(decision, dict) else None
+    if not isinstance(calls, list):
+        inner_calls = inner.get("tool_calls")
+        calls = inner_calls if isinstance(inner_calls, list) else None
+    if calls:
+        slim: list[dict[str, Any]] = []
+        for c in calls[:5]:
+            if not isinstance(c, dict):
+                continue
+            slim.append(
+                {
+                    "tool": str(c.get("tool") or c.get("name") or ""),
+                    "purpose": str(c.get("purpose") or "")[:200],
+                    "inputs": c.get("inputs") if isinstance(c.get("inputs"), dict) else {},
+                }
+            )
+        if slim:
+            parts.append("建议的工具调用：" + json.dumps(slim, ensure_ascii=False)[:1000])
+    return "\n".join(parts)[:2000]
+
+
+def _brief_value(value: Any, limit: int = 60) -> str:
+    """把工具参数压成短展示文本（思维链打印用，防大参数刷屏）。"""
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def _tool_op_trace(name: str, args: dict, result: dict) -> dict:
+    """生成一条 per-tool trace —— 把每个工具操作打印进思维链（2026-08-17）。
+
+    此前工具循环一次节点执行只留一条聚合 trace（calls=N），read / write /
+    glob / grep 等具体操作在思维链里不可见。每工具一条带 summary 的条目，
+    前端思维链面板 / 持久化思维链都能直接渲染。
+    """
+    ok = bool(result.get("ok"))
+    pairs = [f"{k}={_brief_value(v)}" for k, v in list(args.items())[:3]]
+    if len(args) > 3:
+        pairs.append("…")
+    arg_brief = ", ".join(pairs)
+    if ok:
+        summary = f"调用工具 {name}({arg_brief}) → 成功"
+    else:
+        err = str(result.get("error") or "未知错误")[:120]
+        summary = f"调用工具 {name}({arg_brief}) → 失败：{err}"
+    return record_trace(
+        "tool_orchestrator",
+        "ok" if ok else "fail",
+        action="TOOL_CALL",
+        tool=name,
+        summary=summary,
+    )
+
 
 # 原生模式首轮默认可用的确定性工具（时间类 + 追问伪工具）
 _NATIVE_FIRST_ROUND_TOOLS = ("datetime_now", "date_parse")
@@ -35,7 +113,11 @@ _NATIVE_SYSTEM_PROMPT = (
     "3. 时间敏感问题（今天几号/农历/星期几）直接调 datetime_now。\n"
     "4. 缺少关键信息时用 ask_user 追问，一次只问最关键的问题并给示例。\n"
     "5. 写/高危操作照常发起调用，系统会自动拦截进入人工审批，不要自行拒绝。\n"
-    "6. 任务完成时直接输出面向用户的自然语言回答，不再调用工具。"
+    "6. 任务完成时直接输出面向用户的自然语言回答，不再调用工具。\n"
+    "7. 当前日期/时间/星期只能以系统注入的当前时间或 datetime_now 返回为准；"
+    "你对「今天」没有可靠感知，严禁凭记忆回答日期（会编造）。\n"
+    "8. 回答必须使用与用户输入一致的语言；用户用中文提问时一律用中文作答，"
+    "禁止整段英文输出（代码块、数字、标识符与专有名词保持原样，不翻译）。"
 )
 
 _ASK_USER_TOOL = {
@@ -100,6 +182,8 @@ class DynamicToolLoop:
         full_loaded = bool(merged.get("full_toolset_loaded"))
         load_stage = str(merged.get("load_stage") or "SUMMARY_ONLY")
         turn = int(merged.get("tool_turn_count") or 0) + 1
+        # 编排决策交接（2026-08-17，BUGFIX #108）：decompose 已判定的工具/参数
+        # （含用户刚确认的方案）随 prompt 交给循环，避免确认后循环丢失上下文
 
         if turn > self._max_turns:
             return {
@@ -122,6 +206,7 @@ class DynamicToolLoop:
                 full_toolset_loaded=full_loaded,
                 tool_results=self._format_results(tool_results),
                 max_selected_tools=self._max_selected,
+                decision_hint=_decision_hint(merged.get("decompose_decision")),
                 # Phase 18：Code/Work 双模式执行纪律（mode_router 注入）
                 extra_rules=str(merged.get("dual_rules_addon") or ""),
                 # 运行时上下文：工作模式 / 自主级别 / 任务路由（提示词 4.10–4.12）
@@ -208,8 +293,10 @@ class DynamicToolLoop:
             registered_names = {str(t.get("name")) for t in registered}
             executed: list[dict] = []
             executed_pairs: list[tuple[dict, dict]] = []  # Phase 18：供 Auto-Repair 钩子
+            op_traces: list[dict] = []  # 逐工具思维链条目（2026-08-17）
             for call in action.get("tool_calls") or []:
                 name = str(call.get("name") or "")
+                call_args = dict(call.get("arguments") or {})
                 if name not in registered_names:
                     executed.append(
                         {
@@ -219,10 +306,11 @@ class DynamicToolLoop:
                             "error": "unregistered_tool",
                         }
                     )
+                    op_traces.append(_tool_op_trace(name, call_args, executed[-1]))
                     continue
                 result = await self._catalog.execute(
                     name,
-                    dict(call.get("arguments") or {}),
+                    call_args,
                     merged,
                 )
                 if result.get("awaiting_approval"):
@@ -236,6 +324,7 @@ class DynamicToolLoop:
                     }
                 executed.append(result)
                 executed_pairs.append((call, result))
+                op_traces.append(_tool_op_trace(name, call_args, result))
             tool_results = (tool_results + executed)[-self._max_results_kept :]
 
             # Phase 18 Auto-Repair：coding 子任务写文件后确定性验证
@@ -274,7 +363,8 @@ class DynamicToolLoop:
                 **self._continue(
                     tool_results=tool_results,
                     tool_turn_count=turn,
-                    trace=[
+                    trace=op_traces
+                    + [
                         record_trace(
                             "tool_orchestrator",
                             "ok",
@@ -287,10 +377,11 @@ class DynamicToolLoop:
             }
 
         if kind == "ASK_USER":
+            ask_message = strip_think_blocks(str(action.get("ask_user_message") or "")).strip()
             return {
                 **updates,
                 **self._done(
-                    final_answer=action.get("ask_user_message") or "需要补充信息后才能继续。",
+                    final_answer=ask_message or "需要补充信息后才能继续。",
                     tool_turn_count=turn,
                     tool_results=tool_results,
                     trace=[record_trace("tool_orchestrator", "ok", action="ASK_USER")],
@@ -298,7 +389,9 @@ class DynamicToolLoop:
             }
 
         # FINAL_ANSWER
-        answer = str(action.get("final_answer") or "")
+        # think 剥离（2026-08-17，BUGFIX #108）：推理模型会把内心独白塞进
+        # final_answer，直接透传会把 <think> 原文暴露给用户
+        answer = strip_think_blocks(str(action.get("final_answer") or "")).strip()
         if not answer.strip():
             if tool_results:
                 return {
@@ -372,9 +465,12 @@ class DynamicToolLoop:
         messages = list(ctx.get("messages") or [])
         pending_calls = list(ctx.get("pending_calls") or [])
         full_loaded = bool(merged.get("full_toolset_loaded"))
+        op_traces: list[dict] = []  # 逐工具思维链条目（2026-08-17）
 
         def _emit(done: dict) -> dict:
-            """统一出口：带上本轮全量加载状态。"""
+            """统一出口：带上本轮全量加载状态 + 逐工具操作条目。"""
+            if op_traces:
+                done = {**done, "trace": op_traces + list(done.get("trace") or [])}
             return {**updates, "full_toolset_loaded": full_loaded, **done}
 
         if not messages:
@@ -382,6 +478,10 @@ class DynamicToolLoop:
             addon = str(merged.get("dual_rules_addon") or "")
             if addon:
                 system += "\n\n" + addon
+            # 当前时间注入（BUGFIX #113）：native 循环的 FINAL_ANSWER 由模型
+            # 直接透传给用户不经 summarise，不注入时间基准时会凭记忆编造日期
+            # （用户问「今天几号」答「10月10日」）。纪律见 _NATIVE_SYSTEM_PROMPT §7。
+            system += f"\n\n【当前时间（系统本地，唯一可信基准）】\n{current_time_text()}"
             messages = [{"role": "system", "content": system}]
             for h in (merged.get("messages") or [])[-4:]:
                 role = getattr(h, "role", None) or (h.get("role") if isinstance(h, dict) else None)
@@ -390,7 +490,13 @@ class DynamicToolLoop:
                 )
                 if role in ("user", "assistant") and content:
                     messages.append({"role": role, "content": str(content)})
-            messages.append({"role": "user", "content": str(merged.get("user_prompt") or "")})
+            # 编排决策交接（BUGFIX #108）：确认后新轮次的 user_prompt 只有一句
+            # 确认文本，把 decompose 已判定的方案拼进去，避免循环丢失上下文
+            hint = _decision_hint(merged.get("decompose_decision"))
+            native_user_input = str(merged.get("user_prompt") or "")
+            if hint:
+                native_user_input = f"[编排决策交接]\n{hint}\n\n[用户当前输入]\n{native_user_input}"
+            messages.append({"role": "user", "content": native_user_input})
         elif resuming:
             # HITL 恢复：批准的调用放回待执行队首；拒绝的记入结果
             pending = state.get("pending_tool_call")
@@ -459,7 +565,8 @@ class DynamicToolLoop:
 
                 resp_calls = resp.get("tool_calls") or []
                 if not resp_calls:
-                    answer = str(resp.get("content") or "").strip()
+                    # think 剥离（BUGFIX #108）：推理模型的内心独白不得透传给用户
+                    answer = strip_think_blocks(str(resp.get("content") or "")).strip()
                     return _emit(
                         self._done(
                             final_answer=answer or None,
@@ -571,6 +678,9 @@ class DynamicToolLoop:
                         {"name": real_name, "arguments": call.get("arguments") or {}},
                         result,
                     )
+                )
+                op_traces.append(
+                    _tool_op_trace(real_name, dict(call.get("arguments") or {}), result)
                 )
                 messages.append(
                     {

@@ -472,6 +472,61 @@ BUILTIN_TOOL_SCHEMAS: dict[str, dict] = {
         },
         "required": ["path", "pattern"],
     },
+    # ---- LLM 管理（V8：模型接入 / 连通性探测，2026-08-14）----
+    "model_config_upsert": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "后端唯一名称（router.db 主键）"},
+            "type": {
+                "type": "string",
+                "enum": ["local", "private", "cloud"],
+                "description": "后端类型",
+            },
+            "base_url": {
+                "type": "string",
+                "description": "服务地址（http/https，不含 /chat/completions）",
+            },
+            "model_name": {
+                "type": "string",
+                "description": "模型名（如 DeepSeek-RD-Llama-70B-Int8）",
+            },
+            "api_key_ref": {
+                "type": "string",
+                "description": "keyring 引用名（如 llm.<name>.api_key）；严禁传明文密钥",
+            },
+            "enabled": {"type": "boolean", "description": "是否启用", "default": True},
+            "role": {
+                "type": "string",
+                "enum": ["utility", "reasoning", "execution"],
+                "description": "调度角色",
+                "default": "execution",
+            },
+            "max_context": {
+                "type": "integer",
+                "description": "上下文窗口（tokens）",
+                "default": 32768,
+            },
+            "timeout_seconds": {"type": "integer", "description": "请求超时（秒）", "default": 30},
+            "capabilities": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "能力标签（如 code / plan）",
+            },
+        },
+        "required": ["name", "type", "base_url", "model_name"],
+    },
+    "probe_chat_endpoint": {
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "description": "端点地址（不含 /chat/completions 后缀时自动补齐）",
+            },
+            "model": {"type": "string", "description": "模型名"},
+            "timeout_s": {"type": "number", "description": "探测超时（秒，1~30）", "default": 5.0},
+        },
+        "required": ["url", "model"],
+    },
 }
 
 

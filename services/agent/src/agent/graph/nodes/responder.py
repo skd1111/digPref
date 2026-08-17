@@ -7,6 +7,8 @@ Two paths:
 
 from __future__ import annotations
 
+import json
+import re
 from typing import Any
 
 from agent.graph.nodes.repair import MAX_RETRIES
@@ -34,15 +36,10 @@ async def responder_node(state: AgentState, llm: LMRouter) -> dict:
             )
         if mode == "ASK_USER":
             questions = inner.get("clarifying_questions") or []
-            body = "需要补充以下信息后再继续：\n\n" + "\n".join(f"- {q}" for q in questions)
-            return _terminal_answer(body, "ask_user", state)
+            return _terminal_answer(_ask_user_body(questions), "ask_user", state)
         if inner.get("user_confirmation_required") is True:
             message = inner.get("confirmation_message") or "该任务需要您确认后才能执行。"
-            return _terminal_answer(
-                f"{message}\n\n（未确认前不会执行任何操作。）",
-                "confirmation",
-                state,
-            )
+            return _terminal_answer(_confirmation_body(message), "confirmation", state)
         # 语义路由命中的闲聊 → 模板直回，零 LLM（semantic_route canned_response）
         if mode == "MAIN_AGENT" and isinstance(state.get("intent_analysis"), dict):
             canned = str((state["intent_analysis"] or {}).get("canned_response") or "")
@@ -53,7 +50,13 @@ async def responder_node(state: AgentState, llm: LMRouter) -> dict:
 
     # 动态工具循环：FINAL_ANSWER / ASK_USER 已由编排器产出 → 直接透传
     if state.get("final_answer"):
-        return _terminal_answer(str(state["final_answer"]), "tool_loop", state)
+        draft = str(state["final_answer"])
+        # 语言硬兜底（BUGFIX #114，2026-08-17）：prompt 语言纪律对小模型是软
+        # 约束，中文提问仍可能拿到整段英文终答 → 透传前检测，命中改走
+        # summarise 重写中文（summarise.md 带 MANDATORY 中文约束）
+        if _needs_chinese_rewrite(user_prompt, draft):
+            return await _rewrite_to_chinese(state, llm, draft)
+        return _terminal_answer(draft, "tool_loop", state)
 
     # 动态工具循环：有工具结果 → 汇总成最终答案
     if state.get("tool_results"):
@@ -146,6 +149,146 @@ def _terminal_answer(body: str, mode: str, state: AgentState) -> dict:
         "sources": [],
         "trace": [record_trace("responder", "ok", mode=mode)],
     }
+
+
+# ---- 语言硬兜底（BUGFIX #114，2026-08-17）------------------------------------
+#
+# 内网推理模型默认英文作答，工具循环 FINAL_ANSWER 透传不经 summarise，prompt
+# 语言纪律（_NATIVE_SYSTEM_PROMPT §8 / tool_orchestrate §6.8）对小模型只是软
+# 约束。这里在透传前做确定性检测：中文提问 + 终答几乎纯英文 → 改走 summarise
+# 重写中文；重写失败/无效一律回退原文，绝不阻断终答。
+
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_LATIN_RE = re.compile(r"[A-Za-z]")
+
+
+def _needs_chinese_rewrite(user_prompt: str, answer: str) -> bool:
+    """中文提问 + 终答以英文为主 → True。
+
+    判定保守（宁可漏改不可误伤）：
+    - 提问不含中文 → 不改（英文提问英文答是合法的）；
+    - 终答含 ```clarify 选项卡 → 不改（重写会破坏前端卡片 JSON 结构）；
+    - 终答无拉丁字母（纯数字/符号/中文）→ 不改；
+    - 拉丁字母数 ≥ 20 且超过中文字符数 3 倍 → 判为英文作答。
+    """
+    if not _CJK_RE.search(user_prompt):
+        return False
+    if "```clarify" in answer:
+        return False
+    cjk = len(_CJK_RE.findall(answer))
+    latin = len(_LATIN_RE.findall(answer))
+    if latin == 0:
+        return False
+    return latin >= 20 and latin > cjk * 3
+
+
+async def _rewrite_to_chinese(state: AgentState, llm: LMRouter, draft: str) -> dict:
+    """把英文终答草稿交 summarise 重写为中文（其提示词带 MANDATORY 中文约束）。
+
+    重写异常 / 重写结果仍不含中文（模型不听话）→ 回退原草稿，不劣化终答。
+    """
+    try:
+        answer, sources = await llm.summarise(
+            intent=state.get("intent") or "query",
+            user_prompt=state.get("user_prompt", ""),
+            plan=[],
+            results=[{"tool": "language_rewrite", "ok": True, "result": draft}],
+        )
+    except Exception:
+        return _terminal_answer(draft, "tool_loop", state)
+    if not str(answer).strip() or not _CJK_RE.search(str(answer)):
+        return _terminal_answer(draft, "tool_loop", state)
+    return {
+        "final_answer": str(answer),
+        "sources": sources,
+        "trace": [record_trace("responder", "ok", mode="tool_loop", lang_rewrite=True)],
+    }
+
+
+def _confirmation_body(message: str) -> str:
+    """确认门槛终答：参数摘要正文 + 确认卡（确认 / 修改）。
+
+    复用前端 ClarifyCard（```clarify 围栏）：点「确认执行」→ 选项文本回发
+    继续任务；点「修改参数」→ 卡片自带自定义输入框直接说要改什么。
+    真正的写操作仍会再过 HITL 审批闸（红线：写操作绝不绕过 HITL）。
+    """
+    items = [
+        {
+            "question": "确认按上述参数执行？",
+            "options": [
+                {
+                    "text": "确认执行",
+                    "reason": "参数摘要核对无误，继续执行",
+                    "recommended": True,
+                },
+                {
+                    "text": "修改参数",
+                    "reason": "选这项并在下方直接告诉我要改什么",
+                    "recommended": False,
+                },
+            ],
+        }
+    ]
+    block = json.dumps(items, ensure_ascii=False, indent=2)
+    return f"{message}\n\n（未确认前不会执行任何操作。）\n\n```clarify\n{block}\n```"
+
+
+# ---- ASK_USER 选项卡化（2026-08-14）--------------------------------------
+#
+# 编排决策器的 clarifying_questions 是自由文本，常自带 a/b/c 选项枚举（如
+# 「环境缺工具；a．您先手动 ping…；b．改用…；c．跳过…」）。此前只拼正文
+# bullet list，不走 FINAL_ANSWER_STYLE 的 clarify 约定 → 前端无卡片可点。
+# 这里做确定性解析（不调 LLM、不改 prompt，LLM 输出不稳定只在解析层兼容）：
+# 从问题文本拆出题干 + 选项，拼出前端 ClarifyCard 认识的 ```clarify 块；
+# 解析不出选项时用问题原文做单选项兜底（卡片另有自定义输入框）。
+
+# 字母选项标记：a/b/c…（大小写）后接 ．.、)）：: 或空格，且前面是
+# 行首/空白/分隔标点（防误伤普通单词里的单字母）
+_OPT_MARK_RE = re.compile(r"(?:^|[\s；;，,。:：])(([a-iA-I])[．.、)）:：\s])")
+
+
+def _split_lettered_options(question: str) -> tuple[str, list[str]]:
+    """把「题干…；a．…；b．…」拆成 (题干, 选项列表)；无选项返 (问题, [])。"""
+    marks = list(_OPT_MARK_RE.finditer(question))
+    if len(marks) < 2:
+        return question, []
+    # 题干 = 首个标记前的正文（匹配含前导分隔符，切片天然不含它）
+    stem = question[: marks[0].start()].strip(" 　\t；;。，,、:：") or "请选择如何继续"
+    # 选项 = 相邻标记之间的文本段（m.end() 已含字母后的分隔符）
+    options: list[str] = []
+    for i, m in enumerate(marks):
+        seg_end = marks[i + 1].start() if i + 1 < len(marks) else len(question)
+        text = question[m.end() : seg_end].strip(" 　\t；;。，,、:：")
+        if text:
+            options.append(text)
+    if len(options) < 2:
+        return question, []
+    return (stem, options[:5])
+
+
+def _ask_user_body(questions: list) -> str:
+    """ASK_USER 终答：可读 bullet 列表 + clarify 选项块（前端渲染可点选卡片）。"""
+    qs = [str(q).strip() for q in questions if str(q).strip()]
+    if not qs:
+        return "需要补充更多信息后才能继续，请补充说明您的需求。"
+    bullets = "\n".join(f"- {q}" for q in qs)
+    body = f"需要补充以下信息后再继续：\n\n{bullets}"
+
+    items: list[dict] = []
+    for q in qs:
+        stem, options = _split_lettered_options(q)
+        if not options:
+            options = [q]
+        items.append(
+            {
+                "question": stem,
+                "options": [
+                    {"text": o, "reason": "", "recommended": i == 0} for i, o in enumerate(options)
+                ],
+            }
+        )
+    block = json.dumps(items, ensure_ascii=False, indent=2)
+    return f"{body}\n\n```clarify\n{block}\n```"
 
 
 async def _synthesise_tool_results(

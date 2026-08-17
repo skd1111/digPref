@@ -14,7 +14,10 @@
 
 from __future__ import annotations
 
+import logging
 import re
+
+logger = logging.getLogger("agent.llm.mock")
 
 
 class MockLLMClient:
@@ -33,16 +36,20 @@ class MockLLMClient:
         ) or any(
             kw in t for kw in ("修改", "删除", "更新", "插入", "新增", "清空", "建表", "删除表")
         ):
+            logger.info("mock.classify_intent: %r → mutate", text)
             return "mutate"
         # 跨系统编排
         if any(kw in t for kw in ("orchestrate", "跨系统", "编排", "工作流", "workflow")):
+            logger.info("mock.classify_intent: %r → orchestrate", text)
             return "orchestrate"
         # 闲聊
         if any(
             kw in t
             for kw in ("你好", "你是", "hi", "hello", "嗨", "who are you", "what's your name")
         ):
+            logger.info("mock.classify_intent: %r → chitchat", text)
             return "chitchat"
+        logger.info("mock.classify_intent: %r → query (默认)", text)
         return "query"
 
     async def plan(

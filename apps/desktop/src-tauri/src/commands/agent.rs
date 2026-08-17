@@ -29,6 +29,11 @@ fn os_username() -> String {
 /// Rust 侧不解析业务语义，只随 chat 请求体进后端。
 /// inference_mode：推理性能模式开关（performance 时后端注入完整版双模式提示词）。
 /// history：会话上下文（当前 tab 最近几轮对话），Rust 侧不解析，透传后端。
+/// page_context：页面上下文（2026-08-14，当前页签/场景），透传后端注入 intent/decompose。
+/// model_override：会话模型选择（2026-08-17，模型管理 backend 名），透传后端置顶回答链。
+// 本函数与 start_run 同为透传缝（参数原样进 chat 请求体，不解析语义），
+// 聚成结构体反而增加上下游改动面 → 豁免 too_many_arguments
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn agent_chat(
     state: State<'_, AppState>,
@@ -37,6 +42,9 @@ pub async fn agent_chat(
     autonomy: Option<String>,
     inference_mode: Option<String>,
     history: Option<Vec<crate::stream::HistoryMsg>>,
+    page_context: Option<serde_json::Value>,
+    model_override: Option<String>,
+    history_summary: Option<String>,
 ) -> AppResult<String> {
     crate::agent_manager::app_log(&format!("[agent_chat] 收到 prompt，长度={}", prompt.len()));
     // 输入校验：拒绝空 prompt
@@ -56,7 +64,7 @@ pub async fn agent_chat(
     let bridge = Arc::clone(&state.sse);
     crate::agent_manager::app_log(&format!("[agent_chat] run_id={}，start_run 即将开始", run_id));
     bridge
-        .start_run(run_id.clone(), trimmed.to_string(), work_mode, autonomy, inference_mode, history)
+        .start_run(run_id.clone(), trimmed.to_string(), work_mode, autonomy, inference_mode, history, page_context, model_override, history_summary)
         .await?;
     crate::agent_manager::app_log(&format!("[agent_chat] run_id={}，SSE 流已建立", run_id));
     state.audit_handle().append(
@@ -119,6 +127,28 @@ pub async fn chat_summarize_title(
     state.sse.post_json("/chat/summarize-title", body).await
 }
 
+/// 附加文件到对话（2026-08-14）：前端 📎 选中文件读成 base64 传过来，
+/// 转发到后端 /chat/attach-file 转成文本（文本类直读 / docx、pdf 等走
+/// file_to_markdown），返回 {ok, content, mode, truncated, error}。
+#[tauri::command]
+pub async fn chat_attach_file(
+    body: serde_json::Value,
+    state: State<'_, AppState>,
+) -> AppResult<serde_json::Value> {
+    state.agent_post("/chat/attach-file", body).await
+}
+
+/// 会话历史压缩（2026-08-17）：前端「压缩上下文」把旧对话传过来，
+/// 转发到后端 /chat/compress-history 走本地优先 LLM 链生成摘要，
+/// 返回 {ok, summary, beforeTokens, afterTokens, messageCount}。
+#[tauri::command]
+pub async fn chat_compress_history(
+    body: serde_json::Value,
+    state: State<'_, AppState>,
+) -> AppResult<serde_json::Value> {
+    state.agent_post("/chat/compress-history", body).await
+}
+
 /// 诊断用：当前有多少个活跃的 SSE 流？
 #[tauri::command]
 pub async fn agent_active_runs(state: State<'_, AppState>) -> AppResult<usize> {
@@ -172,5 +202,22 @@ pub async fn agent_toolchain_save(
 ) -> AppResult<serde_json::Value> {
     state
         .agent_post("/toolchain", serde_json::json!({ "paths": paths }))
+        .await
+}
+
+/// 工作空间路径配置读取（设置页面板用）。
+#[tauri::command]
+pub async fn agent_workspace_get(state: State<'_, AppState>) -> AppResult<serde_json::Value> {
+    state.agent_get("/workspace").await
+}
+
+/// 工作空间路径配置保存（空串 = 恢复默认 安装目录/workspace）。
+#[tauri::command]
+pub async fn agent_workspace_save(
+    state: State<'_, AppState>,
+    path: String,
+) -> AppResult<serde_json::Value> {
+    state
+        .agent_post("/workspace", serde_json::json!({ "path": path }))
         .await
 }

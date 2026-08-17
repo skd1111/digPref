@@ -51,10 +51,8 @@ impl AppConfig {
         let audit_db_path = env::var("EAIDE_AUDIT_DB_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
-                // 默认放在用户数据目录；fallback 到当前目录
-                dirs_data_dir()
-                    .unwrap_or_else(|| PathBuf::from("."))
-                    .join("audit.sqlite")
+                // BUGFIX #98：默认落安装目录（用户要求：运行时文件都在安装目录内）
+                crate::agent_manager::get_app_data_dir().join("audit.sqlite")
             });
 
         let mcp_config_path = env::var("EAIDE_MCP_CONFIG_PATH")
@@ -64,11 +62,9 @@ impl AppConfig {
         let systems_path = env::var("EAIDE_SYSTEMS_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
-                // 与 safe_defaults 保持一致：固定放在应用数据目录，
+                // BUGFIX #98：固定放安装目录（用户要求：运行时文件都在安装目录内），
                 // 避免相对 CWD 导致 systems.yaml 飘忽不定（用户找不到）。
-                dirs_data_dir()
-                    .unwrap_or_else(|| PathBuf::from("."))
-                    .join("systems.yaml")
+                crate::agent_manager::get_app_data_dir().join("systems.yaml")
             });
 
         let devtools_enabled = env::var("EAIDE_DEVTOOLS")
@@ -89,31 +85,36 @@ impl AppConfig {
     /// 纯默认配置 —— 不读环境变量，不依赖 AppHandle。
     /// 在 fallback 模式下 AppConfig::load 也失败时兜底用。
     pub fn safe_defaults() -> Self {
+        // BUGFIX #98：统一用安装目录（与 get_app_data_dir 约定一致）
+        let data_dir = crate::agent_manager::get_app_data_dir();
         Self {
             agent_base_url: "http://127.0.0.1:8765".into(),
-            audit_db_path: dirs_data_dir()
-                .unwrap_or_else(|| PathBuf::from("audit.sqlite"))
-                .join("audit.sqlite"),
-            mcp_config_path: dirs_data_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join("mcp.yaml"),
-            systems_path: dirs_data_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join("systems.yaml"),
+            audit_db_path: data_dir.join("audit.sqlite"),
+            mcp_config_path: data_dir.join("mcp.yaml"),
+            systems_path: data_dir.join("systems.yaml"),
             devtools_enabled: cfg!(debug_assertions),
         }
     }
 }
 
 /// 读取数据目录下的 config.yaml（best-effort：文件不存在 / 解析失败都返回默认值）。
+/// BUGFIX #98：优先安装目录；兼容旧位置 %APPDATA%/eaide/config.yaml。
 fn load_yaml_config() -> YamlConfig {
-    let Some(data_dir) = dirs_data_dir() else {
+    let mut candidates = vec![crate::agent_manager::get_app_data_dir()];
+    if let Some(legacy) = dirs_data_dir() {
+        candidates.push(legacy);
+    }
+    let mut path = None;
+    for dir in &candidates {
+        let p = dir.join("config.yaml");
+        if p.exists() {
+            path = Some(p);
+            break;
+        }
+    }
+    let Some(path) = path else {
         return YamlConfig::default();
     };
-    let path = data_dir.join("config.yaml");
-    if !path.exists() {
-        return YamlConfig::default();
-    }
     match std::fs::read_to_string(&path) {
         Ok(text) => match serde_yaml::from_str::<YamlConfig>(&text) {
             Ok(cfg) => cfg,

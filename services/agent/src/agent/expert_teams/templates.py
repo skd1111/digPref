@@ -1,6 +1,6 @@
 """专家团交付物报告模板存储（2026-08-10）。
 
-模板目录：%APPDATA%\\eaide\\expert_teams\\templates\\（与专家团 YAML 同父级）。
+模板目录：<数据根>/expert_teams/templates/（BUGFIX #98：与专家团 YAML 同父级）。
 解析顺序（ops 导出时用，见 agent/ops/report_template.py）：
   1. ExpertTeam.report_template 显式指定的文件名；
   2. 自动探测 {team_id}.docx → {team_id}.md；

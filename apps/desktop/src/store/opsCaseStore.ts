@@ -79,6 +79,14 @@ interface OpsCaseStore extends OpsCaseState {
   overrideFile: (fileId: string, status: string, note?: string) => Promise<void>;
   deleteFile: (fileId: string) => Promise<void>;
   askExpert: (teamId: string, memberKey: string, question: string) => Promise<void>;
+  /** 交付物模板直开草稿（零 LLM）：创建/复用草稿并返回 id；失败返 null */
+  createDirectDraft: (
+    teamId: string,
+    memberKey: string,
+    outputName: string,
+  ) => Promise<string | null>;
+  /** 最近一次直开的草稿 id（面板据此自动全屏展开表单） */
+  lastDirectDraftId: string;
   /** 交付草稿（BUGFIX #78）：保存填写值 / 提交审核 */
   saveDraft: (draftId: string, values: Record<string, string>) => Promise<void>;
   submitDraft: (draftId: string) => Promise<boolean>;
@@ -134,6 +142,7 @@ export const useOpsCaseStore = create<OpsCaseStore>((set, get) => ({
   busyMembers: {},
   exporting: false,
   unreadByTeam: {},
+  lastDirectDraftId: "",
 
   loadCase: async (projectName, featureId) => {
     if (!featureId) {
@@ -181,6 +190,7 @@ export const useOpsCaseStore = create<OpsCaseStore>((set, get) => ({
       busyMembers: {},
       error: null,
       unreadByTeam: {},
+      lastDirectDraftId: "",
     }),
 
   clearCase: async (projectName, featureId) => {
@@ -312,6 +322,29 @@ export const useOpsCaseStore = create<OpsCaseStore>((set, get) => ({
       set({ error: errMsg(e) });
     } finally {
       set(setBusy(memberKey, undefined));
+    }
+  },
+
+  createDirectDraft: async (teamId, memberKey, outputName) => {
+    const caseId = get().case_id;
+    if (!caseId) return null;
+    try {
+      const r = await ipc.opsCaseDraftDirect({
+        case_id: caseId,
+        team_id: teamId,
+        member_key: memberKey,
+        output_name: outputName,
+      });
+      const draft = toDraft(r.draft);
+      // 幂等：后端复用既有草稿时前端不重复追加，只把它设为直开目标
+      set((s) => ({
+        drafts: s.drafts.some((d) => d.id === draft.id) ? s.drafts : [...s.drafts, draft],
+        lastDirectDraftId: draft.id,
+      }));
+      return draft.id;
+    } catch (e) {
+      set({ error: errMsg(e) });
+      return null;
     }
   },
 

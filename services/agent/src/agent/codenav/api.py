@@ -28,6 +28,7 @@ from agent.codenav.llm_client import (
 )
 from agent.codenav.mcp_tools import explain_symbol, resolve_jump
 from agent.codenav.query import SymbolQuery
+from agent.paths import data_root
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +41,8 @@ router = APIRouter(prefix="/codenav", tags=["codenav"])
 
 
 def _default_db_path() -> str:
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        return os.path.join(appdata, "eaide", "workspace_index.db")
-    return os.path.expanduser("~/.eaide/workspace_index.db")
+    # BUGFIX #98：统一落数据根（生产=安装目录）
+    return str(data_root() / "workspace_index.db")
 
 
 def _default_root_paths() -> list[str]:

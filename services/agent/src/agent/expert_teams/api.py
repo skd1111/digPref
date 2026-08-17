@@ -155,7 +155,11 @@ def _extract_package_templates(zf: zipfile.ZipFile, team_id: str) -> list[str]:
         if not name.startswith("templates/"):
             continue  # team.yaml 单独处理；其余根目录文件忽略
         raw = zf.read(info)
-        path = _save_template_file(team_id, name.split("/")[-1], base64.b64encode(raw).decode())
+        try:
+            path = _save_template_file(team_id, name.split("/")[-1], base64.b64encode(raw).decode())
+        except ValueError as e:
+            # 带上具体文件名，避免“模板不合法”时无从定位是哪个条目（BUGFIX #103 关联）
+            raise ValueError(f"{name}: {e}") from e
         saved.append(path.name)
     return saved
 

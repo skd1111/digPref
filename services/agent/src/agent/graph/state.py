@@ -83,6 +83,7 @@ class AgentState(TypedDict, total=False):
     approval_id: str | None
     approval_decision: ApprovalDecision | None
     approval_decided_at: str | None
+    approval_started_at: float | None  # 审批发起时间戳（gate 侧超时守卫，fail-closed）
     awaiting_approval: bool  # signal to SSE adapter
     approval_options: dict | None  # Phase 18：推荐选项（options/recommended/reason）
 
@@ -113,6 +114,9 @@ class AgentState(TypedDict, total=False):
     # ---- Phase 18 双框架（Coding Agent vs Work Agent）----
     work_mode: str  # "full"|"operator"|"auditor"|"analyst"（前端 WorkMode 透传）
     autonomy: str  # "interactive"|"auto"（会话级自主性）
+    # 页面上下文（2026-08-14）：前端当前页签/场景（如 {page: {workMode, tabTitle}}），
+    # 注入 intent / decompose prompt，消除“连接”这类模糊动词的场景歧义
+    page_context: dict[str, Any] | None
     routing: str | None  # "coding"|"work"|"mixed"（ModeRouter 判定）
     routing_overridden: bool  # 路由结果偏离当前模式默认
     routing_declaration: str | None  # 偏离声明文案（responder 引用）
@@ -162,6 +166,7 @@ def empty_state(prompt: str) -> dict:
         "approval_id": None,
         "approval_decision": None,
         "approval_decided_at": None,
+        "approval_started_at": None,
         "awaiting_approval": False,
         "approval_options": None,
         "trace": [],
@@ -180,6 +185,7 @@ def empty_state(prompt: str) -> dict:
         # Phase 18 双框架
         "work_mode": "full",
         "autonomy": "interactive",
+        "page_context": None,
         "routing": None,
         "routing_overridden": False,
         "routing_declaration": None,
@@ -202,6 +208,30 @@ def next_step(state: AgentState) -> dict | None:
 
 def advance(state: AgentState) -> dict:
     return {"current_step_index": state.get("current_step_index", 0) + 1}
+
+
+def format_page_context(page_context: Any) -> str:
+    """把前端传来的页面上下文 dict 压成一行人话（注入 intent / decompose prompt）。
+
+    输入形如 {"page": {"workMode": "operator", "tabTitle": "内网模型接入配置"}}；
+    非法/空输入返空串（调用方判空后决定是否注入）。
+    """
+    if not isinstance(page_context, dict):
+        return ""
+    page = page_context.get("page")
+    if not isinstance(page, dict):
+        page = page_context
+    tab_title = str(page.get("tabTitle") or "").strip()
+    work_mode = str(page.get("workMode") or "").strip()
+    route = str(page.get("route") or "").strip()
+    parts: list[str] = []
+    if tab_title:
+        parts.append(f"当前页签「{tab_title[:60]}」")
+    if route:
+        parts.append(f"页面路由 {route[:60]}")
+    if work_mode:
+        parts.append(f"模式 {work_mode}")
+    return "、".join(parts)
 
 
 def record_trace(node: NodeName, status: StepStatus, **meta: Any) -> dict:

@@ -38,6 +38,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from agent.paths import data_root
+
 from .cases import (
     ALL_FILE_STATUSES,
     FILE_PASSED,
@@ -63,10 +65,8 @@ router = APIRouter(prefix="/ops", tags=["ops"])
 
 
 def _default_db_path() -> str:
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        return os.path.join(appdata, "eaide", "ops.db")
-    return os.path.expanduser("~/.eaide/ops.db")
+    # BUGFIX #98：统一落数据根（生产=安装目录）
+    return str(data_root() / "ops.db")
 
 
 _storage: BusinessRecordStorage | None = None
@@ -1403,6 +1403,66 @@ def _render_draft_markdown(title: str, template: list[dict], values: dict) -> st
 async def list_case_drafts(case_id: str = Query(..., min_length=1)) -> dict:
     store = _get_case_storage()
     return {"drafts": [_normalize_draft_row(d) for d in store.list_drafts(case_id)]}
+
+
+class DirectDraftRequest(BaseModel):
+    """POST /case/drafts/direct body：点交付物直开表单（零 LLM）。"""
+
+    case_id: str = Field(min_length=1)
+    team_id: str = Field(min_length=1)
+    member_key: str = Field(min_length=1)
+    output_name: str = Field(min_length=1)
+
+
+@router.post("/case/drafts/direct")
+async def create_direct_draft(req: DirectDraftRequest) -> dict:
+    """交付物模板直开草稿（零 LLM，2026-08-14）。
+
+    专家团 yaml 里已定义 member.output_forms[交付物名] 时，点交付物直接
+    建一份结构化草稿，不再走「问专家 → LLM 生成表单」；幂等：同成员同
+    交付物已有未通过草稿时直接返回它（不重复建空表单）。
+    """
+    from agent.expert_teams.api import _loader as team_loader
+
+    team = team_loader.get(req.team_id)
+    if team is None:
+        raise HTTPException(404, f"专家团 {req.team_id} 不存在")
+    member = next((m for m in team.members if m.name == req.member_key), None)
+    if member is None:
+        raise HTTPException(404, f"专家 {req.member_key} 不在团 {req.team_id} 中")
+    if req.output_name not in member.outputs:
+        raise HTTPException(400, f"{req.output_name} 不是 {req.member_key} 的交付物")
+    raw_fields = member.output_forms.get(req.output_name)
+    if not raw_fields:
+        raise HTTPException(400, f"交付物「{req.output_name}」未定义表单模板，请继续用问专家生成")
+
+    # 字段归一化复用 LLM 草稿同一套解析（类型白名单 / 去重 / 上限 20）
+    parsed = _parse_draft_template(
+        json.dumps({"title": req.output_name, "fields": raw_fields}, ensure_ascii=False)
+    )
+    if parsed is None:
+        raise HTTPException(400, "表单模板定义不合法，请到 设置 → 专家团 修正")
+    _, fields = parsed
+
+    store = _get_case_storage()
+    # 幂等：同成员同标题已有未通过草稿 → 直接返回，不重复建空表单
+    for row in store.list_drafts(req.case_id):
+        if (
+            str(row.get("member_key", "")) == req.member_key
+            and str(row.get("title", "")) == req.output_name
+            and str(row.get("status", "")) != "passed"
+        ):
+            return {"draft": _normalize_draft_row(row), "reused": True}
+
+    row = store.add_draft(
+        case_id=req.case_id,
+        team_id=req.team_id,
+        member_key=req.member_key,
+        title=req.output_name,
+        template_json=dump_json(fields),
+        values_json=dump_json({}),
+    )
+    return {"draft": _normalize_draft_row(row), "reused": False}
 
 
 @router.put("/case/drafts/{draft_id}")

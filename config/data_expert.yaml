@@ -1,0 +1,65 @@
+# Phase 7 数据专家模式配置（v2.87 设计补强）
+#
+# ⚠️ V0 现状（2026-08-14 勘误）：本文件是预留配置模板，当前**没有**代码读取它。
+# MetricResolver 切换仅环境变量 EAIDE_METRIC_RESOLVER 生效（dict / platform / bridge）；
+# platform 连接参数仅读 EAIDE_METRICS_BASE_URL / EAIDE_METRICS_API_KEY 环境变量。
+# yaml 接线（dataexpert/config.py 加载器）留待 V1 接力实现。
+# 任何字段变更必须同步修改 ROADMAP/SCHEDULE/CHANGELOG。
+
+# ---- Phase 7 V0 基础配置 ----
+data_expert_db_path: data_expert.db       # SQLite 路径（与 audit/router/knowledge 等 db 物理隔离）
+data_result_dir: results                 # 结果集 Parquet 存储目录（大对象不入库）
+data_sql_row_limit: 10000                # SQL 强制 LIMIT 上限（防 OOM）
+data_sandbox_mem_mb: 2048                # Python 沙箱内存上限（MB）
+data_sandbox_timeout: 30                 # Python 沙箱执行超时（秒）
+data_export_watermark: true              # 导出数字水印开关
+data_require_mask_on_export: true        # 导出强制 PII 脱敏（生产别关）
+
+# ---- v2.87 MetricResolver 抽象层 ----
+# 国内金融/政企客户普遍已有 IMS / Quick BI / DataFinder 等指标管理平台。
+# 同一指标在不同系统定义不同口径是合规事故 —— 架构上抽象 MetricResolver 接口，
+# 业务代码只看 ResolvedQuery，不感知底下是业务字典 / 指标平台 / dws 视图桥接。
+# 配置驱动切换是 V1 目标形态；V0 当前仅环境变量生效（见文件头勘误），不重写 NL2SQL 业务逻辑。
+#
+# 三种实现：
+#   dict      —— V0 默认；基于现有 nl2sql/dictionary.py 业务字典（零代码改动）
+#   platform  —— V1 接力；直连 IMS / Quick BI / DataFinder HTTP API（依赖客户有 IMS）
+#   bridge    —— V1.5 接力；走 dws 视图间接查询（依赖客户有 dws 层）
+metric_resolver:
+  # 类型：dict / platform / bridge
+  # ⚠️ V0 不读本段；切换请用环境变量 EAIDE_METRIC_RESOLVER（build_resolver 唯一生效来源）
+  type: dict
+
+  # DictMetricResolver 配置（V0 默认）
+  dict:
+    # 业务字典 YAML 目录（V1 外置；V0 硬编码在 nl2sql/dictionary.py _DEFAULT_DICTIONARY）
+    dict_path: config/biz_dict/
+
+  # PlatformMetricResolver 配置（V1 接力）
+  # 启用前需要：
+  #   1. 实现 services/agent/src/agent/dataexpert/metric_resolver.py::PlatformMetricResolver
+  #   2. 客户有标准指标平台（IMS / Quick BI 指标百科 / DataFinder）
+  #   3. 在 .env / Keyring 里配 EAIDE_METRICS_BASE_URL + EAIDE_METRICS_API_KEY
+  platform:
+    # 指标平台 API base URL（如 https://metrics.company.com/api/v1）
+    # 也可通过环境变量 EAIDE_METRICS_BASE_URL 配置
+    base_url: ""
+    # Keyring 占位符名（实际密钥从 OS Keyring 取 EAIDE_METRICS_API_KEY 条目）
+    # 也可通过环境变量 EAIDE_METRICS_API_KEY 兜底（开发环境）
+    auth_secret: EAIDE_METRICS_API_KEY
+    # HTTP 调用超时（秒）
+    timeout: 30
+
+  # BridgeMetricResolver 配置（V1.5 接力）
+  # 启用前需要：
+  #   1. 实现 services/agent/src/agent/dataexpert/metric_resolver.py::BridgeMetricResolver
+  #   2. 客户有 dws 层视图（含业务指标命名规范）
+  bridge:
+    # dws schema 名
+    dws_schema: dws
+
+# ---- 设计哲学 ----
+# 1. dict 模式不可删除：客户无指标平台时是兜底；V0/V1/V1.5 永远保留
+# 2. 指标平台是 NL2SQL 的前置依赖，不是平级，是上游
+# 3. 配置驱动切换（V1 目标；V0 仅环境变量生效）：前端 DataWorkbench 状态栏透 ResolvedQuery.source_kind 给用户看
+# 4. Platform 模式可以同时返回多个候选指标（top-K），前端让用户选

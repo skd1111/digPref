@@ -30,6 +30,17 @@ export interface ChatTab {
   backendSessionId?: string;
   /** 页签所属模式（2026-08-11 模式隔离）；旧数据无值按 'full' 处理 */
   mode?: WorkMode;
+  /** 纯净对话模式（2026-08-14）：发送时不注入任何项目上下文（画像/功能点/专家团/对齐参照），
+   *  用于与工程无关的闲聊/小问题；用户主动附加的附件/选区不受影响 */
+  cleanMode?: boolean;
+  /** 会话模型选择（2026-08-17）：模型管理 backend 名；undefined = 按模型管理路由配置，
+   *  选中时随每次发送透传后端（优先级最高） */
+  chatModel?: string;
+  /** 上下文断点（2026-08-17）：该消息及之前的对话不再随发送进后端（界面保留可回看）；
+   *  「清理上下文」设断点为最后一条消息，「压缩上下文」设为最后一条被压缩的消息 */
+  contextBreakpoint?: string;
+  /** 历史压缩摘要（2026-08-17）：断点之前旧对话的 LLM 摘要，随每次发送透传后端 */
+  contextSummary?: string;
 }
 
 interface ChatState {
@@ -99,6 +110,15 @@ interface ChatState {
   setLastRunMs: (ms: number | null) => void;
   /** 给指定 tab 绑定后端 session id（sessions 归档） */
   setTabSessionId: (tabId: string, sessionId: string) => void;
+  /** 开关指定 tab 的纯净对话模式（2026-08-14，随 tabs 持久化） */
+  setTabCleanMode: (tabId: string, on: boolean) => void;
+  /** 设置指定 tab 的会话模型（2026-08-17）；null = 回落模型管理配置 */
+  setTabChatModel: (tabId: string, modelName: string | null) => void;
+  /** 上下文断点式清理（2026-08-17）：断点设到最后一条消息，
+   *  界面消息保留但后续发送不再携带；同时清空已有压缩摘要 */
+  clearTabContext: (tabId: string) => void;
+  /** 应用压缩结果（2026-08-17）：写入新摘要 + 断点设为最后一条被压缩的消息 */
+  applyTabCompression: (tabId: string, summary: string, breakpointId: string) => void;
 }
 
 const newId = (): string => `tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -299,6 +319,38 @@ export const useChatStore = create<ChatState>()(
           t.id === tabId ? { ...t, backendSessionId: sessionId } : t,
         ),
       })),
+    setTabCleanMode: (tabId, on) =>
+      set((s) => ({
+        tabs: s.tabs.map((t) => (t.id === tabId ? { ...t, cleanMode: on } : t)),
+      })),
+    setTabChatModel: (tabId, modelName) =>
+      set((s) => ({
+        tabs: s.tabs.map((t): ChatTab => {
+          if (t.id !== tabId) return t;
+          if (modelName) return { ...t, chatModel: modelName };
+          // 回落默认：剥掉字段（exactOptionalPropertyTypes 下不能显式赋 undefined）
+          const { chatModel: _omit, ...rest } = t;
+          return rest;
+        }),
+      })),
+    clearTabContext: (tabId) =>
+      set((s) => ({
+        tabs: s.tabs.map((t): ChatTab => {
+          if (t.id !== tabId || t.messages.length === 0) return t;
+          const lastId = t.messages[t.messages.length - 1].id;
+          // 清理同时作废旧摘要（断点前内容已全部排除，摘要失去对应对象）
+          const { contextSummary: _omitSummary, ...rest } = t;
+          return { ...rest, contextBreakpoint: lastId };
+        }),
+      })),
+    applyTabCompression: (tabId, summary, breakpointId) =>
+      set((s) => ({
+        tabs: s.tabs.map((t) =>
+          t.id === tabId
+            ? { ...t, contextSummary: summary, contextBreakpoint: breakpointId }
+            : t,
+        ),
+      })),
       };
     },
     {
@@ -476,6 +528,34 @@ export function renderExpertTeamBlock(team: ExpertTeam): string[] {
     '结论，最终判断由人工负责。）'
   );
   return lines;
+}
+
+// ---------------------------------------------------------------------------
+// 上下文大小估算与断点过滤（2026-08-17）—— 纯函数，供 ChatInput / 测试复用
+// ---------------------------------------------------------------------------
+
+/** 粗估 token（~4 字符/token，与后端 context_trim / PrivateLLM 估算口径一致） */
+export function estimateTokens(text: string): number {
+  return Math.max(1, Math.ceil(text.length / 4));
+}
+
+/** 取断点之后、会随下次发送的会话消息（user/assistant 且有内容） */
+export function tabContextMessages(tab: ChatTab): ChatMessage[] {
+  const bp = tab.contextBreakpoint;
+  const msgs = tab.messages;
+  let start = 0;
+  if (bp) {
+    const idx = msgs.findIndex((m) => m.id === bp);
+    if (idx >= 0) start = idx + 1;
+  }
+  return msgs
+    .slice(start)
+    .filter((m) => (m.role === 'user' || m.role === 'assistant') && Boolean(m.content));
+}
+
+/** 将随下次发送的会话 history 估算 token（不含项目上下文/附件/输入文本） */
+export function estimateHistoryTokens(tab: ChatTab): number {
+  return tabContextMessages(tab).reduce((sum, m) => sum + estimateTokens(m.content), 0);
 }
 
 /** 单个功能点上下文渲染（首行含功能名，其余缩进子项） */

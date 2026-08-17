@@ -24,7 +24,7 @@ import httpx
 
 from agent.dual.prompt_loader import FINAL_ANSWER_STYLE
 from agent.llm.json_discipline import RETRY_PROMPT, extract_json
-from agent.llm.prompts import load_prompt
+from agent.llm.prompts import current_time_text, load_prompt
 from agent.llm.token_usage import record_openai_usage
 from agent.llm.types import Intent
 
@@ -93,6 +93,7 @@ class PrivateLLMClient:
         api_key: str,
         model: str,
         max_context: int | None = None,
+        max_output_tokens: int | None = None,
     ) -> None:
         """内网 LLM 客户端初始化。
 
@@ -102,11 +103,14 @@ class PrivateLLMClient:
             model: 模型名（如 'DeepSeek-RD-Llama-70B-Int8'）。
             max_context: 上下文窗口大小（tokens）。None=不截断 history。
                 配置时按 `chars_per_token=4` 估算 message 长度，超长 history 从中部丢消息。
+            max_output_tokens: 全局输出上限（gen_limits 两级回退）。配置时每次
+                chat 请求注入 `max_tokens`，限制一次生成的最大 token 数防过度输出。
         """
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
         self.max_context = max_context
+        self.max_output_tokens = max_output_tokens
         # Token 计量标签：内网后端 "private"；云端客户端由 _build_cloud_client 改为 "cloud"
         self.usage_label = "private"
         # 延迟创建客户端（避免 import 时产生副作用）
@@ -151,16 +155,25 @@ class PrivateLLMClient:
         kept.reverse()
         return system_msgs + kept
 
+    def _auth_headers(self) -> dict[str, str]:
+        """请求头：api_key 为空时不发 Authorization（内网免鉴权端点）。
+
+        背景（BUGFIX #109）：无条件拼 `Bearer {api_key}`，key 为空时
+        httpx 直接拒发非法头 `b'Bearer '`，本来可用的免鉴权内网后端被误判不可用。
+        与 engine_api / codenav 的「key 非空才带头」约定对齐。
+        """
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
+
     @property
     def client(self) -> httpx.AsyncClient:
         """获取或创建共享的 httpx 客户端（复用连接池）。"""
         if self._client is None:
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(90.0, connect=10.0),
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
+                headers=self._auth_headers(),
             )
         return self._client
 
@@ -192,6 +205,9 @@ class PrivateLLMClient:
             "messages": truncated,
             "temperature": temperature,
         }
+        # 最大输出长度（gen_limits 全局上限）：限制一次生成的最大 token 数
+        if self.max_output_tokens and self.max_output_tokens > 0:
+            payload["max_tokens"] = self.max_output_tokens
         if response_format:
             payload["response_format"] = {
                 "type": "json_schema",
@@ -277,12 +293,11 @@ class PrivateLLMClient:
             "tools": tools,
             "tool_choice": tool_choice,
         }
+        if self.max_output_tokens and self.max_output_tokens > 0:
+            payload["max_tokens"] = self.max_output_tokens
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(timeout or 90.0, connect=5.0),
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
+            headers=self._auth_headers(),
         ) as client:
             r = await client.post(f"{self.base_url}/chat/completions", json=payload)
             r.raise_for_status()
@@ -350,6 +365,8 @@ class PrivateLLMClient:
         注意：Router 通常将 intent 任务路由到 Ollama（数据敏感性），
         此实现保留作为 fallback。
         """
+        from agent.observability.cot_log import cot as cot_log
+
         try:
             result = await self._chat_json_with_retry(
                 [
@@ -367,17 +384,25 @@ class PrivateLLMClient:
                     "required": ["intent"],
                 },
             )
-        except Exception:
+        except Exception as exc:
+            cot_log("private.classify_intent.error", text=text, error=repr(exc))
             return "query"
 
         intent = result.get("intent", "query")
+        cot_log("private.classify_intent.result", text=text, result=result, intent=intent)
         if intent not in {"query", "mutate", "orchestrate", "chitchat"}:
             return "query"
         return cast(Intent, intent)
 
-    async def analyze_intent(self, text: str, history: list | None = None) -> dict:
-        """结构化意图分析（Intent Router）。失败抛异常，由 LMRouter 降级链接管。"""
+    async def analyze_intent(
+        self, text: str, history: list | None = None, page_context: str = ""
+    ) -> dict:
+        """结构化意图分析（Intent Router）。失败抛异常，由 LMRouter 降级链接管。
+
+        page_context（2026-08-14）：当前页签/场景一行描述，非空时拼进 user 消息。
+        """
         from agent.llm.types import IntentAnalysis  # 避免循环导入
+        from agent.observability.cot_log import cot as cot_log
 
         msgs: list[dict] = [{"role": "system", "content": load_prompt("intent_router")}]
         for h in (history or [])[-4:]:
@@ -387,7 +412,10 @@ class PrivateLLMClient:
             )
             if role in ("user", "assistant") and content:
                 msgs.append({"role": role, "content": str(content)})
-        msgs.append({"role": "user", "content": text})
+        user_content = text
+        if page_context.strip():
+            user_content = f"[页面上下文：{page_context.strip()}]\n\n{text}"
+        msgs.append({"role": "user", "content": user_content})
         result = await self._chat_json_with_retry(
             msgs,
             response_format={
@@ -404,7 +432,9 @@ class PrivateLLMClient:
             },
         )
         if not isinstance(result, dict) or not result:
+            cot_log("private.analyze_intent.empty", text=text)
             raise ValueError("intent analysis output is empty")
+        cot_log("private.analyze_intent.parsed", text=text, payload=result)
         return IntentAnalysis.from_raw(result, fallback_text=text, backend="private").to_dict()
 
     # ---- 计划生成 ------------------------------------------------------------
@@ -546,6 +576,9 @@ class PrivateLLMClient:
                         "content": (
                             f"Intent: {intent}\n"
                             f"User question: {user_prompt}\n\n"
+                            # 当前时间注入（BUGFIX #112）：模型对「今天」无可靠感知，
+                            # 不注入会凭训练知识编造日期；summarise.md §5.1 以此为唯一基准。
+                            f"Current time: {current_time_text()}\n\n"
                             f"Plan executed:\n{plan_brief}\n\n"
                             f"Tool results (may be truncated):\n{results_brief}\n\n"
                             "Produce the final answer."
@@ -587,6 +620,8 @@ class PrivateLLMClient:
             "messages": truncated,
             "temperature": 0.1,
         }
+        if self.max_output_tokens and self.max_output_tokens > 0:
+            payload["max_tokens"] = self.max_output_tokens
         # 提取场景 prompt 大（最多 8 个文件片段）且要求输出长 JSON，
         # 共享 client 的 90s 默认超时不够 → 单请求放宽到 300s；
         # 但 connect 阶段仍限 10s —— 否则后端不可达时整个请求会

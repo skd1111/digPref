@@ -56,6 +56,10 @@ from agent.builtin.lightweight import (
     builtin_regex_match,
     builtin_url_parse,
 )
+from agent.builtin.llm_admin import (
+    builtin_model_config_upsert,
+    builtin_probe_chat_endpoint,
+)
 from agent.builtin.logfile import builtin_log_read_lines, builtin_log_search
 from agent.builtin.markdown_convert import builtin_file_to_markdown
 from agent.builtin.models import BUILTIN_TOOL_NAMES, RiskLevel
@@ -113,6 +117,9 @@ TOOL_RISK_LEVEL: dict[str, RiskLevel] = {
     # V7 大文件查看与搜索（纯只读，绝不修改文件）
     "log_read_lines": "read",
     "log_search": "read",
+    # V8 LLM 管理工具（2026-08-14：模型接入）
+    "model_config_upsert": "high",  # 写 router.db 模型注册表 → 强制 HITL
+    "probe_chat_endpoint": "read",  # 只发最小探测请求，不写任何状态
 }
 
 
@@ -284,6 +291,22 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "Read-only, never modifies the file. ALWAYS use this instead of grep when the "
         "target file is > 100MB or grep returns file_too_large. 搜大文件 / 搜日志 ERROR."
     ),
+    # V8 LLM 管理工具（模型接入，2026-08-14）
+    "model_config_upsert": (
+        "Register or update a model backend in the model registry (router.db, same "
+        "source as 设置→模型管理). Required: name, type (local/private/cloud), "
+        "base_url, model_name. Optional: api_key_ref (keyring reference name ONLY, "
+        "never a plaintext key), enabled, role, max_context. Writes the config and "
+        "hot-reloads the running router. Requires HITL approval (high risk). Use for "
+        "接入/连接/添加内网模型端点."
+    ),
+    "probe_chat_endpoint": (
+        "Probe an OpenAI-compatible chat/completions endpoint with a minimal request "
+        "(max_tokens=1) and report reachable / status_code / latency_ms. Appends "
+        "/chat/completions automatically if missing. Sends no Authorization header "
+        "(401/403 reported as auth_required). Read-only. Use for 测试模型/地址是否可达、"
+        "连通性测试、接入后验证."
+    ),
 }
 
 
@@ -341,6 +364,9 @@ class BuiltinToolRegistry:
             # V7 大文件查看与搜索（klogg 式只读）
             "log_read_lines": builtin_log_read_lines,
             "log_search": builtin_log_search,
+            # V8 LLM 管理工具（2026-08-14：模型接入/连通性探测）
+            "model_config_upsert": builtin_model_config_upsert,
+            "probe_chat_endpoint": builtin_probe_chat_endpoint,
         }
 
     def get(self, name: str) -> Callable[..., Any] | None:

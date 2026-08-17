@@ -338,3 +338,31 @@ pub async fn router_set_spark_mode(
         .map_err(err)?;
     json_or_err(resp).await
 }
+
+/// 生成限制（两级回退）：读全局默认（最大输出长度 / 默认上下文长度）。
+/// GET /router/gen-limits → { ok, limits: { max_output_tokens, default_context_window } }
+#[tauri::command]
+pub async fn router_get_gen_limits(state: State<'_, AppState>) -> CmdResult<serde_json::Value> {
+    let url = agent_url(&state, "/router/gen-limits");
+    let resp = reqwest::get(&url).await.map_err(err)?;
+    json_or_err(resp).await
+}
+
+/// 生成限制（两级回退）：写全局默认 + 后端热生效。
+/// PUT /router/gen-limits，limits 为稀疏 patch（只传要改的字段）。
+#[tauri::command]
+pub async fn router_set_gen_limits(
+    limits: serde_json::Value,
+    state: State<'_, AppState>,
+) -> CmdResult<serde_json::Value> {
+    let url = agent_url(&state, "/router/gen-limits");
+    let client = reqwest::Client::new();
+    let resp = client
+        .put(&url)
+        .timeout(std::time::Duration::from_secs(10))
+        .json(&limits)
+        .send()
+        .await
+        .map_err(err)?;
+    json_or_err(resp).await
+}

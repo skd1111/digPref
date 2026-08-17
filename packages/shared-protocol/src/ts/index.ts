@@ -13,3 +13,5 @@ export * from './doc-review';
 export * from './codenav';
 export * from './sub_agent';
 export * from './thinking';
+// Phase 7 v2.87 (2026-08-13): MetricResolver 抽象层 TS 镜像
+export * from './dataexpert';

@@ -20,6 +20,7 @@ vi.mock("@/ipc/invoke", () => ({
     opsCaseFileOverride: vi.fn(),
     opsCaseFileDelete: vi.fn(),
     opsCaseAsk: vi.fn(),
+    opsCaseDraftDirect: vi.fn(),
     opsCaseExport: vi.fn(),
     opsCaseCrosscheck: vi.fn().mockResolvedValue({
       case_id: "bank__ops_open",
@@ -565,5 +566,108 @@ describe("全屏草稿表单（BUGFIX #93）", () => {
     fireEvent.change(input, { target: { value: "某某贸易有限公司" } });
     expect(screen.getAllByText("1/1").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/必填项已完成，可提交专家审核/)).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 点交付物直开表单（2026-08-14）：有模板零 LLM 直建草稿；无模板自动问专家
+// ---------------------------------------------------------------------------
+
+describe("点交付物直开表单（2026-08-14）", () => {
+  const DIRECT_DRAFT = {
+    id: "DR-DIRECT",
+    case_id: "bank__ops_open",
+    team_id: TEAM.id,
+    member_key: "客户身份识别专家",
+    title: "客户身份基本信息表",
+    template: [
+      { name: "corp_name", label: "企业名称", type: "text", required: true },
+      { name: "legal_person", label: "法定代表人", type: "text", required: false },
+    ],
+    values: {},
+    status: "draft" as const,
+    file_id: "",
+    created_at: 1,
+    updated_at: 1,
+  };
+
+  function seedTeamWithForm(outputs: string[]): void {
+    const teamWithForm = {
+      ...TEAM,
+      members: [
+        {
+          ...TEAM.members[0],
+          outputs,
+          output_forms:
+            outputs.includes("客户身份基本信息表")
+              ? {
+                  客户身份基本信息表: [
+                    { name: "corp_name", label: "企业名称", type: "text", required: true },
+                  ],
+                }
+              : {},
+        },
+      ],
+    };
+    useExpertTeamStore.setState({ teams: [teamWithForm as never] });
+  }
+
+  it("有模板的交付物：点击零 LLM 直建草稿，不再走问专家", async () => {
+    seedTeamWithForm(["客户身份基本信息表"]);
+    (ipc.opsCaseDraftDirect as ReturnType<typeof vi.fn>).mockResolvedValue({
+      draft: DIRECT_DRAFT,
+      reused: false,
+    });
+    render(
+      <ExpertWorkflowPanel
+        selection={selection}
+        projectName="bank"
+        onSaveTeamPreset={() => undefined}
+      />,
+    );
+    const btn = await screen.findByRole("button", { name: /客户身份基本信息表/ });
+    fireEvent.click(btn);
+    await waitFor(() =>
+      expect(ipc.opsCaseDraftDirect).toHaveBeenCalledWith({
+        case_id: "bank__ops_open",
+        team_id: TEAM.id,
+        member_key: "客户身份识别专家",
+        output_name: "客户身份基本信息表",
+      }),
+    );
+    // 未走问专家链路
+    expect(ipc.opsCaseAsk).not.toHaveBeenCalled();
+    // 草稿入 store 且标记为直开目标（面板据此自动全屏）
+    await waitFor(() => {
+      const st = useOpsCaseStore.getState();
+      expect(st.drafts.some((d: { id: string }) => d.id === "DR-DIRECT")).toBe(true);
+      expect(st.lastDirectDraftId).toBe("DR-DIRECT");
+    });
+  });
+
+  it("无模板的交付物：点击自动拼好提问发给该专家（免手动输入）", async () => {
+    seedTeamWithForm(["身份风险疑点清单"]);
+    (ipc.opsCaseAsk as ReturnType<typeof vi.fn>).mockResolvedValue({
+      qa: { id: "QA-1", question: "x", answer: "y", created_at: 1 },
+      draft: null,
+    });
+    render(
+      <ExpertWorkflowPanel
+        selection={selection}
+        projectName="bank"
+        onSaveTeamPreset={() => undefined}
+      />,
+    );
+    const btn = await screen.findByRole("button", { name: /身份风险疑点清单/ });
+    fireEvent.click(btn);
+    await waitFor(() =>
+      expect(ipc.opsCaseAsk).toHaveBeenCalledWith(
+        expect.objectContaining({
+          member_key: "客户身份识别专家",
+          question: expect.stringContaining("请帮我完成交付物「身份风险疑点清单」"),
+        }),
+      ),
+    );
+    expect(ipc.opsCaseDraftDirect).not.toHaveBeenCalled();
   });
 });

@@ -39,6 +39,8 @@ function resetStore(): void {
     result: null,
     running: false,
     error: null,
+    // BUGFIX #101 后 RunBar 需选中数据源才显示 HITL 提示，测试需预置
+    selectedSourceId: 'src-test',
   });
 }
 

@@ -96,6 +96,8 @@ dist/
 *.db
 # 仅忽略仓库根的本地审计产物目录；不能误伤 src 下的 audit/credentials 源码目录
 /audit/
+# 工具结果 spill 落盘目录（运行时产物；锚定根目录避免误伤深层同名目录）
+/spill/
 logs/
 *.log
 

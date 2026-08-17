@@ -68,6 +68,9 @@ BUILTIN_TOOL_NAMES: tuple[str, ...] = (
     # V7 大文件查看与搜索（2026-08-10：klogg 式只读，突破 100MB 限制）
     "log_read_lines",
     "log_search",
+    # V8 LLM 管理工具（2026-08-14：模型接入 / 连通性探测）
+    "model_config_upsert",
+    "probe_chat_endpoint",
 )
 
 

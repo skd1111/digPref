@@ -2,6 +2,7 @@
 
 覆盖：
     - native 循环：工具执行 → 最终回答
+    - native 循环 system 消息注入当前时间（BUGFIX #113 防编造日期）
     - ask_user 伪工具 → 追问直出
     - use_more_tools → 全量加载后放行全部工具
     - HITL 暂停（awaiting_approval）与批准后恢复执行
@@ -11,6 +12,8 @@
 """
 
 from __future__ import annotations
+
+from datetime import datetime
 
 from agent.tools.loop import DynamicToolLoop
 
@@ -175,6 +178,62 @@ class TestNativeLoop:
         loop = DynamicToolLoop(_FakeRouter(_BrokenBackend()), ToolCatalog(mcp=None))
         out = await loop._run_native(_state())
         assert out is None
+
+    async def test_system_prompt_injects_current_time(self):
+        """BUGFIX #113 回归锁：FINAL_ANSWER 由模型直透用户，system 必须带可信时间基准。
+
+        不注入时模型对「今天」无感知，会凭训练知识编造日期（10月5日/10月10日）。
+        """
+        from agent.tools.catalog import ToolCatalog
+
+        backend = _FakeBackend([{"content": "今天。", "tool_calls": []}])
+        loop = DynamicToolLoop(_FakeRouter(backend), ToolCatalog(mcp=None))
+        await loop.run(_state())
+        first_msgs = backend.requests[0][0]
+        system = str(first_msgs[0]["content"])
+        assert first_msgs[0]["role"] == "system"
+        assert "当前时间" in system
+        # 注入的是本地今天（不是 UTC、不是训练记忆里的日期）
+        assert datetime.now().astimezone().strftime("%Y-%m-%d") in system
+        # 纪律条款在场：禁止凭记忆回答日期
+        assert "严禁凭记忆回答日期" in system
+
+    async def test_native_system_prompt_has_language_discipline(self):
+        """system 消息必须携带语言纪律（BUGFIX #114）：内网推理模型默认英文作答，
+        中文提问拿到整段英文终答（FINAL_ANSWER 直透用户不经 summarise，无其他中文约束）。
+        """
+        from agent.tools.catalog import ToolCatalog
+
+        backend = _FakeBackend([{"content": "回答。", "tool_calls": []}])
+        loop = DynamicToolLoop(_FakeRouter(backend), ToolCatalog(mcp=None))
+        await loop.run(_state())
+        system = str(backend.requests[0][0][0]["content"])
+        assert "与用户输入一致的语言" in system
+        assert "禁止整段英文输出" in system
+
+    def test_tool_orchestrate_prompt_has_language_discipline(self):
+        """tool_orchestrate 模板（提示词协议链路）同样必须带语言约束（BUGFIX #114）。"""
+        from agent.llm.prompts import load_prompt, render_prompt
+
+        text = render_prompt(
+            load_prompt("tool_orchestrate"),
+            LOAD_STAGE="SUMMARY_ONLY",
+            USER_INPUT="1+1等于",
+            MESSAGES="[]",
+            TOOL_SUMMARIES="[]",
+            REGISTERED_TOOLS="[]",
+            FULL_TOOLSET_LOADED="false",
+            TOOL_RESULTS="[]",
+            MAX_SELECTED_TOOLS="5",
+            CURRENT_TIME="2026-08-17",
+            WORK_MODE="full",
+            AUTONOMY="interactive",
+            ROUTING="work",
+            EXTRA_RULES="",
+            DECISION_HINT="",
+        )
+        assert "必须使用与用户输入一致的语言" in text
+        assert "禁止整段英文输出" in text
 
     async def test_no_native_backend_returns_none(self):
         from agent.tools.catalog import ToolCatalog

@@ -177,7 +177,17 @@ class ReadOnlyPool:
     def __init__(self, source_config: dict | None = None) -> None:
         self._config = source_config or {}
         self._pool: Any = None
-        self._type = self._config.get("type", "sqlite")
+        # 注意：空串也算"未配置"——get 的默认值只在键缺失时生效，
+        # Rust 注入 {"type": ""} 时不能静默兜底（BUGFIX #97：曾静默返回空结果）
+        self._type = (self._config.get("type") or "").strip()
+
+    def _require_known_type(self) -> None:
+        """type 缺失/未知时快速失败，绝不静默返回空结果（fail-fast 红线）。"""
+        if self._type not in DB_TYPE_REGISTRY:
+            raise ValueError(
+                f"数据源类型未配置或不支持: '{self._type}'。"
+                "请在「系统资产」中编辑该数据源，选择数据库类型后重试"
+            )
 
     async def _ensure_pool(self) -> None:
         """懒初始化连接池（首次 execute 时创建）。"""
@@ -346,6 +356,9 @@ class ReadOnlyPool:
         # 安全层 2：强制 LIMIT
         safe_sql = inject_limit(sql, row_limit)
 
+        # 类型未配置/未知 → 明确报错，禁止静默返回空 DataFrame（BUGFIX #97）
+        self._require_known_type()
+
         start = time.perf_counter()
 
         if self._type in _MYSQL_COMPAT:
@@ -365,7 +378,8 @@ class ReadOnlyPool:
         elif self._type in ("csv", "excel"):
             df = self._execute_file(safe_sql)
         else:
-            df = self._execute_fallback(safe_sql)
+            # _require_known_type 已拦截，理论不可达（防御性兜底）
+            raise ValueError(f"不支持的数据源类型: {self._type}")
 
         elapsed_ms = int((time.perf_counter() - start) * 1000)
         logger.debug("SQL 执行完成: %dms, type=%s", elapsed_ms, self._type)
@@ -379,8 +393,16 @@ class ReadOnlyPool:
         async with self._pool.acquire() as conn:
             async with conn.cursor() as cur:
                 await cur.execute("SET SESSION TRANSACTION READ ONLY")
-            df = pd.read_sql(sql, conn)
-        return df
+                await cur.execute(sql)
+                columns = (
+                    [desc[0] for desc in cur.description] if cur.description else []
+                )
+                rows = await cur.fetchall()
+        # 基于 cursor 结果构造 DataFrame：不能把 aiomysql 异步连接直接喂给
+        # pd.read_sql（pandas 会调 conn.execute → _ContextManager 无此属性，BUGFIX #102）
+        if not rows:
+            return pd.DataFrame(columns=columns)
+        return pd.DataFrame([list(r) for r in rows], columns=columns)
 
     async def _execute_postgres(self, sql: str) -> Any:
         """PostgreSQL 协议执行（PostgreSQL/KingbaseES/GaussDB/openGauss/HighGo）。"""
@@ -404,10 +426,21 @@ class ReadOnlyPool:
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
             cursor = conn.cursor()
-            await cursor.execute("ALTER SESSION SET READ ONLY")
-            df = pd.read_sql(sql, conn)
-            await cursor.close()
-        return df
+            try:
+                await cursor.execute("ALTER SESSION SET READ ONLY")
+                await cursor.execute(sql)
+                columns = (
+                    [desc[0] for desc in cursor.description]
+                    if cursor.description
+                    else []
+                )
+                rows = await cursor.fetchall()
+            finally:
+                await cursor.close()
+        # 同 MySQL 分支：oracledb 异步连接不能直接喂 pd.read_sql（BUGFIX #102）
+        if not rows:
+            return pd.DataFrame(columns=columns)
+        return pd.DataFrame([list(r) for r in rows], columns=columns)
 
     async def _execute_sqlserver(self, sql: str) -> Any:
         """SQL Server 执行。"""
@@ -504,12 +537,6 @@ class ReadOnlyPool:
             conn.close()
         return result
 
-    def _execute_fallback(self, sql: str) -> Any:
-        """兜底：返回空 DataFrame。"""
-        import pandas as pd
-
-        return pd.DataFrame()
-
     async def fetch_schema(self) -> list[dict]:
         """拉取数据源全量表结构（缺口 2：真实 Schema 同步）。
 
@@ -519,8 +546,6 @@ class ReadOnlyPool:
         Returns:
             [{name, comment, columns:[{name, dtype, comment}]}]
         """
-        import pandas as pd
-
         # 文件型数据源：从文件列推导单表 schema
         if self._type in ("csv", "excel"):
             df_file = self._execute_file("SELECT *")
@@ -533,6 +558,8 @@ class ReadOnlyPool:
             return [{"name": tname, "comment": path, "columns": cols}]
 
         sql = build_schema_query(self._type)
+        # 类型未配置/未知 → 明确报错（BUGFIX #97，与 execute_sql 同策略）
+        self._require_known_type()
         if self._type in _MYSQL_COMPAT:
             df = await self._execute_mysql(sql)
         elif self._type in _PG_COMPAT:
@@ -548,7 +575,7 @@ class ReadOnlyPool:
         elif self._type == "sqlite":
             df = await self._execute_sqlite(sql)
         else:
-            df = pd.DataFrame()
+            raise ValueError(f"不支持的数据源类型: {self._type}")
 
         if df is None or len(df) == 0:
             return []

@@ -60,6 +60,11 @@ logging.basicConfig(
 )
 log = logging.getLogger("agent.main")
 
+# ---- CoT 专用日志（logs/cot.log）：意图识别 / 思维链全链路汇聚单文件分析用
+from agent.observability.cot_log import get_cot_logger
+
+get_cot_logger()
+
 
 # ---- Runtime cache ---------------------------------------------------------
 
@@ -228,6 +233,10 @@ def create_app() -> FastAPI:
     from agent.api import toolchain as toolchain_api
 
     app.include_router(toolchain_api.router)
+    # 工作空间路径配置（设置页面板；底层规则：创建类文件默认落工作空间）
+    from agent.api import workspace as workspace_api
+
+    app.include_router(workspace_api.router)
     # Phase 2C V2.5: LLM 路由（4 端点 + 后端 CRUD）
     from agent.llm import engine_api
 

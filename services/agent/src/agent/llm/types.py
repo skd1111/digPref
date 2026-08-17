@@ -46,6 +46,8 @@ TaskKind = Literal[
     # 文档风险合规审核（2026-08-04）：文档分类 / 风险分析（路由链可配置，允许云端）
     "doc_classify",
     "doc_analyze",
+    # 会话历史压缩（2026-08-17）：LLM 摘要旧对话（含用户原始内容 → 本地红线）
+    "history_compress",
     # mock 模式标记（非真实任务，不走 LLM 调度）
     "mock_mode",
 ]
@@ -63,6 +65,11 @@ _INTENT_CATEGORIES = (
     "multi_step_task",
     "clarification_needed",
     "refusal",
+    # 操作类细分意图（2026-08-14）：四分类 enum 冻结不动，操作型请求靠
+    # 细分类型表达——model_onboard=接入/连接/添加模型端点（通常带模型名+URL），
+    # conn_test=测试某地址/模型是否可达。
+    "model_onboard",
+    "conn_test",
 )
 
 # 细分类型 → 既有四分类映射（下游路由 / responder 兼容）
@@ -76,6 +83,8 @@ _CATEGORY_TO_INTENT: dict[str, Intent] = {
     "multi_step_task": "orchestrate",
     "clarification_needed": "query",
     "refusal": "chitchat",
+    "model_onboard": "mutate",
+    "conn_test": "query",
 }
 
 
@@ -145,7 +154,15 @@ class IntentAnalysis:
 
     @classmethod
     def from_plain_intent(cls, intent: Intent, text: str, *, backend: str = "") -> IntentAnalysis:
-        """旧式四分类结果包装为结构化分析（降级链兼容层）。"""
+        """旧式四分类结果包装为结构化分析（降级链兼容层）。
+
+        置信度策略（2026-08-17）：明确的操作型意图（query / mutate /
+        orchestrate，need_tool=True）给 0.6 —— 刚好过 decompose 快速路径门槛
+        （confidence >= 0.6），明确操作不需要再花一次编排决策器 LLM 规划；
+        此前固定 0.5 低于门槛，本地模型缺席时所有请求都掉进 30s+ 的 LLM
+        决策兜底。chitchat 保持 0.5（decompose 节点对闲聊本就前置跳过）。
+        """
+        need_tool = intent in ("query", "mutate", "orchestrate")
         return cls(
             intent=intent,
             rewritten_query=text,
@@ -158,7 +175,8 @@ class IntentAnalysis:
                 if intent == "orchestrate"
                 else "knowledge_qa"
             ),
-            need_tool=intent in ("query", "mutate", "orchestrate"),
+            confidence=0.6 if need_tool else 0.5,
+            need_tool=need_tool,
             backend=backend,
         )
 

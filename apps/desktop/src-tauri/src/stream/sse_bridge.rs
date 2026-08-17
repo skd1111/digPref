@@ -195,6 +195,9 @@ impl SseBridge {
     ///
     /// Phase 18：work_mode / autonomy 可选透传进 chat 请求体（Rust 不解析语义）。
     /// history：会话上下文（当前 tab 最近几轮对话），透传进请求体。
+    // 本函数是透传缝（参数原样进 chat 请求体，不解析语义），聚成结构体反而
+    // 增加上下游改动面 → 豁免 too_many_arguments
+    #[allow(clippy::too_many_arguments)]
     pub async fn start_run(
         self: Arc<Self>,
         run_id: String,
@@ -203,6 +206,9 @@ impl SseBridge {
         autonomy: Option<String>,
         inference_mode: Option<String>,
         history: Option<Vec<HistoryMsg>>,
+        page_context: Option<Value>,
+        model_override: Option<String>,
+        history_summary: Option<String>,
     ) -> AppResult<RunHandle> {
         crate::agent_manager::app_log(&format!("[sse_bridge] start_run 进入 run_id={}, prompt.len={}", run_id, prompt.len()));
         // Cancel any pre-existing run with the same id
@@ -243,6 +249,26 @@ impl SseBridge {
                     if !h.is_empty() {
                         body["history"] = serde_json::to_value(&h)
                             .unwrap_or(Value::Array(vec![]));
+                    }
+                }
+                // 页面上下文（2026-08-14）：前端当前页签/场景，透传进 chat 请求体
+                // 的 `context` 字段（后端注入 intent / decompose prompt）
+                if let Some(ctx) = page_context {
+                    if !ctx.is_null() {
+                        body["context"] = ctx;
+                    }
+                }
+                // 会话模型选择（2026-08-17）：模型管理 backend 名，后端置顶回答链
+                if let Some(mo) = model_override {
+                    if !mo.trim().is_empty() {
+                        body["modelOverride"] = Value::String(mo);
+                    }
+                }
+                // 历史压缩摘要（2026-08-17）：断点之前旧对话的摘要，后端注入
+                // graph 初始 messages 的 system 消息（置于 history 之前）
+                if let Some(hs) = history_summary {
+                    if !hs.trim().is_empty() {
+                        body["historySummary"] = Value::String(hs);
                     }
                 }
                 body

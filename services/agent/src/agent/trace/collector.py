@@ -116,6 +116,14 @@ def build_thinking(node_name: str, delta: dict[str, Any]) -> tuple[str | None, s
                 parts.append(f"【决策】判定执行模式为 {mode}。")
 
     elif node_name in ("tool_orchestrator", "tool_runner"):
+        # 逐工具操作条目（2026-08-17）：工具循环每次执行的所有工具
+        # （read/write/glob/grep…）都打印进思维链，不再只留聚合条目
+        for entry in delta.get("trace") or []:
+            if isinstance(entry, dict) and entry.get("action") == "TOOL_CALL":
+                summary = str(entry.get("summary") or "")
+                if summary:
+                    verb = "【行动】" if entry.get("status") == "ok" else "【观察】"
+                    parts.append(f"{verb}{summary}")
         call = delta.get("pending_tool_call")
         if isinstance(call, dict):
             args_s = _safe_json_value(call.get("args") or {})
@@ -308,6 +316,14 @@ class TraceCollector:
                 latency_ms=latency_ms,
             )
             await storage.insert_step(step, db_path=self._db_path)
+            logger.info(
+                "trace.step session=%s node=%s #%s%s%s",
+                session_id,
+                node_name,
+                step.step_index,
+                f" decision={step.decision}" if step.decision else "",
+                f" thinking={step.thinking[:200]!r}" if step.thinking else "",
+            )
             return step
         except Exception as exc:
             logger.debug("trace.record_node_step 失败（忽略）: %s", exc)

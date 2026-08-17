@@ -18,15 +18,14 @@ import os
 from typing import Any
 
 from agent.builtin.models import ToolResult
+from agent.paths import data_root
 
 
 def _codenav_db_path() -> str:
     if os.environ.get("EAIDE_WORKSPACE_INDEX_DB"):
         return os.environ["EAIDE_WORKSPACE_INDEX_DB"]
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        return os.path.join(appdata, "eaide", "workspace_index.db")
-    return os.path.expanduser("~/.eaide/workspace_index.db")
+    # BUGFIX #98：统一落数据根（生产=安装目录）
+    return str(data_root() / "workspace_index.db")
 
 
 def _index_missing_result() -> ToolResult:
@@ -84,10 +83,8 @@ def builtin_file_symbols(*, file_path: str) -> ToolResult:
 
 
 def _biznav_db_path() -> str:
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        return os.path.join(appdata, "eaide", "biznav.db")
-    return os.path.expanduser("~/.eaide/biznav.db")
+    # BUGFIX #98：统一落数据根（生产=安装目录）
+    return str(data_root() / "biznav.db")
 
 
 def _feature_to_dict(feature: Any) -> dict:

@@ -25,6 +25,8 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+from agent.paths import data_root
+
 from . import generator
 from .exporter import export_docx, export_markdown
 from .models import ReqCard
@@ -94,10 +96,8 @@ class GenerateCardRequest(BaseModel):
 
 
 def _default_db_path() -> str:
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        return os.path.join(appdata, "eaide", "reqcards.db")
-    return os.path.expanduser("~/.eaide/reqcards.db")
+    # BUGFIX #98：统一落数据根（生产=安装目录）
+    return str(data_root() / "reqcards.db")
 
 
 _storage: ReqCardStorage | None = None

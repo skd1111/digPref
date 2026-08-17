@@ -14,6 +14,18 @@ export interface ExpertMember {
   focus_points: string[];
   /** 典型输出 */
   outputs: string[];
+  /** 交付物 → 表单模板（点交付物直开表单，零 LLM；字段语义与交付草稿模板一致） */
+  output_forms?: Record<
+    string,
+    Array<{
+      name: string;
+      label: string;
+      type?: string;
+      options?: string[];
+      hint?: string;
+      required?: boolean;
+    }>
+  >;
   /** 独立 prompt */
   prompt: string;
 }

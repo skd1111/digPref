@@ -154,6 +154,8 @@ function WorkflowBody({
   const files = useOpsCaseStore((s) => s.files);
   const qa = useOpsCaseStore((s) => s.qa);
   const drafts = useOpsCaseStore((s) => s.drafts);
+  /** 最近一次点交付物直开的草稿 → 自动全屏展开表单（2026-08-14） */
+  const lastDirectDraftId = useOpsCaseStore((s) => s.lastDirectDraftId);
   const busyMembers = useOpsCaseStore((s) => s.busyMembers);
   const exporting = useOpsCaseStore((s) => s.exporting);
   const caseError = useOpsCaseStore((s) => s.error);
@@ -600,7 +602,13 @@ function WorkflowBody({
               );
             })}
           </div>
-          {activeDraft && <DraftFormCard key={activeDraft.id} draft={activeDraft} />}
+          {activeDraft && (
+            <DraftFormCard
+              key={activeDraft.id}
+              draft={activeDraft}
+              initialExpanded={activeDraft.id === lastDirectDraftId}
+            />
+          )}
         </div>
       )}
 
@@ -754,6 +762,8 @@ function ExpertCaseCard({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [question, setQuestion] = useState("");
   const [dragOver, setDragOver] = useState(false);
+  /** 正在直开表单的交付物名（防连点 + 行内加载提示） */
+  const [openingOutput, setOpeningOutput] = useState("");
   const outputs = member.outputs ?? [];
   const passedFiles = files.filter((f) => f.status === "passed").length;
   const rejectedFiles = files.filter((f) => f.status === "rejected").length;
@@ -779,6 +789,26 @@ function ExpertCaseCard({
     if (!q) return;
     setQuestion("");
     await useOpsCaseStore.getState().askExpert(team.id, member.name, q);
+  };
+
+  // 点交付物直接完成（2026-08-14）：团里定义了表单模板 → 零 LLM 直开表单；
+  // 未定义模板 → 自动拼好提问发给该专家（后端识别模板意图生成草稿），
+  // 用户不再需要手动输入框打字 + 点「问专家」。
+  const handleOutputClick = async (o: string): Promise<void> => {
+    if (busy === "asking" || openingOutput !== "") return;
+    const formFields = member.output_forms?.[o] ?? [];
+    if (formFields.length > 0) {
+      setOpeningOutput(o);
+      try {
+        await useOpsCaseStore.getState().createDirectDraft(team.id, member.name, o);
+      } finally {
+        setOpeningOutput("");
+      }
+      return;
+    }
+    await useOpsCaseStore
+      .getState()
+      .askExpert(team.id, member.name, `请帮我完成交付物「${o}」（如需填写请给出草稿表单）`);
   };
 
   return (
@@ -884,10 +914,10 @@ function ExpertCaseCard({
             </div>
           )}
 
-          {/* 交付标准（逐项确认 = 验收条件） */}
+          {/* 交付标准（点条目直接完成；逐项勾选 = 验收条件） */}
           <div>
             <div className="mb-0.5 text-[10px] font-semibold" style={{ color: "#059669" }}>
-              交付标准（逐项确认后才算验收）
+              交付标准（点条目直接完成 · 逐项勾选验收）
             </div>
             {outputs.length === 0 ? (
               <div className="text-[10px]" style={{ color: "#9ca3af" }}>
@@ -899,10 +929,11 @@ function ExpertCaseCard({
                   const isChecked = checkedOutputs.has(
                     `${team.id}::${member.name}::${o}`,
                   );
+                  const hasForm = (member.output_forms?.[o] ?? []).length > 0;
                   return (
-                    <label
+                    <div
                       key={o}
-                      className="flex cursor-pointer items-start gap-1.5 text-[10px]"
+                      className="flex items-start gap-1.5 text-[10px]"
                       style={{ color: isChecked ? "#059669" : "#333333" }}
                     >
                       <input
@@ -911,12 +942,24 @@ function ExpertCaseCard({
                         onChange={() => onToggleOutput(o)}
                         className="mt-0.5"
                       />
-                      <span
-                        style={{ textDecoration: isChecked ? "line-through" : "none" }}
-                      >
-                        {o}
-                      </span>
-                    </label>
+                      {isChecked ? (
+                        <span style={{ textDecoration: "line-through" }}>{o}</span>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={busy === "asking" || openingOutput !== ""}
+                          onClick={() => void handleOutputClick(o)}
+                          title={
+                            hasForm
+                              ? `点击直接填写「${o}」表单`
+                              : `点击让${member.name}自动生成「${o}」`
+                          }
+                          className="text-left underline decoration-dotted underline-offset-2 transition-colors hover:text-[#10a37f] disabled:opacity-60"
+                        >
+                          {openingOutput === o ? "正在打开表单…" : hasForm ? `${o} ✍` : o}
+                        </button>
+                      )}
+                    </div>
                   );
                 })}
               </div>
@@ -1334,13 +1377,20 @@ function splitReviewNotes(note: string): string[] {
   return lines.length > 0 ? lines : [];
 }
 
-function DraftFormCard({ draft }: { draft: OpsCaseDraft }): JSX.Element {
+function DraftFormCard({
+  draft,
+  initialExpanded = false,
+}: {
+  draft: OpsCaseDraft;
+  /** 直开草稿（点交付物创建）默认全屏展开，强化「弹出表单」感知 */
+  initialExpanded?: boolean;
+}): JSX.Element {
   const [values, setValues] = useState<Record<string, string>>(draft.values ?? {});
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [snapshotOpen, setSnapshotOpen] = useState(false);
   // 全屏填写（BUGFIX #85）：大表单铺开填，不受卡片宽度限制
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(initialExpanded);
   // file 类型字段选中的文件（提交时自动作为材料上传给出题专家）
   const [draftFiles, setDraftFiles] = useState<Record<string, File>>({});
   const linkedFile = useOpsCaseStore((s) =>

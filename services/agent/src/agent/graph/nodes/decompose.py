@@ -172,6 +172,10 @@ async def decompose_node(
     mode = str(inner.get("mode") or "MAIN_AGENT")
     reason = str(inner.get("reason") or "")
 
+    # 提问策略护栏（2026-08-14）：ASK_USER 每轮最多 1 个问题，禁止 5 连问
+    decision = _cap_clarifying_questions(decision)
+    inner = decision.get("decision") or {}
+
     # 4) 终态模式：追问 / 拒绝 → responder 直接输出（不执行、不派生）
     if mode in ("ASK_USER", "REFUSE"):
         return {
@@ -256,6 +260,8 @@ async def decompose_node(
 
 async def _decide(state: AgentState, llm: LMRouter, tool_specs: list[dict]) -> dict | None:
     """调用编排决策器并校验返回；失败 / fallback 返回 None（调用方走单 Agent）。"""
+    from agent.graph.state import format_page_context
+
     try:
         decision = await llm.decompose(
             user_prompt=state.get("user_prompt", ""),
@@ -263,6 +269,9 @@ async def _decide(state: AgentState, llm: LMRouter, tool_specs: list[dict]) -> d
             history=state.get("messages", []),
             available_subagents=AVAILABLE_SUBAGENT_CATALOG,
             available_tools=tool_specs,
+            # 页面上下文（2026-08-14）：让决策器看见当前页签/场景，
+            # 消除“连接”这类模糊动词的歧义
+            page_context=format_page_context(state.get("page_context")),
             user_permissions={
                 "can_read": True,
                 "can_write": bool(getattr(settings, "require_hitl_for_write", True)),
@@ -339,6 +348,29 @@ def _ask_user_decision(question: str, missing_fields: list[str]) -> dict:
         "fallback": "none",
         "missing_fields": missing_fields,
     }
+
+
+def _cap_clarifying_questions(decision: dict) -> dict:
+    """提问策略护栏（2026-08-14）：ASK_USER 每轮最多 1 个问题。
+
+    背景：连发多个开放式问题（如 5 连问）把认知负担全部抛给用户，
+    prompt 约束失效时用代码兜底：只保留第一问，其余合并成一句提示。
+    """
+    inner = decision.get("decision") if isinstance(decision, dict) else None
+    if not isinstance(inner, dict) or inner.get("mode") != "ASK_USER":
+        return decision
+    questions = [
+        str(q).strip() for q in (inner.get("clarifying_questions") or []) if str(q).strip()
+    ]
+    if len(questions) <= 1:
+        return decision
+    capped = dict(decision)
+    capped_inner = dict(inner)
+    capped_inner["clarifying_questions"] = [
+        questions[0] + "（请先回答这一条，其余细节稍后再补充。）"
+    ]
+    capped["decision"] = capped_inner
+    return capped
 
 
 def _main_agent_decision(reason: str) -> dict:
@@ -442,7 +474,9 @@ def _intent_analysis_fast_path(state: AgentState) -> dict | None:
     if confidence < 0.6:
         return None  # 低置信度 → 交给编排决策器 LLM 复核
 
-    # 需要工具 → 直达动态工具循环（规范 §5.2）
+    # 需要工具 → 直达动态工具循环（规范 §5.2）——明确操作不需要规划：
+    # 意图分析已给出明确信号时省掉编排决策器 LLM（本地模型缺席时 30s+）。
+    # 写操作照旧在工具循环内过 HITL 审批闸，红线不变。
     if analysis.get("need_tool") and getattr(settings, "tool_loop_enabled", True):
         return {
             "decompose_decision": _tool_only_decision(

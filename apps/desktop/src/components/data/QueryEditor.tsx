@@ -1,12 +1,16 @@
 /**
- * QueryEditor —— 数据专家中栏：SQL / Python / 对话 三模式编辑器 + AI 助手。
+ * QueryEditor —— 数据专家中栏：SQL / Python / 对话 三合一页签。
  *
  * V1 实现：Monaco Editor（SQL/Python 语法高亮 + 自动补全 + 智能缩进）。
  * 只读铁律：SQL 含写操作时禁用「执行」并给出安全提示（前端演示；后端 guard 硬拦截）。
+ * 2026-08-17 布局重构：对话从独立横向栏合并回页签（与 SQL/Python 并列），
+ * 腾出的横向空间留给数据网格/图表（宽表友好）；旧持久化值 editorMode='chat'
+ * 现在直接命中对话页签。
  */
 import { useCallback } from 'react';
 import Editor from '@monaco-editor/react';
 import { useDataStore, isReadOnlySql, type EditorMode } from '@/store/dataStore';
+import { DataChatPanel } from './DataChatPanel';
 
 const MODES: Array<{ id: EditorMode; label: string; icon: string }> = [
   { id: 'sql', label: 'SQL', icon: '⌘' },
@@ -14,7 +18,7 @@ const MODES: Array<{ id: EditorMode; label: string; icon: string }> = [
   { id: 'chat', label: '对话', icon: '💬' },
 ];
 
-export function QueryEditor(): JSX.Element {
+export function QueryEditor({ onChatZoom }: { onChatZoom?: () => void }): JSX.Element {
   const mode = useDataStore((s) => s.editorMode);
   const setMode = useDataStore((s) => s.setEditorMode);
 
@@ -42,11 +46,13 @@ export function QueryEditor(): JSX.Element {
         })}
       </div>
 
-      {/* 主体 */}
+      {/* 主体（SQL / Python / 对话 页签切换） */}
       <div className="flex-1 overflow-hidden">
-        {mode === 'sql' && <SqlPane />}
-        {mode === 'python' && <PythonPane />}
-        {mode === 'chat' && <ChatPane />}
+        {mode === 'python' ? <PythonPane /> : mode === 'chat' ? (
+          <DataChatPanel {...(onChatZoom ? { onZoom: onChatZoom } : {})} />
+        ) : (
+          <SqlPane />
+        )}
       </div>
 
       {/* HITL 重查询确认（缺口 3） */}
@@ -124,7 +130,12 @@ function SqlPane(): JSX.Element {
   const setSql = useDataStore((s) => s.setSql);
   const running = useDataStore((s) => s.running);
   const runQuery = useDataStore((s) => s.runQuery);
+  const selectedSourceId = useDataStore((s) => s.selectedSourceId);
   const readOnly = isReadOnlySql(sql);
+  // BUGFIX #52：未选数据源时禁用执行（防止误点「执行」触发后端 400
+  // 「缺少数据源连接配置」误导文案）
+  const hasSource = selectedSourceId.length > 0;
+  const canRun = readOnly && hasSource;
 
   const handleChange = useCallback(
     (value: string | undefined) => setSql(value ?? ''),
@@ -161,9 +172,9 @@ function SqlPane(): JSX.Element {
       getModifiedEditor?: () => unknown;
     };
     ed.addCommand(2048 | 3, () => { // KeyMod.CtrlCmd | KeyCode.Enter
-      if (readOnly) runQuery();
+      if (canRun) runQuery();
     });
-  }, [readOnly, runQuery]);
+  }, [canRun, runQuery]);
 
   return (
     <div className="flex h-full flex-col">
@@ -191,12 +202,14 @@ function SqlPane(): JSX.Element {
       </div>
       <RunBar
         running={running}
-        canRun={readOnly}
+        canRun={canRun}
         onRun={runQuery}
         note={
-          readOnly
-            ? '🔒 只读查询 · Ctrl+Enter 执行 · 涉及多表 JOIN 需确认（HITL）'
-            : '⛔ 检测到写操作（UPDATE/DELETE/DROP…），数据专家模式只读，已禁用执行'
+          !readOnly
+            ? '⛔ 检测到写操作（UPDATE/DELETE/DROP…），数据专家模式只读，已禁用执行'
+            : !hasSource
+              ? '⚠ 未选择数据源 · 请在左侧「数据源 / 表结构」列表中点击选择一个数据源'
+              : '🔒 只读查询 · Ctrl+Enter 执行 · 涉及多表 JOIN 需确认（HITL）'
         }
         noteColor={readOnly ? '#616161' : '#cd3131'}
       />
@@ -245,63 +258,6 @@ function PythonPane(): JSX.Element {
         note="🧪 受限沙箱执行 · 白名单 pandas/numpy · 内存 2GB / 超时 30s · 禁系统调用"
         noteColor="#616161"
       />
-    </div>
-  );
-}
-
-// ---- 对话模式 --------------------------------------------------------------
-
-function ChatPane(): JSX.Element {
-  const chat = useDataStore((s) => s.chat);
-  const draft = useDataStore((s) => s.chatDraft);
-  const setDraft = useDataStore((s) => s.setChatDraft);
-  const send = useDataStore((s) => s.sendChat);
-
-  return (
-    <div className="flex h-full flex-col">
-      <div className="flex-1 space-y-3 overflow-auto px-4 py-3">
-        {chat.map((m, i) => (
-          <div key={i} className={m.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
-            <div
-              className="max-w-[80%] rounded-lg px-3 py-2 text-ui"
-              style={{
-                backgroundColor: m.role === 'user' ? '#0e639c' : '#ececec',
-                color: m.role === 'user' ? '#ffffff' : '#1f1f1f',
-                lineHeight: 1.55,
-              }}
-            >
-              <div className="mb-0.5 text-2xs" style={{ color: m.role === 'user' ? '#cfe6ff' : '#059669' }}>
-                {m.role === 'user' ? '👤 我' : '🤖 数据助手'}
-              </div>
-              {m.content}
-            </div>
-          </div>
-        ))}
-      </div>
-      <div className="flex flex-shrink-0 items-end gap-2 border-t p-2" style={{ borderColor: '#d0d0d0' }}>
-        <textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              send();
-            }
-          }}
-          rows={2}
-          placeholder="用自然语言提问，例如：对比上月各分行坏账率…（Enter 发送）"
-          className="flex-1 resize-none rounded px-3 py-2 text-ui outline-none"
-          style={{ backgroundColor: '#ececec', color: '#1f1f1f' }}
-        />
-        <button
-          type="button"
-          onClick={send}
-          className="rounded px-4 py-2 text-ui font-semibold transition-all hover:brightness-110"
-          style={{ backgroundColor: '#059669', color: '#ffffff' }}
-        >
-          发送
-        </button>
-      </div>
     </div>
   );
 }

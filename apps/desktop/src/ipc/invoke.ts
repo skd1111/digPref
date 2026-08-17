@@ -198,6 +198,18 @@ export const ipc = {
         paths,
       },
     ),
+  /** 工作空间路径配置读写（设置页面板；默认安装目录/workspace，可自定义） */
+  getWorkspace: () =>
+    invoke<{ path: string; custom: string | null; default: string }>(
+      "agent_workspace_get",
+    ),
+  saveWorkspace: (path: string) =>
+    invoke<{
+      ok: boolean;
+      path: string;
+      custom: string | null;
+      default: string;
+    }>("agent_workspace_save", { path }),
   approve: (
     approvalId: string,
     decision: "approve" | "reject",
@@ -210,6 +222,33 @@ export const ipc = {
       userPrompt,
       ...(assistantReply != null ? { assistantReply } : {}),
     }),
+
+  /** 附加文件到对话（2026-08-14）：base64 内容 → 后端转文本/Markdown。
+   *  失败时 ok=false + error；content 最多 12000 字符，truncated 标注截断。 */
+  chatAttachFile: (body: { file_name: string; content_base64: string }) =>
+    invoke<{
+      ok: boolean;
+      file_name: string;
+      mode: 'text' | 'markdown';
+      content: string;
+      chars: number;
+      truncated: boolean;
+      error: string;
+    }>("chat_attach_file", { body }),
+
+  /** 会话历史压缩（2026-08-17）：旧对话 → 后端本地优先 LLM 链生成摘要。
+   *  失败时 invoke 报错（后端 503），由调用方提示不阻塞对话。 */
+  chatCompressHistory: (body: {
+    messages: Array<{ role: string; content: string }>;
+    historySummary?: string;
+  }) =>
+    invoke<{
+      ok: boolean;
+      summary: string;
+      beforeTokens: number;
+      afterTokens: number;
+      messageCount: number;
+    }>("chat_compress_history", { body }),
 
   listAssets: () => invoke<unknown[]>("asset_list"),
   addAsset: (asset: Record<string, unknown>) =>
@@ -578,6 +617,23 @@ export const ipc = {
       ollama_max_ctx: number | null;
       private_max_ctx: number | null;
     }>("router_reload_context"),
+
+  /** 生成限制（两级回退）：读全局默认（最大输出长度 / 默认上下文长度）。 */
+  routerGetGenLimits: () =>
+    invoke<{
+      ok: boolean;
+      limits: { max_output_tokens: number; default_context_window: number };
+    }>("router_get_gen_limits"),
+
+  /** 生成限制（两级回退）：稀疏 patch 写入 + 后端热生效。 */
+  routerSetGenLimits: (limits: {
+    max_output_tokens?: number;
+    default_context_window?: number;
+  }) =>
+    invoke<{
+      ok: boolean;
+      limits: { max_output_tokens: number; default_context_window: number };
+    }>("router_set_gen_limits", { limits }),
 
   /** Phase 2C V2.0：实时 metrics（circuits + budget + backends）。5 秒轮询用。 */
   routerGetMetrics: () =>
@@ -1144,6 +1200,17 @@ export const ipc = {
   /** 交付草稿：保存填写值（BUGFIX #78 界面直填）。 */
   opsCaseDraftSave: (draftId: string, body: { values: Record<string, string> }) =>
     invoke<Record<string, unknown>>("ops_case_draft_save", { draftId, body }),
+
+  /** 交付草稿：点交付物直开表单（零 LLM，模板来自专家团 yaml；幂等复用未通过草稿）。 */
+  opsCaseDraftDirect: (body: {
+    case_id: string;
+    team_id: string;
+    member_key: string;
+    output_name: string;
+  }) =>
+    invoke<{ draft: Record<string, unknown>; reused: boolean }>("ops_case_draft_direct", {
+      body,
+    }),
 
   /** 交付草稿：提交 → 自动入材料走专家审核，通过即入交付物。 */
   opsCaseDraftSubmit: (draftId: string) =>

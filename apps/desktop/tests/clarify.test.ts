@@ -77,3 +77,40 @@ describe('stripClarifyBlock', () => {
     expect(stripClarifyBlock('hello')).toBe('hello');
   });
 });
+
+describe('确认卡（参数摘要 + 确认/修改，2026-08-14）', () => {
+  // 与后端 responder._confirmation_body 的真实输出对齐（模型接入确认场景）
+  const CONFIRM_BLOCK = [
+    '将按以下参数接入 DeepSeek-RD-Llama-70B-Int8：endpoint=http://172.1.0.134:8000，api_key 默认空。',
+    '',
+    '（未确认前不会执行任何操作。）',
+    '',
+    '```clarify',
+    '[',
+    '  {',
+    '    "question": "确认按上述参数执行？",',
+    '    "options": [',
+    '      {"text": "确认执行", "reason": "参数摘要核对无误，继续执行", "recommended": true},',
+    '      {"text": "修改参数", "reason": "选这项并在下方直接告诉我要改什么", "recommended": false}',
+    '    ]',
+    '  }',
+    ']',
+    '```',
+  ].join('\n');
+
+  it('单问题 + 确认/修改两选项 + 恰好一个推荐项', () => {
+    const r = parseClarifyBlock(CONFIRM_BLOCK);
+    expect(r).not.toBeNull();
+    expect(r!.questions).toHaveLength(1);
+    expect(r!.questions[0].question).toBe('确认按上述参数执行？');
+    expect(r!.questions[0].options.map((o) => o.text)).toEqual(['确认执行', '修改参数']);
+    expect(r!.questions[0].options.filter((o) => o.recommended)).toHaveLength(1);
+  });
+
+  it('正文保留参数摘要，剥离围栏块', () => {
+    const r = parseClarifyBlock(CONFIRM_BLOCK);
+    expect(r!.text).toContain('将按以下参数接入 DeepSeek-RD-Llama-70B-Int8');
+    expect(r!.text).toContain('未确认前不会执行');
+    expect(r!.text).not.toContain('```clarify');
+  });
+});

@@ -60,9 +60,31 @@ def test_run_sql_needs_confirm(client):
 
 
 def test_run_sql_missing_connection(client):
-    """无 connection 且无 source_id → 400。"""
+    """无 connection 且无 source_id → 400（BUGFIX #97）。
+
+    Rust Tauri 端应在此之前 fail-fast，把更可操作的错误透传给用户
+    （参见 ``apps/desktop/src-tauri/src/commands/dataexpert.rs::data_run_sql``）。
+    本测试守住后端契约：源信息缺失时返回 400。
+    """
     r = client.post("/data/sql/run", json={"sql": "SELECT * FROM t WHERE id=1"})
     assert r.status_code == 400
+    # 错误文案要可定位：用户看到后知道是「没传连接」而不是「DB 抛错」
+    detail = r.json()["detail"]
+    assert "数据源" in detail or "connection" in detail or "source_id" in detail
+
+
+def test_run_sql_empty_source_id_no_connection(client):
+    """BUGFIX #97 + #52：source_id=""  + connection={} → 400 且 detail 可读。
+
+    Tauri 端 ``data_run_sql`` 在 source_id 为空时会传 ``{"connection": {}, "source_id": ""}``
+    走到后端；后端契约保证此时返回 400，避免静默返回 0 行假阳性。
+    """
+    r = client.post(
+        "/data/sql/run",
+        json={"sql": "SELECT * FROM t WHERE id=1", "source_id": "", "connection": {}},
+    )
+    assert r.status_code == 400
+    assert "缺少" in r.json()["detail"] or "connection" in r.json()["detail"]
 
 
 def test_run_sql_executes_and_persists(client):
@@ -137,3 +159,41 @@ def test_nl2sql_rejects_non_select_generated(client):
     body = r.json()
     assert body["sql"] == ""
     assert "拒绝" in body["error"]
+
+
+# ---- BUGFIX #97：数据源类型缺失不得静默返回 0 行 --------------------------
+
+
+def test_run_sql_empty_type_returns_400(client):
+    """Rust 注入 type=""（资产未配 db_type）→ 400 明确提示，不返回空结果。"""
+    r = client.post(
+        "/data/sql/run",
+        json={
+            "sql": "SELECT * FROM t WHERE id=1",
+            "connection": {"type": "", "host": "127.0.0.1"},
+        },
+    )
+    assert r.status_code == 400
+    assert "db_type" in r.json()["detail"]
+
+
+def test_run_sql_unknown_type_returns_400(client):
+    """未知类型 → pool 快速失败 → 400（不会静默走兜底）。"""
+    r = client.post(
+        "/data/sql/run",
+        json={
+            "sql": "SELECT * FROM t WHERE id=1",
+            "connection": {"type": "mongodb"},
+        },
+    )
+    assert r.status_code == 400
+    assert "数据源类型" in r.json()["detail"]
+
+
+async def test_pool_empty_type_raises():
+    """ReadOnlyPool：type 空串/缺失/未知 → ValueError（fail-fast）。"""
+    from agent.dataexpert.readonly.pool import ReadOnlyPool
+
+    for cfg in ({"type": ""}, {}, {"type": "mongodb"}):
+        with pytest.raises(ValueError, match="数据源类型"):
+            await ReadOnlyPool(cfg).execute_sql("SELECT 1")
