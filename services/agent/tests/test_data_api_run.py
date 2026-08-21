@@ -161,6 +161,85 @@ def test_nl2sql_rejects_non_select_generated(client):
     assert "拒绝" in body["error"]
 
 
+# ---- BUGFIX #128：NL2SQL 真接 LMRouter，失败占位不得冒充「已生成」 --------
+
+
+def test_nl2sql_generates_real_sql_via_router(client):
+    """模型可用 → 真生成 SQL（剥围栏后下发），不再是 V0 占位。"""
+    with patch(
+        "agent.llm.router.LMRouter.generate_raw",
+        new=AsyncMock(
+            return_value="好的，以下是查询：\n```sql\nSELECT COUNT(*) FROM sm_process_tb;\n```"
+        ),
+    ):
+        r = client.post("/data/nl2sql", json={"question": "查询有哪些流程"})
+    body = r.json()
+    assert body["sql"] == "SELECT COUNT(*) FROM sm_process_tb;"
+    assert body["error"] == ""
+
+
+def test_nl2sql_router_unavailable_returns_error_not_placeholder(client):
+    """全链模型不可用 → sql 为空 + error 说明，前端展示 ❌ 而非假「已生成」。"""
+    with patch(
+        "agent.llm.router.LMRouter.generate_raw",
+        new=AsyncMock(side_effect=RuntimeError("ollama: connection refused")),
+    ):
+        r = client.post("/data/nl2sql", json={"question": "查询有哪些流程"})
+    body = r.json()
+    assert body["sql"] == ""
+    assert "生成失败" in body["error"]
+
+
+# ---- V2 接线：few-shot 飞轮 + 向量 schema 链接真传到生成器 ----------------
+
+
+def test_nl2sql_injects_few_shot_from_history(client):
+    """历史已确认 SQL（analysis_tasks）自动注入生成 few-shot（Vanna 飞轮）。"""
+    import asyncio
+
+    from agent.dataexpert.storage import get_default_storage
+
+    async def _seed() -> None:
+        await get_default_storage().insert_task(
+            task_id="t-hist-1",
+            name="查询流程总数",
+            user_id="u1",
+            query_sql="SELECT COUNT(*) FROM sm_process_tb;",
+            created_at=1,
+        )
+
+    asyncio.run(_seed())
+
+    with patch(
+        "agent.dataexpert.nl2sql.generator.to_sql",
+        new=AsyncMock(return_value="SELECT COUNT(*) FROM sm_process_tb;"),
+    ) as mock_to_sql:
+        r = client.post("/data/nl2sql", json={"question": "流程有多少"})
+    assert r.status_code == 200
+    few_shot = mock_to_sql.call_args.kwargs["few_shot"]
+    assert len(few_shot) == 1
+    assert few_shot[0].sql == "SELECT COUNT(*) FROM sm_process_tb;"
+    # llm_router 也必须真传（BUGFIX #128 回归守护）
+    assert mock_to_sql.call_args.kwargs["llm_router"] is not None
+
+
+def test_nl2sql_few_shot_failure_does_not_block(client):
+    """few-shot 是增强项：选取异常不阻断主链路（降级纯 NL2SQL）。"""
+    with (
+        patch(
+            "agent.dataexpert.nl2sql.linker.select_few_shot",
+            new=AsyncMock(side_effect=RuntimeError("boom")),
+        ),
+        patch(
+            "agent.llm.router.LMRouter.generate_raw",
+            new=AsyncMock(return_value="SELECT COUNT(*) FROM sm_process_tb;"),
+        ),
+    ):
+        r = client.post("/data/nl2sql", json={"question": "流程有多少"})
+    assert r.status_code == 200
+    assert r.json()["sql"] == "SELECT COUNT(*) FROM sm_process_tb;"
+
+
 # ---- BUGFIX #97：数据源类型缺失不得静默返回 0 行 --------------------------
 
 
@@ -197,3 +276,37 @@ async def test_pool_empty_type_raises():
     for cfg in ({"type": ""}, {}, {"type": "mongodb"}):
         with pytest.raises(ValueError, match="数据源类型"):
             await ReadOnlyPool(cfg).execute_sql("SELECT 1")
+
+
+# ---- BUGFIX #126：资产型数据源未登记时 schema 同步不得 404 ------------------
+
+
+def test_sync_schema_unregistered_source_with_injected_connection(client):
+    """systems.yaml 资产源没登记进 data_expert.db，只要 Rust 注入了连接就能同步并登记。"""
+    tables = [
+        {
+            "name": "sm_scene_link_tb",
+            "comment": "",
+            "columns": [{"name": "id", "dtype": "int", "comment": ""}],
+        }
+    ]
+    with patch("agent.dataexpert.api.ReadOnlyPool") as pool_cls:
+        pool_cls.return_value.fetch_schema = AsyncMock(return_value=tables)
+        pool_cls.return_value.close = AsyncMock()
+        r = client.post(
+            "/data/sources/asset-172/sync",
+            json={"connection": {"type": "mysql", "host": "172.1.1.96"}},
+        )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["tables_synced"] == 1
+    # 顺手登记进 data_sources（后续 list_sources 可见，schema_cache 非空）
+    srcs = client.get("/data/sources").json()["sources"]
+    assert any(s["id"] == "asset-172" and s["schema_cache"] for s in srcs)
+
+
+def test_sync_schema_unregistered_source_without_connection_404(client):
+    """未登记且无注入连接 → 仍 404（原契约不变）。"""
+    r = client.post("/data/sources/no-such-source/sync", json={})
+    assert r.status_code == 404

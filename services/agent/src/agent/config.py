@@ -172,6 +172,14 @@ class Settings(BaseSettings):
     # 云端优先：本机 Ollama 常未启动、private 常未配置，先试云端避免白等连接超时；
     # 云端不可用时再依次回退 private / ollama
     doc_review_llm_chain: list[str] = Field(default_factory=lambda: ["cloud", "private", "ollama"])
+    # 财税规则库目录（FiscalTaxRuleProvider 的法规素材；目录不存在时退化为无规则）
+    doc_review_fiscal_dir: str = "knowledge-base/fiscal-tax"
+    # 每个风险维度最多注入的财税规则条数（控制提示词体积）
+    doc_review_fiscal_max_rules: int = Field(default=6, ge=1, le=20)
+    # 混合检索：语义向量得分权重（0 = 纯关键词；embedding 不可用时自动退化为纯关键词）
+    doc_review_fiscal_sem_weight: float = Field(default=0.5, ge=0.0, le=1.0)
+    # 混合检索最低得分阈值（低于该分的章节不注入，避免无关规则干扰）
+    doc_review_fiscal_min_score: float = Field(default=0.10, ge=0.0, le=1.0)
 
     # ---- Phase 7 V0 数据专家模式 ----
     # 数据专家 SQLite 路径（与 audit / router / knowledge / ssh 等 db 物理隔离）
@@ -180,6 +188,9 @@ class Settings(BaseSettings):
     data_result_dir: str = "results"
     # SQL 强制 LIMIT 上限（防 OOM）
     data_sql_row_limit: int = Field(default=10000, ge=1)
+    # 业务字典目录（YAML 外置：_global.yaml 全局 + {source_id}.yaml 源级；
+    # 相对路径 → 测试 chdir 自动隔离；目录缺失/解析失败退化内置默认字典）
+    data_biz_dict_dir: str = "config/biz_dict"
     # Python 沙箱内存上限（MB）
     data_sandbox_mem_mb: int = Field(default=2048, ge=256)
     # Python 沙箱执行超时（秒）

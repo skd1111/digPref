@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, WebSocket
@@ -125,6 +126,9 @@ class ExportRequest(BaseModel):
     columns: list[str] = Field(default_factory=list)  # 兼容：内联小结果前端直传
     rows: list[list[Any]] = Field(default_factory=list)
     title: str = "数据报表"
+    # 导出路径选择（2026-08-18）：前端 save 对话框选中的目标文件路径；
+    # 空 = 默认临时目录（旧行为）
+    output_path: str = ""
 
 
 class TestConnectionRequest(BaseModel):
@@ -164,11 +168,22 @@ async def sync_schema(source_id: str, body: dict | None = None) -> dict:
     """同步 Schema 元数据（缺口 2：真实拉取表结构 + 中文注释）。"""
     storage = get_default_storage()
     source = await storage.get_source(source_id)
-    if source is None:
-        raise HTTPException(status_code=404, detail=f"source not found: {source_id}")
 
     # 连接配置：请求体优先（Rust 注入），其次数据源登记的 connection_config
     cfg = (body or {}).get("connection") or {}
+
+    if source is None:
+        # 资产型数据源（systems.yaml）从未登记进 data_expert.db：
+        # 只要 Rust 注入了连接就直接同步并顺手登记（connection_ref 不落凭证，
+        # 否则 SQL 能跑、schema 同步却永远 404 —— BUGFIX #126）
+        if not cfg:
+            raise HTTPException(status_code=404, detail=f"source not found: {source_id}")
+        source = {
+            "name": source_id,
+            "type": str(cfg.get("type") or "mysql"),
+            "connection_ref": "",
+        }
+
     if not cfg:
         cfg = source.get("connection_config", {}) or {}
     if not cfg:
@@ -301,7 +316,7 @@ async def nl2sql(req: NL2SQLRequest) -> NL2SQLResponse:
          现有 ``dictionary.translate()``，零业务代码改动
     """
     from agent.dataexpert.nl2sql import dictionary, linker
-    from agent.dataexpert.nl2sql.generator import to_sql
+    from agent.dataexpert.nl2sql.generator import SqlCase, to_sql
 
     storage = get_default_storage()
 
@@ -331,14 +346,39 @@ async def nl2sql(req: NL2SQLRequest) -> NL2SQLResponse:
         # 配置错误 / 占位实现抛错 —— 优雅降级到原纯 NL2SQL 流程
         pass
 
-    # Schema 链接（选 3-5 表）
-    tables = await linker.select_tables(req.question, schema_cache)
+    # Schema 链接（选 3-5 表；本地 embedding 向量检索，未配置/不可达自动退化关键字）
+    emb_client = linker.build_embedding_client()
+    tables = await linker.select_tables(req.question, schema_cache, embedding=emb_client)
+
+    # Few-shot 飞轮（Vanna 范式）：从历史分析任务选最相似的已确认 SQL 作参考案例
+    few_shot: list[SqlCase] = []
+    try:
+        history = await storage.list_tasks(limit=50)
+        cases = await linker.select_few_shot(req.question, history, embedding=emb_client)
+        few_shot = [SqlCase(c["question"], c["sql"]) for c in cases]
+    except Exception:
+        pass  # few-shot 是增强项，失败不阻断主链路
 
     # 业务字典
     dict_ctx = dictionary.translate(req.question, req.source_id)
 
-    # 生成 SQL
-    sql = await to_sql(req.question, tables, dict_ctx)
+    # 生成 SQL（BUGFIX #128：真接 LMRouter —— 此前 to_sql 从未拿到 router，
+    # 永远返回 V0 占位「SELECT 1;」，前端却误报「已生成 SQL」）
+    from agent.llm.router import LMRouter
+
+    sql = await to_sql(req.question, tables, dict_ctx, few_shot=few_shot, llm_router=LMRouter())
+
+    # 模型不可用时的失败占位不得当「已生成」下发 —— 明确报错，前端展示 ❌ 原因
+    if sql.startswith("-- V0 占位") or sql.startswith("-- LLM 调用失败"):
+        return NL2SQLResponse(
+            sql="",
+            is_heavy=False,
+            tables_used=[t.name for t in tables],
+            dictionary_context=dict_ctx,
+            error="SQL 生成失败：模型服务不可用（请确认 Ollama / 内网 / 云端模型已启用），可改用 SQL 模式手写查询",
+            metric_source_kind=metric_source_kind,
+            metric_confidence=metric_confidence,
+        )
 
     # 缺口 10 前置校验：生成的 SQL 必须是单条 SELECT，否则丢弃，绝不下发执行
     try:
@@ -567,18 +607,26 @@ async def export_data(fmt: str, req: ExportRequest) -> dict:
     elif not columns and not rows:
         raise HTTPException(status_code=400, detail="task_id 或 columns/rows 必须提供其一")
 
+    # 导出路径选择（2026-08-18）：前端对话框选中的目标路径，基础合法性校验
+    output_path: str | None = (req.output_path or "").strip() or None
+    if output_path is not None:
+        p = Path(output_path)
+        if ".." in p.parts or not p.name:
+            raise HTTPException(status_code=400, detail="非法导出路径")
+        output_path = str(p)
+
     if fmt == "excel":
         from agent.dataexpert.export.excel import export_excel
 
-        meta = export_excel(columns, rows, title=req.title)
+        meta = export_excel(columns, rows, title=req.title, output_path=output_path)
     elif fmt == "pdf":
         from agent.dataexpert.export.pdf import export_pdf
 
-        meta = export_pdf(columns, rows, title=req.title)
+        meta = export_pdf(columns, rows, title=req.title, output_path=output_path)
     elif fmt == "csv":
         from agent.dataexpert.export.csv import export_csv
 
-        meta = export_csv(columns, rows, title=req.title)
+        meta = export_csv(columns, rows, title=req.title, output_path=output_path)
     else:
         raise HTTPException(status_code=400, detail=f"unsupported format: {fmt}")
 

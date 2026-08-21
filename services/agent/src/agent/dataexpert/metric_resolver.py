@@ -133,15 +133,13 @@ def _detect_agg(query: str) -> AggKind:
 class DictMetricResolver:
     """业务字典实现 —— V0 默认。
 
-    基于现有 ``agent.dataexpert.nl2sql.dictionary._DEFAULT_DICTIONARY``，
-    启发式关键词命中 + 加权排序识别指标。**零代码改动**：原 ``dictionary.py``
-    不动，本类新增在 ``metric_resolver.py``，由 ``build_resolver()`` 工厂选择。
+    基于 ``agent.dataexpert.nl2sql.dictionary``（V1 已 YAML 外置：内置默认 +
+    ``settings.data_biz_dict_dir`` 合并），启发式关键词命中 + 加权排序识别指标。
     """
 
     def __init__(self, dict_path: str | None = None) -> None:
-        # dict_path 当前未使用（V0 业务字典硬编码在 dictionary.py _DEFAULT_DICTIONARY）；
-        # 保留参数是为 V1 YAML 外置做接口准备，避免未来切换时改调用方。
-        self._dict_path = dict_path or "config/biz_dict/"
+        # V1：dict_path 真接 dictionary.load_dictionary（None → settings.data_biz_dict_dir）
+        self._dict_path = dict_path
 
     async def resolve(
         self,
@@ -167,7 +165,7 @@ class DictMetricResolver:
         from agent.dataexpert.nl2sql import dictionary
 
         source_id = (context or {}).get("source_id", "")
-        ctx_str = dictionary.translate(query, source_id=source_id)
+        ctx_str = dictionary.translate(query, source_id=source_id, dict_dir=self._dict_path)
         if not ctx_str:
             return None
 
@@ -204,11 +202,12 @@ class DictMetricResolver:
         Args:
             project: 项目名（V0 忽略；V1 Platform 模式按 project 过滤）。
         """
-        # 延迟导入；同包访问 ``_DEFAULT_DICTIONARY`` 是 V0 简化（V1 改为 YAML 外置）
+        # 延迟导入；V1 走 load_dictionary（内置默认 + YAML 外置合并）
         from agent.dataexpert.nl2sql import dictionary
 
+        merged = dictionary.load_dictionary(self._dict_path)
         out: list[MetricDef] = []
-        for term, sql_frag in dictionary._DEFAULT_DICTIONARY.get("_global", {}).items():
+        for term, sql_frag in merged.get("_global", {}).items():
             out.append(
                 MetricDef(
                     code=term,

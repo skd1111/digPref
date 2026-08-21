@@ -1,16 +1,15 @@
 """Phase 7 V1 · Schema 链接 —— 向量检索选 3-5 张最相关表。
 
 安全红线（CLAUDE.md §2）：
-  - 走 LMRouter task='schema_link'（_LOCAL_ONLY_TASKS，强制本地）
-  - 表结构 + 字段注释可能含敏感信息，永不出云
+  - 表结构 + 字段注释可能含敏感信息，永不出云（embedding 只走本地服务）
 
 架构师红线（design §4.1）：
   - 金融系统几百张表、几千字段，绝不把全量 Schema 塞给大模型
   - 强制裁剪到 3-5 张最相关表（含中文注释）
 
 V1 升级：
-  - 本地 embedding（走 LMRouter task='schema_link'）+ 余弦相似度向量检索
-  - 降级策略：embedding 不可用时退回关键字评分（V0 逻辑）
+  - 本地 embedding（LocalEmbeddingClient，OpenAI 兼容）+ 余弦相似度向量检索
+  - 降级策略：embedding 未配置/不可达时退回关键字评分（V0 逻辑）
   - few-shot 动态选取：从 analysis_tasks 按相似度选 top-3 历史 SQL
 """
 
@@ -20,6 +19,7 @@ import logging
 import math
 from typing import Any
 
+from agent.config import settings
 from agent.dataexpert.models import TableSchema
 
 logger = logging.getLogger(__name__)
@@ -28,24 +28,42 @@ logger = logging.getLogger(__name__)
 MAX_TABLES = 5
 
 
+def build_embedding_client() -> Any | None:
+    """按 settings 懒构建本地 embedding 客户端；未配置返 None（调用方退化关键字）。
+
+    与 FiscalTaxRuleProvider 同模式（doc_review/fiscal_rules.py）：
+    本地 embedding 服务不可达时 LocalEmbeddingClient 会返零向量，
+    由调用方检查 any(vec) 后退化 —— 功能不中断。
+    """
+    if not settings.local_embedding_base_url:
+        return None
+    from agent.llm.embedding import LocalEmbeddingClient
+
+    return LocalEmbeddingClient(
+        base_url=settings.local_embedding_base_url,
+        model=settings.local_embedding_model or "bge-small-zh-v1.5",
+        dimensions=settings.local_embedding_dim,
+    )
+
+
 async def select_tables(
     question: str,
     schema_cache: list[dict],
     *,
     max_tables: int = MAX_TABLES,
-    llm_router: Any = None,
+    embedding: Any | None = None,
 ) -> list[TableSchema]:
     """向量检索选 3-5 张最相关表（含中文注释）。
 
     V1 策略：
-      1. 优先走向量检索（LMRouter task='schema_link'，本地 embedding）
-      2. 降级：embedding 不可用时退回关键字评分（V0 逻辑）
+      1. 优先走向量检索（本地 embedding，敏感 schema 永不出云）
+      2. 降级：embedding 未配置/不可达时退回关键字评分（V0 逻辑）
 
     Args:
         question: 用户自然语言问题。
         schema_cache: 数据源的表结构缓存（list[dict]）。
         max_tables: 最大返回表数（默认 5，红线不超过 5）。
-        llm_router: LMRouter 实例（可选，用于 embedding）。
+        embedding: embedding 客户端（可注入测试替身）；缺省时按 settings 懒构建。
 
     Returns:
         最相关的 TableSchema 列表（≤ max_tables）。
@@ -56,9 +74,10 @@ async def select_tables(
         return []
 
     # 尝试向量检索
-    if llm_router is not None:
+    client = embedding if embedding is not None else build_embedding_client()
+    if client is not None:
         try:
-            scored = await _vector_rank(question, schema_cache, llm_router)
+            scored = await _vector_rank(question, schema_cache, client)
             if scored:
                 return _to_schemas(scored[:max_tables])
         except Exception as e:
@@ -72,11 +91,11 @@ async def select_tables(
 async def _vector_rank(
     question: str,
     schema_cache: list[dict],
-    llm_router: Any,
+    client: Any,
 ) -> list[tuple[float, dict]]:
     """向量检索排序：本地 embedding + 余弦相似度。
 
-    走 LMRouter task='schema_link'（_LOCAL_ONLY_TASKS 强制本地）。
+    返空列表表示语义通道缺席（零向量/服务掉线），调用方退化关键字评分。
     """
     # 构建每张表的文本表示（表名 + 注释 + 字段名/注释拼接）
     table_texts: list[str] = []
@@ -90,16 +109,15 @@ async def _vector_rank(
             parts.append(col.get("comment", ""))
         table_texts.append(" ".join(p for p in parts if p))
 
-    # 调用本地 embedding（task='schema_link' 强制本地）
-    q_emb = await _get_embedding(question, llm_router)
-    if q_emb is None:
+    q_emb = await client.embed(question)
+    if not any(q_emb):
         return []
 
-    t_embs = await _get_embeddings_batch(table_texts, llm_router)
-    if not t_embs:
+    t_embs = await client.embed_batch(table_texts)
+    if not t_embs or not any(any(v) for v in t_embs):
         return []
 
-    # 余弦相似度排序
+    # 余弦相似度排序（单表向量失败返零向量 → 相似度 0 自然沉底）
     scored: list[tuple[float, dict]] = []
     for i, t_emb in enumerate(t_embs):
         sim = _cosine_similarity(q_emb, t_emb)
@@ -107,36 +125,6 @@ async def _vector_rank(
 
     scored.sort(key=lambda x: x[0], reverse=True)
     return scored
-
-
-async def _get_embedding(text: str, llm_router: Any) -> list[float] | None:
-    """获取单条文本的 embedding（走本地模型）。"""
-    try:
-        result = await llm_router.route(
-            prompt=text,
-            kind="schema_link",  # _LOCAL_ONLY_TASKS，强制本地
-            mode="embedding",
-        )
-        if isinstance(result, list):
-            return result
-        return None
-    except Exception:
-        return None
-
-
-async def _get_embeddings_batch(texts: list[str], llm_router: Any) -> list[list[float]] | None:
-    """批量获取 embedding（走本地模型）。"""
-    try:
-        result = await llm_router.route(
-            prompt=texts,
-            kind="schema_link",
-            mode="embedding_batch",
-        )
-        if isinstance(result, list) and len(result) == len(texts):
-            return result
-        return None
-    except Exception:
-        return None
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -218,19 +206,19 @@ async def select_few_shot(
     history_tasks: list[dict],
     *,
     max_cases: int = 3,
-    llm_router: Any = None,
+    embedding: Any | None = None,
 ) -> list[dict]:
     """从历史分析任务中动态选取最相似的 few-shot 案例。
 
     V1 策略：
-      1. 优先走向量相似度（embedding）
+      1. 优先走向量相似度（本地 embedding）
       2. 降级：关键字重叠度
 
     Args:
         question: 用户问题。
         history_tasks: 历史任务列表（含 name/query_sql 字段）。
         max_cases: 最多返回案例数。
-        llm_router: LMRouter 实例。
+        embedding: embedding 客户端（可注入测试替身）；缺省时按 settings 懒构建。
 
     Returns:
         最相似的案例列表（含 question + sql）。
@@ -244,13 +232,14 @@ async def select_few_shot(
         return []
 
     # 向量相似度
-    if llm_router is not None:
+    client = embedding if embedding is not None else build_embedding_client()
+    if client is not None:
         try:
-            q_emb = await _get_embedding(question, llm_router)
-            if q_emb:
+            q_emb = await client.embed(question)
+            if q_emb and any(q_emb):
                 task_texts = [t.get("name", "") for t in valid]
-                t_embs = await _get_embeddings_batch(task_texts, llm_router)
-                if t_embs:
+                t_embs = await client.embed_batch(task_texts)
+                if t_embs and len(t_embs) == len(valid) and any(any(v) for v in t_embs):
                     scored = [
                         (_cosine_similarity(q_emb, t_embs[i]), valid[i]) for i in range(len(valid))
                     ]

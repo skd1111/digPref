@@ -29,6 +29,8 @@ def _data_pairs():
         ('services/agent/src/agent/config/llm/speculative.yaml', 'config/llm'),
         # 文档审核知识库（风险高亮依据 / 案例库引用；运行时 cwd 缺失时回退 _MEIPASS）
         ('knowledge-base', 'knowledge-base'),
+        # NL2SQL 业务字典种子 YAML（运营术语→编码映射；运行时 cwd 优先，缺失回退 _MEIPASS）
+        ('config/biz_dict', 'config/biz_dict'),
         # 内网数据库驱动 wheel（未入 git；CI / macOS 构建缺失时跳过，
         # 对应 DB 驱动走 PyPI 安装的 asyncpg/aiomysql 等）
         ('config/driver', 'config/driver'),
