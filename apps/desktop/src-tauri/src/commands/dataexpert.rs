@@ -153,6 +153,9 @@ pub async fn data_export(
     rows: Vec<Vec<Value>>,
     title: Option<String>,
     task_id: Option<String>,
+    // 导出路径选择（2026-08-18）：前端 save 对话框选中的目标文件路径，
+    // 空 = 后端默认临时目录（旧行为）
+    output_path: Option<String>,
 ) -> AppResult<Value> {
     let path = format!("/data/export/{}", fmt);
     let body = serde_json::json!({
@@ -160,6 +163,7 @@ pub async fn data_export(
         "columns": columns,
         "rows": rows,
         "title": title.unwrap_or_else(|| "数据报表".to_string()),
+        "output_path": output_path.unwrap_or_default(),
     });
     let resp = state.agent_post(&path, body).await?;
     Ok(resp)

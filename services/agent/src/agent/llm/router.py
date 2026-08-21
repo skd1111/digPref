@@ -1155,6 +1155,21 @@ class LMRouter:
                 errors.append(f"{backend_name}: {exc}")
         raise LLMBackendError(f"local-first route failed (task={task}): {'; '.join(errors)}")
 
+    async def generate_raw(self, *, prompt: str, task: str = "nl2sql") -> str:
+        """原始对话透传生成（BUGFIX #128，NL2SQL 等结构化输出任务用）。
+
+        ❗ 不能走 route()/summarise：summarise 会注入汇总模板并把输出包成
+        {"answer": ...}，提示词要求的 SQL 会被包坏（与 biznav V1.5 /
+        doc_review 同源问题）。全链走 extract_chat 原始透传：
+        ollama → 内网 private → 云端 cloud，逐级降级，全失败抛 LLMBackendError。
+
+        mock 模式无真实生成能力 → 直接抛 LLMBackendError，由调用方落
+        占位并把原因透传给前端（不得假装生成成功）。
+        """
+        if self._mock_mode:
+            raise LLMBackendError(f"mock 模式无 {task} 生成能力")
+        return await self._route_local_first(task=task, prompt=prompt)
+
     async def generate_review(self, *, kind: TaskKind, prompt: str) -> str:
         """文档审核生成：按 settings.doc_review_llm_chain 顺序调用。
 

@@ -77,6 +77,40 @@ describe('数据专家历史分析列表（缺口 9）', () => {
     expect(useDataStore.getState().lastTaskId).toBe('t2');
   });
 
+  it('同一条 SQL 重复执行只展示一条（保留最近一次，2026-08-19）', async () => {
+    dataListTasks.mockResolvedValue({
+      tasks: [
+        {
+          id: 't-new',
+          name: 'SELECT * FROM sm_scene_link_tb;',
+          query_sql: 'SELECT * FROM sm_scene_link_tb;',
+          result_metadata: { row_count: 25 },
+          result_data_ref: '',
+          created_at: 1755505115,
+        },
+        {
+          id: 't-old',
+          name: 'select * from  sm_scene_link_tb',
+          query_sql: 'select * from  sm_scene_link_tb',
+          result_metadata: { row_count: 25 },
+          result_data_ref: '',
+          created_at: 1755502882,
+        },
+      ],
+      count: 2,
+    });
+
+    render(<HistoryAnalysisList />);
+
+    await waitFor(() => expect(dataListTasks).toHaveBeenCalled());
+    // 去重后只有一条，且保留最新的（id=t-new）
+    await waitFor(() => {
+      const items = useDataStore.getState().history;
+      expect(items).toHaveLength(1);
+      expect(items[0].id).toBe('t-new');
+    });
+  });
+
   it('后端返回异常形态不崩溃', async () => {
     dataListTasks.mockResolvedValue({});
     render(<HistoryAnalysisList />);

@@ -8,6 +8,7 @@
  */
 import { useMemo, useState, useCallback } from 'react';
 import { useAssetStore, type AssetNode } from '@/store/assetStore';
+import { useDataStore } from '@/store/dataStore';
 import { AssetConfigDialog } from './AssetConfigDialog';
 
 const TYPE_ICON: Record<AssetNode['type'], string> = {
@@ -30,6 +31,10 @@ export function SystemAssetTree(): JSX.Element {
   const removeAsset = useAssetStore((s) => s.removeAsset);
   const addAsset = useAssetStore((s) => s.addAsset);
   const updateAsset = useAssetStore((s) => s.updateAsset);
+
+  // 数据库资产刷新表结构（与数据专家左栏同一套 syncSchemas 链路）
+  const refreshSchemas = useDataStore((s) => s.refreshSchemas);
+  const syncing = useDataStore((s) => s.syncing);
 
   // 只展示真实资产（不注入任何 demo / mock 数据）
   const nodes: AssetNode[] = tree;
@@ -162,6 +167,21 @@ export function SystemAssetTree(): JSX.Element {
                 >
                   <span className="text-fg-muted">{TYPE_ICON[n.type]}</span>
                   <span className="truncate">{n.label}</span>
+                  {n.type === 'database' && (
+                    <button
+                      type="button"
+                      disabled={syncing}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void refreshSchemas([n.id]);
+                      }}
+                      className="ml-auto rounded px-1 opacity-0 transition-opacity hover:bg-vscode-border group-hover:opacity-100 disabled:opacity-50"
+                      style={{ color: '#0e639c' }}
+                      title="刷新表结构（重新同步该数据源）"
+                    >
+                      ⟳
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>
@@ -219,6 +239,10 @@ export function SystemAssetTree(): JSX.Element {
         >
           {[
             { label: '配置', action: () => { setConfigNode(contextMenu.node); setContextMenu(null); } },
+            // 仅数据库资产：刷新表结构（与数据专家左栏同一套同步链路）
+            ...(contextMenu.node.type === 'database'
+              ? [{ label: syncing ? '同步表结构中…' : '刷新表结构', action: () => { void refreshSchemas([contextMenu.node.id]); setContextMenu(null); } }]
+              : []),
             { label: 'Edit', action: () => handleEdit(contextMenu.node) },
             { label: 'Duplicate', action: () => handleDuplicate(contextMenu.node) },
             { label: 'Copy Name', action: () => void handleCopyName(contextMenu.node) },

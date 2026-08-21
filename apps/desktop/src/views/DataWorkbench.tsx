@@ -3,7 +3,7 @@
  *
  * 布局（上下两行，用户反馈「还是竖的」后二次重构 2026-08-17）：
  *   ┌─ 左 260px ─┬─ 上行：编辑区（整宽 40%）──────────────────┐
- *   │ 数据源     │ ⌘SQL / 🐍Python / 💬对话 三合一页签           │
+ *   │ 数据源     │ ⌘SQL / 💬对话 页签（Python 已移除）           │
  *   │ 表结构/字典 ├─ 下行：结果区（整宽横向 60%）─────────────┤
  *   │ 历史分析   │ 📋数据网格 / 📈可视化图表 可切换页签（整宽）  │
  *   └────────────┴─────────── 导出 (ExportBar) 通栏置底 ─────┘
@@ -74,7 +74,7 @@ export function DataWorkbench(): JSX.Element {
 
       {/* 右侧主体：上下两行 —— 上行编辑区整宽，下行结果区横向铺满 */}
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        {/* 上行：编辑区（SQL/Python/对话三合一页签），整宽 */}
+        {/* 上行：编辑区（SQL/对话页签，Python 已移除 2026-08-20），整宽 */}
         <div className="min-h-0 overflow-hidden" style={{ flex: '4 1 0%' }}>
           <QueryEditor onChatZoom={() => setZoomed('chat')} />
         </div>

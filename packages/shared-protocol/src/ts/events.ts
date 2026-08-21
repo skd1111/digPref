@@ -15,6 +15,9 @@ export type AgentStreamEvent =
   | { kind: 'log'; line: string }
   | { kind: 'done'; runId: string }
   | { kind: 'error'; message: string }
+  // Phase 1B V1：内置工具执行完成（含 tool_name + ok + result_meta）；
+  // 2026-08-19 起前端用它累积 write_file / edit_file 改动文件，任务结束汇总展示
+  | { kind: 'builtin_tool_done'; tool_name: string; ok: boolean; result_meta?: Record<string, unknown> }
   // Phase 18 双框架：路由结果 / Auto-Repair 进度 / 自动模式决策
   | { kind: 'mode_routed'; routing: 'coding' | 'work' | 'mixed'; overridden: boolean; declaration?: string | null; runId?: string }
   | { kind: 'repair_attempt'; attempt: number; maxAttempts: number; validatorLevel?: string; errorSummary?: string; runId?: string }

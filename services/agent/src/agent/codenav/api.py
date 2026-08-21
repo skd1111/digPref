@@ -4,6 +4,7 @@
   POST /codenav/jump     — 符号跳转（SQLite 命中 + AI 兜底）
   POST /codenav/explain  — 解释符号语义（LLM）
   POST /codenav/index    — 手动触发全量索引
+  POST /codenav/check    — 语法错误检查（tree-sitter，2026-08-19）
   GET  /codenav/status   — 索引状态
   GET  /codenav/symbols  — 搜索符号
   GET  /codenav/llm-config — 当前 LLM 配置状态（不泄露 key）
@@ -28,6 +29,7 @@ from agent.codenav.llm_client import (
 )
 from agent.codenav.mcp_tools import explain_symbol, resolve_jump
 from agent.codenav.query import SymbolQuery
+from agent.codenav.syntax_check import check_syntax
 from agent.paths import data_root
 
 logger = logging.getLogger(__name__)
@@ -106,6 +108,16 @@ class IndexRequest(BaseModel):
     files: list[str] | None = None  # 用户从 UI 指定的单文件列表
 
 
+# 语法检查（2026-08-19）：file_path 只用于按后缀选语法，不落盘不读盘；
+# content 上限 2MB（防异常大文件把解析卡死）
+_CHECK_MAX_CONTENT_CHARS = 2_000_000
+
+
+class CheckRequest(BaseModel):
+    file_path: str
+    content: str
+
+
 # 允许的根路径白名单：用户能在 UI 里选的最高边界
 # - 用户家目录（Documents / Desktop / Projects）
 # - 当前工作目录
@@ -174,6 +186,27 @@ async def code_nav_jump(req: JumpRequest) -> dict:
         "confidence": result.confidence,
         "source": result.source,
         "note": result.note,
+    }
+
+
+@router.post("/check")
+async def code_nav_check(req: CheckRequest) -> dict:
+    """语法错误检查（tree-sitter）。不落盘、不读盘、不依赖索引：
+
+    前端把编辑器当前内容（可能未保存）直接传进来，按 file_path 后缀选语法
+    解析，返语法级诊断列表（行列 1-based）。不支持的后缀 supported=False。
+    """
+    if not req.file_path:
+        raise HTTPException(status_code=400, detail="file_path required")
+    if len(req.content) > _CHECK_MAX_CONTENT_CHARS:
+        raise HTTPException(status_code=413, detail="content too large (max 2MB)")
+
+    lang_id, diagnostics = check_syntax(req.file_path, req.content)
+    return {
+        "ok": True,
+        "supported": bool(lang_id),
+        "language": lang_id,
+        "diagnostics": [d.to_dict() for d in diagnostics],
     }
 
 

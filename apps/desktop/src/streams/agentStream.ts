@@ -35,6 +35,8 @@ export function subscribeAgentStream(handler: Handler): () => void {
     listen<AgentStreamEvent>(EVT.AGENT_MODE_ROUTED, (e) => handler(e.payload)),
     listen<AgentStreamEvent>(EVT.AGENT_REPAIR_ATTEMPT, (e) => handler(e.payload)),
     listen<AgentStreamEvent>(EVT.AGENT_AUTO_DECISION, (e) => handler(e.payload)),
+    // Phase 1B V1：内置工具完成事件（2026-08-19 起用于累积改动文件清单）
+    listen<AgentStreamEvent>(EVT.BUILTIN_TOOL_DONE, (e) => handler(e.payload)),
     // 生命周期通道：流结束和错误
     listen<AgentStreamEvent>(EVT.AGENT_DONE, (e) => handler(e.payload)),
     listen<AgentStreamEvent>(EVT.AGENT_ERROR, (e) => handler(e.payload)),

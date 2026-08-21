@@ -75,9 +75,10 @@ export function OperationsWorkbench(): JSX.Element {
     );
     useChatStore.getState().setOpsNavContext(ctx);
     return () => {
-      // 离开运营工作台（切换 activity）时清理注入上下文，避免污染其他会话
+      // 离开运营工作台（切模式）时仅清理注入上下文，避免污染其他会话；
+      // 专家团选择态保留（selectedForItemId 标记对应业务，切回同业务直接复用，
+      // 不再重跑推荐 —— BUGFIX #124：修复「切模式再切回又得重新加载专家团」）
       useChatStore.getState().setOpsNavContext(null);
-      useExpertTeamStore.getState().clearSelection();
     };
   }, [selection]);
 
@@ -88,11 +89,20 @@ export function OperationsWorkbench(): JSX.Element {
   //   manual 模式下不自动改写，直到用户切回「自动」
   useEffect(() => {
     if (!selection || !selectedItemId) return;
+    // 业务切换（selectedForItemId 跨卸载保留在 store，组件 ref 做不到）：
+    // 上一业务的选择（含手动）作废，新业务重新自动选团；同业务切模式再切回不重置
+    if (useExpertTeamStore.getState().selectedForItemId !== selectedItemId) {
+      useExpertTeamStore.getState().clearSelection();
+    }
+    // 清理后重新取快照（st 可能已过期：manual 被重置为 auto）
     const st = useExpertTeamStore.getState();
     if (st.selectionMode === "manual") return;
+    // 同一业务已有选择结果（切模式再切回 / skills 重载触发 effect 重跑）→ 直接复用，
+    // 不再重走预设判断与 LLM 推荐，避免重复加载刚打开的专家团
+    if (st.selectedForItemId === selectedItemId && st.selectionSource !== "") return;
     const featurePreset = selection.featureHit?.expert_team_ids ?? [];
     if (featurePreset.length > 0) {
-      st.applyAutoSelection(featurePreset, "preset");
+      st.applyAutoSelection(featurePreset, "preset", selectedItemId);
       return;
     }
     const skillId =
@@ -104,7 +114,7 @@ export function OperationsWorkbench(): JSX.Element {
       : undefined;
     const legacyPreset = skill?.required_expert_team_ids ?? [];
     if (legacyPreset.length > 0) {
-      st.applyAutoSelection(legacyPreset, "preset");
+      st.applyAutoSelection(legacyPreset, "preset", selectedItemId);
       return;
     }
     // AI 推荐走 LLM（本地→内网→云端三级降级）需数秒：
@@ -113,6 +123,9 @@ export function OperationsWorkbench(): JSX.Element {
     if (recommendInFlightRef.current === selectedItemId) return;
     recommendInFlightRef.current = selectedItemId;
     const flightKey = selectedItemId;
+    // 旧选择作废（切业务/首次进入）：清空团列表并记录本次推荐对应的业务 id，
+    // 在途竞态时旧结果返回靠 selectedForItemId 校验，不会错配到新业务
+    st.applyAutoSelection([], "none", selectedItemId);
     st.setRecommending(true);
     void ipc
       .expertTeamsRecommend({
@@ -126,10 +139,14 @@ export function OperationsWorkbench(): JSX.Element {
         preset_team_ids: [],
       })
       .then((r) => {
-        // 推荐返回时业务可能已切换：仅 auto 模式下应用
+        // 推荐返回时业务可能已切换：仅 auto 模式且仍是本业务的在途推荐才应用
         const cur = useExpertTeamStore.getState();
-        if (cur.selectionMode === "auto") {
-          cur.applyAutoSelection(r.team_ids, r.source as "llm" | "keyword" | "none");
+        if (cur.selectionMode === "auto" && cur.selectedForItemId === flightKey) {
+          cur.applyAutoSelection(
+            r.team_ids,
+            r.source as "llm" | "keyword" | "none",
+            flightKey,
+          );
         } else {
           cur.setRecommending(false);
         }

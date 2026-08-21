@@ -3,8 +3,11 @@
  *
  * V1 真接：调用 ipc.dataExport / ipc.dataSaveTemplate，后端执行 PII 脱敏 +
  * 数字水印（操作人/时间/IP）+ 导出审计（字段/行数/文件 MD5/接收人）。
+ * 路径选择（2026-08-18）：导出前弹系统 save 对话框让用户选择保存位置，
+ * 选中路径透传后端落盘；取消则不导出。
  */
 import { useState } from 'react';
+import { save } from '@tauri-apps/plugin-dialog';
 import { useDataStore } from '@/store/dataStore';
 import { PanelHeader } from './DataGrid';
 
@@ -14,6 +17,13 @@ const ACTIONS: Array<{ id: string; label: string; icon: string; color: string }>
   { id: 'csv', label: '导出 CSV', icon: '📑', color: '#0e639c' },
   { id: 'template', label: '保存为模板', icon: '💾', color: '#059669' },
 ];
+
+/** 导出格式 → save 对话框扩展名/过滤器 */
+const EXPORT_EXT: Record<string, { ext: string; filterName: string }> = {
+  excel: { ext: 'xlsx', filterName: 'Excel 工作簿' },
+  pdf: { ext: 'pdf', filterName: 'PDF 报表' },
+  csv: { ext: 'csv', filterName: 'CSV 文件' },
+};
 
 export function ExportBar(): JSX.Element {
   const result = useDataStore((s) => s.result);
@@ -30,7 +40,22 @@ export function ExportBar(): JSX.Element {
       if (!result) {
         setToast('⚠ 请先执行查询得到结果集');
       } else {
-        const msg = await doExport(id);
+        // 先让用户选择保存路径（2026-08-18），取消则不导出
+        const meta = EXPORT_EXT[id];
+        let picked: string | null = null;
+        try {
+          picked = await save({
+            title: `${label} —— 选择保存位置`,
+            defaultPath: `数据报表.${meta.ext}`,
+            filters: [{ name: meta.filterName, extensions: [meta.ext] }],
+          });
+        } catch {
+          picked = null; // 非 Tauri 环境（vitest）无对话框，回落默认路径
+        }
+        if (picked === null && typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+          return; // Tauri 环境下返回 null = 用户点了取消，不导出
+        }
+        const msg = await doExport(id, picked ?? undefined);
         setToast(msg || `${label} 完成`);
       }
     }

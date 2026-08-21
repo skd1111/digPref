@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import contextlib
@@ -105,6 +106,14 @@ async def chat_stream(run_id: str, body: ChatRequest, request: Request):
                 },
             ):
                 yield _sse_format(evt)
+        except asyncio.CancelledError:
+            # BUGFIX #118：CancelledError 属 BaseException，except Exception 接不住。
+            # 客户端断开 / 超时取消时补发终止信号（连接还活着时前端能收到，
+            # 已断开则写入失败也无害），随后重新抛出保持协作式取消语义。
+            yield _sse_format(
+                {"event": "error", "data": {"kind": "error", "message": "运行被取消"}}
+            )
+            raise
         except Exception as exc:
             yield _sse_format({"event": "error", "data": {"kind": "error", "message": str(exc)}})
         finally:
@@ -434,8 +443,14 @@ def _sse_format(evt: dict) -> str:
 
     sse-starlette expects a dict with `event` and `data`; for our
     adapter, we return the raw string and use `media_type=text/event-stream`.
+
+    BUGFIX #118：event 为空串时输出 SSE 注释行（":" 开头）作心跳保活，
+    EventSource / reqwest-eventsource 均会静默忽略，但字节能流起来，
+    防 Rust 客户端 read_timeout 静默断连。
     """
     event = evt.get("event", "message")
+    if not event:
+        return f": {evt.get('data') or 'hb'}\n\n"
     data = evt.get("data")
     if not isinstance(data, str):
         import json

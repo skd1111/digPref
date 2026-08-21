@@ -88,6 +88,7 @@ beforeEach(() => {
     selectedTeamIds: [],
     selectionMode: "auto",
     selectionSource: "",
+    selectedForItemId: null,
     recommending: false,
   });
 });
@@ -163,5 +164,34 @@ describe("OperationsWorkbench 选团链路（BUGFIX #76）", () => {
     expect(ipc.expertTeamsRecommend).toHaveBeenCalledTimes(1);
 
     rec.resolve({ team_ids: [TEAM.id], source: "llm" });
+  });
+
+  it("同业务切模式再切回：直接复用已选专家团，不重跑推荐（防重复加载）", async () => {
+    (ipc.expertTeamsList as ReturnType<typeof vi.fn>).mockResolvedValue({
+      teams: [TEAM],
+    });
+    (ipc.expertTeamsRecommend as ReturnType<typeof vi.fn>).mockResolvedValue({
+      team_ids: [TEAM.id],
+      source: "llm",
+    });
+
+    useOpsNavStore.setState({ selectedItemId: "due_report" });
+    const first = render(<OperationsWorkbench />);
+    await waitFor(() => {
+      expect(useExpertTeamStore.getState().selectedTeamIds).toEqual([TEAM.id]);
+    });
+    expect(ipc.expertTeamsRecommend).toHaveBeenCalledTimes(1);
+
+    // 切到其他模式 → 组件卸载；再切回运营 → 重新挂载
+    first.unmount();
+    render(<OperationsWorkbench />);
+    await new Promise((r) => setTimeout(r, 20));
+
+    // 不重跑推荐，专家团直接沿用；中间区不闪「专家团准备中」
+    expect(ipc.expertTeamsRecommend).toHaveBeenCalledTimes(1);
+    expect(useExpertTeamStore.getState().recommending).toBe(false);
+    // 页签 + 选择器 option 两处都含团名，取 getAll 判存在
+    expect(screen.getAllByText(/尽职调查专家团/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryAllByText(/专家团准备中/)).toHaveLength(0);
   });
 });

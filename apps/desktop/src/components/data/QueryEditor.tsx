@@ -14,7 +14,6 @@ import { DataChatPanel } from './DataChatPanel';
 
 const MODES: Array<{ id: EditorMode; label: string; icon: string }> = [
   { id: 'sql', label: 'SQL', icon: '⌘' },
-  { id: 'python', label: 'Python', icon: '🐍' },
   { id: 'chat', label: '对话', icon: '💬' },
 ];
 
@@ -46,9 +45,9 @@ export function QueryEditor({ onChatZoom }: { onChatZoom?: () => void }): JSX.El
         })}
       </div>
 
-      {/* 主体（SQL / Python / 对话 页签切换） */}
+      {/* 主体（SQL / 对话 页签切换；Python 模式已移除 2026-08-20） */}
       <div className="flex-1 overflow-hidden">
-        {mode === 'python' ? <PythonPane /> : mode === 'chat' ? (
+        {mode === 'chat' ? (
           <DataChatPanel {...(onChatZoom ? { onZoom: onChatZoom } : {})} />
         ) : (
           <SqlPane />
@@ -128,6 +127,8 @@ function HeavyQueryConfirmDialog(): JSX.Element | null {
 function SqlPane(): JSX.Element {
   const sql = useDataStore((s) => s.sqlText);
   const setSql = useDataStore((s) => s.setSql);
+  const setSqlSelection = useDataStore((s) => s.setSqlSelection);
+  const hasSelection = useDataStore((s) => s.sqlSelection.trim().length > 0);
   const running = useDataStore((s) => s.running);
   const runQuery = useDataStore((s) => s.runQuery);
   const selectedSourceId = useDataStore((s) => s.selectedSourceId);
@@ -170,11 +171,23 @@ function SqlPane(): JSX.Element {
     const ed = editor as {
       addCommand: (keybinding: number, handler: () => void) => unknown;
       getModifiedEditor?: () => unknown;
+      getModel?: () => { getValueInRange: (r: unknown) => string } | null;
+      getSelection?: () => unknown;
+      onDidChangeCursorSelection?: (cb: () => void) => { dispose: () => void };
     };
     ed.addCommand(2048 | 3, () => { // KeyMod.CtrlCmd | KeyCode.Enter
       if (canRun) runQuery();
     });
-  }, [canRun, runQuery]);
+    // 选区同步进 store：执行时选区优先，无选区才执行全部（2026-08-20）
+    const syncSelection = (): void => {
+      const model = ed.getModel?.() ?? null;
+      const sel = ed.getSelection?.() ?? null;
+      if (!model || !sel) return;
+      setSqlSelection(model.getValueInRange(sel));
+    };
+    ed.onDidChangeCursorSelection?.(syncSelection);
+    syncSelection();
+  }, [canRun, runQuery, setSqlSelection]);
 
   return (
     <div className="flex h-full flex-col">
@@ -209,54 +222,11 @@ function SqlPane(): JSX.Element {
             ? '⛔ 检测到写操作（UPDATE/DELETE/DROP…），数据专家模式只读，已禁用执行'
             : !hasSource
               ? '⚠ 未选择数据源 · 请在左侧「数据源 / 表结构」列表中点击选择一个数据源'
-              : '🔒 只读查询 · Ctrl+Enter 执行 · 涉及多表 JOIN 需确认（HITL）'
+              : hasSelection
+                ? '🎯 已选中文本 · 执行将只运行选中部分'
+                : '🔒 只读查询 · Ctrl+Enter 执行 · 选中部分则只执行选区 · 多表 JOIN 需确认（HITL）'
         }
         noteColor={readOnly ? '#616161' : '#cd3131'}
-      />
-    </div>
-  );
-}
-
-// ---- Python 模式（Monaco）---------------------------------------------------
-
-function PythonPane(): JSX.Element {
-  const py = useDataStore((s) => s.pythonText);
-  const setPython = useDataStore((s) => s.setPython);
-  const running = useDataStore((s) => s.running);
-  const runPython = useDataStore((s) => s.runPython);
-
-  const handleChange = useCallback(
-    (value: string | undefined) => setPython(value ?? ''),
-    [setPython],
-  );
-
-  return (
-    <div className="flex h-full flex-col">
-      <div className="flex-1 overflow-hidden">
-        <Editor
-          language="python"
-          value={py}
-          onChange={handleChange}
-          theme="vs-light"
-          options={{
-            minimap: { enabled: false },
-            fontSize: 13,
-            lineNumbers: 'on',
-            scrollBeyondLastLine: false,
-            wordWrap: 'on',
-            tabSize: 4,
-            padding: { top: 12 },
-            renderLineHighlight: 'line',
-            automaticLayout: true,
-          }}
-        />
-      </div>
-      <RunBar
-        running={running}
-        canRun
-        onRun={runPython}
-        note="🧪 受限沙箱执行 · 白名单 pandas/numpy · 内存 2GB / 超时 30s · 禁系统调用"
-        noteColor="#616161"
       />
     </div>
   );

@@ -17,6 +17,7 @@ deque → 本文件 `consume_biznav_events()` 拉出来转 SSE 推到前端。Ru
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from collections.abc import AsyncIterator
@@ -122,6 +123,18 @@ def _sse_event(event: str, data: Any) -> dict:
     return {"event": event, "data": json.dumps(data, default=str, ensure_ascii=False)}
 
 
+# 心跳保活间隔（秒）—— BUGFIX #118：Rust sse_bridge 的 reqwest 客户端 read_timeout=60s，
+# LLM 慢调用 / HITL 等审批期间流长时间无字节，客户端会主动断开 → uvicorn 取消图任务 →
+# CancelledError 穿透 except Exception → done/error 发不出，前端永久卡「思考中」。
+# 每 15s 发一条 SSE 注释行（":" 开头，EventSource/reqwest-eventsource 均忽略）保活。
+_HEARTBEAT_INTERVAL_SEC = 15.0
+
+
+def _sse_heartbeat() -> dict[str, str]:
+    """SSE 注释行心跳（event 为空时 api 层只发 `data:` 行）。"""
+    return {"event": "", "data": "heartbeat"}
+
+
 # ---- 公开入口 ---------------------------------------------------------------
 
 
@@ -182,8 +195,26 @@ async def stream_graph_events(
     # 增量下发所有新增条目，工具循环每步操作都能进思维链（2026-08-17）
     sent_trace_count: list[int] = [len(initial_state.get("trace") or [])]
 
+    # 心跳保活（BUGFIX #118）：把 astream 包成单任务逐块 await，等待超过
+    # _HEARTBEAT_INTERVAL_SEC 就先 yield 一条注释行保活再继续等（任务不取消，
+    # 图执行不受影响）。防 Rust reqwest read_timeout=60s 静默断连。
+    astream_iter = graph.astream(initial_state, cfg, stream_mode=["values", "updates"]).__aiter__()
+    next_task: asyncio.Task[Any] | None = None
+
     try:
-        async for chunk in graph.astream(initial_state, cfg, stream_mode=["values", "updates"]):
+        while True:
+            if next_task is None:
+                next_task = asyncio.ensure_future(astream_iter.__anext__())
+            try:
+                chunk = await asyncio.wait_for(
+                    asyncio.shield(next_task), timeout=_HEARTBEAT_INTERVAL_SEC
+                )
+            except asyncio.TimeoutError:
+                yield _sse_heartbeat()
+                continue
+            except StopAsyncIteration:
+                break
+            next_task = None
             if not isinstance(chunk, tuple) or len(chunk) != 2:
                 continue
             mode, payload = chunk
@@ -221,6 +252,14 @@ async def stream_graph_events(
             # Phase 15 V0：消费 preview HMR / 编译错误事件并推到 SSE 流
             for evt in await _drain_preview_events():
                 yield evt
+    except asyncio.CancelledError:
+        # BUGFIX #118：CancelledError 是 BaseException，下方 except Exception 接不住；
+        # 客户端断开 / 超时取消时补发 error，让还活着的连接能收到终止信号
+        # （done 由 finally 统一补发）
+        yield _sse_event(
+            "error",
+            {"kind": "error", "message": "运行被取消（客户端断开或超时）"},
+        )
     except Exception as exc:
         yield _sse_event(
             "error",
@@ -230,6 +269,9 @@ async def stream_graph_events(
             },
         )
     finally:
+        # 提前退出（异常/消费方关闭）时收拾掉仍在等待的 astream 任务
+        if next_task is not None and not next_task.done():
+            next_task.cancel()
         # 最后再 drain 一次，确保所有 buffered 路由事件都被推完
         for evt in await _drain_router_events():
             yield evt

@@ -143,3 +143,26 @@ def test_export_unknown_task_with_body_fallback(client):
 def test_export_without_anything_400(client):
     r = client.post("/data/export/csv", json={})
     assert r.status_code == 400
+
+
+def test_export_to_user_chosen_path(client, tmp_path):
+    """导出路径选择（2026-08-18）：output_path 透传导出器，文件落在用户选的位置。"""
+    dest = tmp_path / "子目录" / "我的报表.csv"
+    r = client.post(
+        "/data/export/csv",
+        json={"columns": ["a"], "rows": [[1], [2]], "output_path": str(dest)},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["path"] == str(dest)
+    assert dest.exists()
+    assert body["row_count"] == 2
+
+
+def test_export_invalid_path_400(client):
+    """路径含 ..（穿越）→ 400 拒绝。"""
+    r = client.post(
+        "/data/export/csv",
+        json={"columns": ["a"], "rows": [[1]], "output_path": "..\\evil.csv"},
+    )
+    assert r.status_code == 400

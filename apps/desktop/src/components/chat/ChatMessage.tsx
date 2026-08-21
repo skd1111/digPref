@@ -10,6 +10,9 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { ChatMessage as ChatMessageT } from '@eaide/shared-protocol';
 import { isMockText } from '@/lib/mockFilter';
 import { stripClarifyBlock } from '@/lib/clarify';
+import { ipc } from '@/ipc/invoke';
+import { useCodeNavStore } from '@/store/codeNavStore';
+import { useUIStore } from '@/store/uiStore';
 import { CodeBlock } from './CodeBlock';
 import { ApprovalCard } from './ApprovalCard';
 import { Markdown } from './Markdown';
@@ -62,6 +65,10 @@ export function ChatMessage({ message, maxWidth, streaming }: Props): JSX.Elemen
         done={message.status !== 'running'}
       />
     );
+  }
+  // 任务结束汇总的改动文件清单（2026-08-19）：可点击，点击在 Monaco 打开
+  if (message.role === 'system' && message.kind === 'changed_files') {
+    return <ChangedFilesCard message={message} />;
   }
   return (
     <div className="mb-3">
@@ -228,6 +235,85 @@ function ErrorBubble({ message }: { message: ChatMessageT }): JSX.Element {
         >
           ↻ 重试
         </button>
+      </div>
+    </div>
+  );
+}
+
+/** 跨平台取文件名（兼容 Windows 反斜杠） */
+function baseName(p: string): string {
+  return p.split(/[\\/]/).filter(Boolean).pop() || p;
+}
+
+/** 跨平台取父目录显示串（去掉末尾分隔符） */
+function dirName(p: string): string {
+  const base = baseName(p);
+  const idx = p.lastIndexOf(base);
+  return idx > 0 ? p.slice(0, idx).replace(/[\\/]+$/, '') : '';
+}
+
+/**
+ * 改动文件汇总卡片（2026-08-19）：任务结束时由 useAgentStream 汇总本轮
+ * write_file / edit_file 成功路径生成（content = 路径 JSON 数组）。
+ * 每条可点击 → 读文件内容并在 Monaco 打开（同 ProjectFileTree 单击文件链路）。
+ */
+function ChangedFilesCard({ message }: { message: ChatMessageT }): JSX.Element {
+  let files: string[] = [];
+  try {
+    const parsed: unknown = JSON.parse(message.content);
+    if (Array.isArray(parsed)) {
+      files = parsed.filter((f): f is string => typeof f === 'string' && f.trim() !== '');
+    }
+  } catch {
+    /* content 非法 → 渲染空卡片（不阻断对话流） */
+  }
+
+  const openFile = async (path: string): Promise<void> => {
+    try {
+      const content = await ipc.readTextFile(path);
+      useCodeNavStore.getState().openFileInEditor({ path, content });
+      if (!useUIStore.getState().editorSplit) {
+        useUIStore.getState().setEditorSplit('vertical');
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[ChangedFilesCard] open file failed:', path, e);
+      window.alert(`打开文件失败：${path}\n${String(e)}`);
+    }
+  };
+
+  if (files.length === 0) return <></>;
+
+  return (
+    <div className="mb-3">
+      <div
+        className="rounded-lg border p-2"
+        style={{ backgroundColor: '#f8fafc', borderColor: '#dbe4ee' }}
+      >
+        <div className="mb-1.5 text-2xs font-semibold" style={{ color: '#334155' }}>
+          📝 本次任务改动的文件（{files.length}）· 点击打开
+        </div>
+        <ul className="space-y-0.5">
+          {files.map((f) => (
+            <li key={f}>
+              <button
+                type="button"
+                onClick={() => void openFile(f)}
+                title={f}
+                className="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-2xs transition-colors hover:bg-[#e8f0fe]"
+                style={{ color: '#1f2937' }}
+              >
+                <span className="flex-shrink-0">📄</span>
+                <span className="font-mono font-semibold" style={{ color: '#0451a5' }}>
+                  {baseName(f)}
+                </span>
+                <span className="truncate font-mono text-[10px]" style={{ color: '#94a3b8' }}>
+                  {dirName(f)}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
       </div>
     </div>
   );

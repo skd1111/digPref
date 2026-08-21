@@ -399,6 +399,22 @@ export const ipc = {
       note: string | null;
     }>("code_nav_jump", { body }),
 
+  /** 语法错误检查（2026-08-19）：编辑器当前内容 → tree-sitter 解析 → 诊断列表。
+   *  file_path 只用于按后缀选语法；行列 1-based（与 Monaco marker 口径一致）。 */
+  codeNavCheck: (body: { file_path: string; content: string }) =>
+    invoke<{
+      ok: boolean;
+      supported: boolean;
+      language: string;
+      diagnostics: Array<{
+        line: number;
+        column: number;
+        end_line: number;
+        end_column: number;
+        message: string;
+      }>;
+    }>("code_nav_check", { body }),
+
   codeNavIndex: (opts?: {
     rootPaths?: string[];
     addRoots?: string[];
@@ -1285,6 +1301,37 @@ export const ipc = {
       { path },
     ),
 
+  // 文件树右键编译（2026-08-19）：文件/目录多选 → 按扩展名分组调 javac/py_compile/gcc
+  // outputDir 留空 → Rust 兜底 安装目录/workspace/compiled；前端一般先解析 workspace 传入
+  compileFiles: (
+    items: Array<{ path: string; is_dir: boolean }>,
+    outputDir: string,
+  ) =>
+    invoke<{
+      output_dir: string;
+      total: number;
+      ok_count: number;
+      failed_count: number;
+      truncated: boolean;
+      entries: Array<{ path: string; ok: boolean; message: string }>;
+      commands: string[];
+    }>("compile_files", { items, outputDir }),
+
+  // 编译配置读写（设置页「编译配置」面板；编译器目录手动选择，留空自动探测 PATH）
+  compileConfigGet: () =>
+    invoke<{
+      javac_dir: string;
+      python_dir: string;
+      gcc_dir: string;
+      output_dir: string;
+    }>("compile_config_get"),
+  compileConfigSave: (config: {
+    javac_dir: string;
+    python_dir: string;
+    gcc_dir: string;
+    output_dir: string;
+  }) => invoke<typeof config>("compile_config_save", { config }),
+
   // Phase 6 V0：会话管理（外部 KB 调用接口保留 Phase 4 / 第三方接入点）
   sessionsCreate: (body: {
     title: string;
@@ -1715,6 +1762,7 @@ export const ipc = {
     rows: Array<Array<string | number>>,
     title?: string,
     taskId?: string,
+    outputPath?: string,
   ) =>
     invoke<{
       path: string;
@@ -1728,6 +1776,8 @@ export const ipc = {
       rows,
       title: title ?? "数据报表",
       taskId: taskId ?? null,
+      // 导出路径选择（2026-08-18）：save 对话框选中的目标路径，空 = 后端默认临时目录
+      outputPath: outputPath ?? "",
     }),
 
   /** WS 中继：拉取大结果集 Arrow 流（结果经 EVT.DATA_STREAM_CHUNK/DONE 事件送达） */

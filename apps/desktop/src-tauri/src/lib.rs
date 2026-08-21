@@ -181,6 +181,10 @@ pub fn run() {
             commands::shell::read_text_file,
             commands::shell::list_dir_entries,
             commands::shell::reveal_in_explorer,
+            // 文件树右键编译（2026-08-19）
+            commands::compile::compile_files,
+            commands::compile::compile_config_get,
+            commands::compile::compile_config_save,
             // Phase 2D V0
             commands::skills::skills_list,
             commands::skills::skills_get,
@@ -240,6 +244,7 @@ pub fn run() {
             commands::dspark::dspark_update_config,
             // Phase 2F V0
             commands::codenav::code_nav_jump,
+            commands::codenav::code_nav_check,
             commands::codenav::code_nav_index,
             commands::codenav::code_nav_status,
             commands::codenav::code_nav_list_symbols,

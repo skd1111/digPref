@@ -26,6 +26,8 @@ class ChatMessage(BaseModel):
     # Phase 12 V1: Codex/Claude 风格执行链路 — execution kind 让前端渲染成折叠 step 块
     # 2026-08-07：error kind = 流异常终止的系统消息，前端渲染「重试」按钮
     # 2026-08-10：search kind = 搜索/检索类工具调用，前端渲染 aicss 风格搜索卡片
+    # 2026-08-19：changed_files kind = 任务结束汇总的改动文件清单（content 为路径 JSON 数组，
+    #              前端渲染可点击卡片，点击在 Monaco 打开）
     # message/tool_call/tool_result/trace/approval/log/done = events.py 流事件子类使用的 kind
     kind: (
         Literal[
@@ -33,6 +35,7 @@ class ChatMessage(BaseModel):
             "execution",
             "error",
             "search",
+            "changed_files",
             "message",
             "tool_call",
             "tool_result",

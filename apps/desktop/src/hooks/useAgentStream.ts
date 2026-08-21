@@ -63,6 +63,9 @@ function searchLabel(name: string | undefined): string {
   return '搜索中';
 }
 
+/** 写文件类 builtin 工具名（2026-08-19 改动文件累积用） */
+const WRITE_FILE_TOOLS = new Set(['write_file', 'edit_file']);
+
 export function useAgentStream(): void {
   const update = useChatStore((s) => s.update);
   const appendChat = useChatStore((s) => s.append);
@@ -230,6 +233,23 @@ export function useAgentStream(): void {
           });
           break;
 
+        case 'builtin_tool_done': {
+          // 2026-08-19：write_file / edit_file 成功 → 累积改动路径（result_meta.path），
+          // done 时汇总成 changed_files 卡片展示
+          if (
+            evt.tool_name &&
+            WRITE_FILE_TOOLS.has(evt.tool_name) &&
+            evt.ok
+          ) {
+            const p =
+              typeof evt.result_meta?.path === 'string' ? evt.result_meta.path : '';
+            if (p) {
+              useChatStore.getState().addChangedFile(p);
+            }
+          }
+          break;
+        }
+
         case 'done': {
           // 流正常结束 → 解除 busy 状态 + 思维链最终刷新（补齐末批步骤）
           setBusy(false);
@@ -239,6 +259,18 @@ export function useAgentStream(): void {
           if (st.runStartTs != null) {
             st.setLastRunMs(Date.now() - st.runStartTs);
             st.setRunStartTs(null);
+          }
+          // 2026-08-19：任务结束汇总 —— 本轮 write_file / edit_file 改动的文件
+          // 以可点击 changed_files 卡片追入对话（点击在 Monaco 打开）
+          if (st.changedFiles.length > 0) {
+            appendChat({
+              id: `changed-files-${Date.now()}`,
+              role: 'system',
+              kind: 'changed_files',
+              content: JSON.stringify(st.changedFiles),
+              status: 'ok',
+            });
+            st.clearChangedFiles();
           }
           // sessions 归档（2026-08-07，best-effort）：把最后一条 assistant 回复写进后端
           const tab = st.tabs.find((t) => t.id === st.activeTabId);
@@ -264,6 +296,20 @@ export function useAgentStream(): void {
           // 流异常终止 → 显示错误并解除 busy；kind='error' 让前端渲染「重试」按钮
           setBusy(false);
           useChatStore.getState().setRunId(null);
+          // 2026-08-19：异常终止也汇总已发生的改动（避免累积泄漏到下一轮）
+          {
+            const stErr = useChatStore.getState();
+            if (stErr.changedFiles.length > 0) {
+              appendChat({
+                id: `changed-files-${Date.now()}`,
+                role: 'system',
+                kind: 'changed_files',
+                content: JSON.stringify(stErr.changedFiles),
+                status: 'ok',
+              });
+              stErr.clearChangedFiles();
+            }
+          }
           appendChat({
             id: `error-${Date.now()}`,
             role: 'system',

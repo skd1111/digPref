@@ -18,7 +18,8 @@ import { EVT, listen } from '@/ipc/events';
 // ---- 类型 ------------------------------------------------------------------
 
 export type SourceType = 'mysql' | 'oracle' | 'csv' | 'excel';
-export type EditorMode = 'sql' | 'python' | 'chat';
+// Python 模式已移除（2026-08-20 用户要求）：仅保留 SQL / 对话
+export type EditorMode = 'sql' | 'chat';
 export type ChartType = 'bar' | 'line' | 'pie' | 'scatter';
 
 export interface Column {
@@ -90,12 +91,15 @@ interface DataState {
 
   editorMode: EditorMode;
   sqlText: string;
-  pythonText: string;
+  /** SQL 编辑器当前选区文本（空 = 无选中 → 执行全部；由 Monaco 选区事件同步） */
+  sqlSelection: string;
   chat: ChatMessage[];
   chatDraft: string;
 
   running: boolean;
   streaming: boolean;
+  /** 表结构同步中（手动刷新按钮禁用/提示用） */
+  syncing: boolean;
   result: QueryResult | null;
   chartType: ChartType;
   exporting: boolean;
@@ -105,21 +109,24 @@ interface DataState {
 
   // Actions
   fetchSources: () => Promise<void>;
+  syncSchemas: (ids: string[]) => Promise<void>;
+  refreshSchemas: (ids: string[]) => Promise<void>;
   selectSource: (id: string) => void;
   selectTable: (name: string | null) => void;
   setEditorMode: (m: EditorMode) => void;
   setSql: (v: string) => void;
-  setPython: (v: string) => void;
+  setSqlSelection: (v: string) => void;
   setChatDraft: (v: string) => void;
   sendChat: () => Promise<void>;
   runQuery: () => Promise<void>;
+  /** 直接执行指定 SQL（双击表预览用）：不动编辑器内容，不影响选区执行逻辑 */
+  runPreviewSql: (sql: string) => Promise<void>;
   confirmRun: () => Promise<void>;
   cancelConfirm: () => void;
-  runPython: () => Promise<void>;
   setChartType: (t: ChartType) => void;
   fetchHistory: () => Promise<void>;
   loadHistory: (id: string) => void;
-  doExport: (fmt: string) => Promise<string | null>;
+  doExport: (fmt: string, outputPath?: string) => Promise<string | null>;
   saveTemplate: (name: string) => Promise<boolean>;
 }
 
@@ -128,6 +135,18 @@ export function isReadOnlySql(sql: string): boolean {
   const s = sql.replace(/--.*$/gm, '').toLowerCase();
   return !/\b(update|delete|drop|truncate|insert|alter|grant|revoke|create|replace|merge)\b/.test(s);
 }
+
+/** 历史分析去重归一化 key：同一条 SQL（忽略大小写/空白/尾分号差异）只保留最近一次执行 */
+export function historyDedupeKey(sql: string): string {
+  return sql
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/;+$/, '')
+    .toLowerCase();
+}
+
+/** 自动 schema 同步只尝试一次/源（失败不重试，避免 fetchSources → sync → 重拉死循环） */
+const _autoSyncTried = new Set<string>();
 
 // ---- 大结果集 Arrow 流工具（缺口 5） ------------------------------------
 
@@ -166,26 +185,32 @@ function tableToColumnar(
 }
 
 /**
- * SQL 执行内部实现（runQuery / confirmRun 共用）。
+ * SQL 执行内部实现（runQuery / confirmRun / runPreviewSql 共用）。
+ * sqlOverride 优先（预览/确认后重提）；否则选区非空执行选区，无选区执行全部。
  * 流程：
  *   1. needs_confirm → 弹 HITL 确认（pendingConfirm），不执行
  *   2. stream_ref 非空 → 订阅 Arrow 流事件 + ipc.dataStreamResult 中继
  *   3. 内联 rows → 直接入 store
  */
-async function runSqlInternal(confirmed: boolean): Promise<void> {
+async function runSqlInternal(confirmed: boolean, sqlOverride?: string): Promise<void> {
   const st = useDataStore.getState();
-  const { sqlText, selectedSourceId } = st;
-  if (!sqlText.trim()) return;
+  const { selectedSourceId } = st;
+  const selection = st.sqlSelection.trim();
+  const sqlToRun = (sqlOverride ?? (selection || st.sqlText)).trim();
+  if (!sqlToRun) return;
   useDataStore.setState({ running: true, error: null });
   try {
-    const res = await ipc.dataRunSql(sqlText, selectedSourceId || undefined, confirmed);
+    const res = await ipc.dataRunSql(sqlToRun, selectedSourceId || undefined, confirmed);
 
     // HITL：重查询需用户确认（缺口 3）
     if (res.needs_confirm) {
       useDataStore.setState({
         running: false,
         pendingConfirm: {
-          sql: res.sql || sqlText,
+          // 记录实际执行的 SQL（选区/预览）；不用 res.sql —— 那是后端 inject_limit
+          // 注入过 LIMIT 的展示版，重提会二次注入 LIMIT（展示层仍用 res.sql 更可读，
+          // 但重提必须用原文）
+          sql: sqlToRun,
           message: res.message || '检测到多表 JOIN / 全表扫描，请确认后执行',
         },
       });
@@ -295,12 +320,13 @@ export const useDataStore = create<DataState>((set, get) => ({
 
   editorMode: 'sql',
   sqlText: '',
-  pythonText: '# 受限沙箱执行（白名单 pandas/numpy/math/datetime）\nimport pandas as pd\n\ndf = load_result()  # 上一步 SQL 结果\nprint(df.describe())\n',
+  sqlSelection: '',
   chat: [],
   chatDraft: '',
 
   running: false,
   streaming: false,
+  syncing: false,
   result: null,
   chartType: 'bar',
   exporting: false,
@@ -352,11 +378,35 @@ export const useDataStore = create<DataState>((set, get) => ({
     }
   },
 
+  // 空 schema 数据源后台补同步（由 DataSourceTree 驱动，含仅存在于 systems.yaml
+  // 的资产源）；每源只试一次，失败静默，同步完重拉列表让树刷新
+  syncSchemas: async (ids) => {
+    const pending = ids.filter((id) => id.trim() && !_autoSyncTried.has(id));
+    if (pending.length === 0) return;
+    pending.forEach((id) => _autoSyncTried.add(id));
+    set({ syncing: true });
+    try {
+      await Promise.allSettled(pending.map((id) => ipc.dataSyncSchema(id)));
+      await get().fetchSources();
+    } finally {
+      set({ syncing: false });
+    }
+  },
+
+  // 手动刷新（数据专家/开发模式的刷新按钮）：清掉「只试一次」限制强制重同步，
+  // 连接配置改动（改库/换凭证）后用户可主动拉最新表结构
+  refreshSchemas: async (ids) => {
+    const valid = ids.filter((id) => !!id.trim());
+    if (valid.length === 0) return;
+    valid.forEach((id) => _autoSyncTried.delete(id));
+    await get().syncSchemas(valid);
+  },
+
   selectSource: (id) => set({ selectedSourceId: id, selectedTable: null }),
   selectTable: (name) => set({ selectedTable: name }),
   setEditorMode: (m) => set({ editorMode: m }),
   setSql: (v) => set({ sqlText: v }),
-  setPython: (v) => set({ pythonText: v }),
+  setSqlSelection: (v) => set({ sqlSelection: v }),
   setChatDraft: (v) => set({ chatDraft: v }),
 
   // 对话模式：NL2SQL 真接后端
@@ -400,57 +450,44 @@ export const useDataStore = create<DataState>((set, get) => ({
   },
 
   // SQL 执行：真接后端（HITL 确认流 + 大结果集 Arrow 流，缺口 3/5）
+  // 选区优先（2026-08-20）：编辑器有选中时只执行选中部分，无选区才执行全部
   runQuery: async () => {
     await runSqlInternal(false);
   },
 
-  // HITL：用户确认重查询后以 confirmed=true 重提
+  // 双击表预览：直接执行指定 SQL，不碰编辑器内容（不覆盖用户已写的 SQL）
+  runPreviewSql: async (sql) => {
+    await runSqlInternal(false, sql);
+  },
+
+  // HITL：用户确认重查询后以 confirmed=true 重提（用确认弹窗里记录的实际 SQL）
   confirmRun: async () => {
     const pc = get().pendingConfirm;
     if (!pc) return;
     set({ pendingConfirm: null });
-    await runSqlInternal(true);
+    await runSqlInternal(true, pc.sql);
   },
 
   cancelConfirm: () => set({ pendingConfirm: null }),
 
-  // Python 沙箱执行（关联上一步 SQL 结果 task_id，缺口 8）
-  runPython: async () => {
-    const { pythonText, lastTaskId } = get();
-    if (!pythonText.trim()) return;
-    set({ running: true, error: null });
-    try {
-      const res = await ipc.dataRunPython(pythonText, lastTaskId || undefined);
-      if (!res.ok) {
-        set({ running: false, error: res.error || '沙箱执行失败' });
-        return;
-      }
-      set({
-        running: false,
-        result: res.row_count > 0 ? {
-          columns: res.columns,
-          rows: res.rows,
-          rowCount: res.row_count,
-          elapsedMs: Math.round(res.elapsed_s * 1000),
-          recommendedChart: 'bar',
-          chartXIndex: 0,
-          chartYIndex: res.columns.length > 1 ? 1 : 0,
-        } : get().result,
-      });
-    } catch (e: unknown) {
-      set({ running: false, error: String(e) });
-    }
-  },
-
   setChartType: (t) => set({ chartType: t }),
 
   // 历史分析：拉后端 /data/tasks（缺口 9）
+  // 去重（2026-08-19）：后端按次记一行，同一条 SQL 重复执行会在左栏出现多条；
+  // 按归一化 SQL 只保留最近一次（后端 ORDER BY created_at DESC，首个即最新）
   fetchHistory: async () => {
     try {
       const resp = await ipc.dataListTasks(50);
       const tasks = Array.isArray(resp?.tasks) ? resp.tasks : [];
+      const seen = new Set<string>();
+      const deduped = tasks.filter((t) => {
+        const key = historyDedupeKey(t.query_sql || '');
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
       set({
-        history: tasks.map((t) => ({
+        history: deduped.map((t) => ({
           id: t.id,
           name: t.name || (t.query_sql || '').slice(0, 40),
           querySql: t.query_sql || '',
@@ -474,7 +511,8 @@ export const useDataStore = create<DataState>((set, get) => ({
   },
 
   // 导出：task_id 优先（服务端取数，整表不经前端，缺口 5）
-  doExport: async (fmt: string) => {
+  // outputPath（2026-08-18）：save 对话框选中的目标路径，缺省 = 后端默认临时目录
+  doExport: async (fmt: string, outputPath?: string) => {
     const { result, lastTaskId } = get();
     if (!result) return '⚠ 请先执行查询得到结果集';
     set({ exporting: true });
@@ -485,6 +523,7 @@ export const useDataStore = create<DataState>((set, get) => ({
         result.columnar ? [] : result.rows,
         '数据报表',
         result.taskId || lastTaskId || undefined,
+        outputPath,
       );
       set({ exporting: false });
       return `✓ 导出成功：${res.path}\n🔒 水印: ${res.watermark}\n📝 MD5: ${res.md5} · ${res.row_count} 行`;

@@ -12,6 +12,7 @@
 import { open } from '@tauri-apps/plugin-dialog';
 
 import { ipc } from '@/ipc/invoke';
+import { useBiznavStore } from '@/store/biznavStore';
 import { useCodeNavStore } from '@/store/codeNavStore';
 import { useUIStore } from '@/store/uiStore';
 
@@ -116,6 +117,13 @@ export async function pickAndImportFolder(): Promise<void> {
     // eslint-disable-next-line no-console
     console.warn('[fileOps] codeNavIndex failed (backend may be offline):', e);
     useCodeNavStore.getState().recordImportError(folder, String(e));
+  }
+
+  // 3. BUGFIX #120：同步触发业务功能点 AI 提取（此前只有「系统功能点」页签的
+  //    导入按钮会走 importProjectAndExtract，File → Open Folder 导入后功能点不更新）。
+  //    fire-and-forget：提取是后台任务 + 轮询，不阻塞文件树展示；已在提取中则跳过避免并发。
+  if (!useBiznavStore.getState().extracting) {
+    void useBiznavStore.getState().importProjectAndExtract(folder);
   }
 }
 

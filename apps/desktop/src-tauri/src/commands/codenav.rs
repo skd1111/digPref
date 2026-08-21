@@ -42,6 +42,19 @@ pub async fn code_nav_jump(
     json_or_err(resp).await
 }
 
+/// 语法错误检查（2026-08-19）：编辑器内容 → 后端 tree-sitter 解析 → 诊断列表，
+/// 前端据此画 Monaco 红色波浪线。纯透传（同 code_nav_jump 模式）。
+#[tauri::command]
+pub async fn code_nav_check(
+    body: serde_json::Value,
+    state: State<'_, AppState>,
+) -> CmdResult<serde_json::Value> {
+    let url = agent_url(&state, "/codenav/check");
+    let client = reqwest::Client::new();
+    let resp = client.post(&url).json(&body).send().await.map_err(err)?;
+    json_or_err(resp).await
+}
+
 #[tauri::command]
 pub async fn code_nav_index(
     body: serde_json::Value,

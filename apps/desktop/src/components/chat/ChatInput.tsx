@@ -8,7 +8,8 @@
  *
  * Phase 12 V1 新增：
  *   - 显示 Monaco 选区 chip（用户在编辑器右键「📋 附加选区到对话」时设置）
- *   - 发送时：选区作为独立 system 消息写入 chatStore，让 agent 知道用户关注点
+ *   - 发送时：选区代码拼进 prompt 上下文段（2026-08-19 修复，此前代码未到达后端），
+ *     不再单独写 system 日志消息（用户不需要界面提示）
  *
  * 附加文件（2026-08-14）：
  *   - 工具栏 📎 按钮选本地文件（代码/文本直读；docx/pdf 等后端转 Markdown）
@@ -286,19 +287,6 @@ export function ChatInput(): JSX.Element {
     // 本地 busy（发送中）与 store busy（agent 运行中）都拦，避免并发 run
     if (!trimmed || busy || useChatStore.getState().busy) return;
 
-    // Phase 12 V1：如果附着了选区，先把它作为一条 system 消息写入 chatStore，
-    // 让 agent 在 SSE 流中知道「用户关注以下代码」。
-    if (chatSelection) {
-      appendChat({
-        id: `sel-${Date.now()}`,
-        role: 'system',
-        kind: 'execution',
-        category: 'log',
-        content: `[用户关注以下代码 · ${chatSelection.label} · 来自 ${shortFile(chatSelection.file)}]\n\`\`\`\n${chatSelection.text}\n\`\`\``,
-        status: 'ok',
-      });
-    }
-
     // 附加文件（2026-08-14）：就绪的附件写一条 system 提示，内容只进后端 prompt
     const readyAttachments = attachments.filter((a) => a.status === 'ready' && a.content);
     if (readyAttachments.length > 0) {
@@ -334,13 +322,18 @@ export function ChatInput(): JSX.Element {
       const profile = !cleanMode && profileActive && projectName ? await getProjectProfile(projectName) : '';
       const doneSnippet = !cleanMode && alignmentActive ? buildDoneCardsSnippet() : '';
       const attachSnippet = buildAttachmentsSnippet(attachments) ?? '';
-      const contextParts = [profile, cleanMode ? '' : featureSnippet, cleanMode ? '' : expertTeamSnippet, doneSnippet, attachSnippet].filter((p) => p.length > 0);
+      // 选区代码直接拼进 prompt（2026-08-19 修复）：之前只写了条 system 消息进 chatStore，
+      // 但 history 只带 user/assistant、agent_chat 也没有 selection 参数 → 代码从未到达后端，
+      // 导致模型反问「想了解哪个类」。cleanMode 下仍保留（用户主动关注项，同附件）
+      const selSnippet = chatSelection
+        ? `[用户当前关注的代码 · ${chatSelection.label} · 来自 ${shortFile(chatSelection.file)}]\n\`\`\`\n${chatSelection.text}\n\`\`\``
+        : '';
+      const contextParts = [profile, cleanMode ? '' : featureSnippet, cleanMode ? '' : expertTeamSnippet, doneSnippet, selSnippet, attachSnippet].filter((p) => p.length > 0);
       const finalPrompt =
         contextParts.length > 0
           ? `${contextParts.join('\n\n')}\n\n【用户问题】\n${trimmed}`
           : trimmed;
 
-      // 发送时把「附加选区」也告诉 agent —— 后端 system prompt 会改写
       // Phase 18：workMode/autonomy 随请求透传（ModeRouter 先验 + HITL 决策矩阵）
       // inferenceMode：性能模式下后端注入完整版双模式系统提示词
       // 2026-08-07：agent_chat 返回 run_id，存入 store 供「停止」按钮取消用
@@ -370,14 +363,6 @@ export function ChatInput(): JSX.Element {
         // 注入 intent/decompose prompt，消除「连接」这类模糊动词的场景歧义
         // （如当前页签就是「内网模型接入配置」时，「连接」= 写入接入配置）
         pageContext: { page: { workMode, tabTitle: activeTab?.title ?? '' } },
-        selection: chatSelection
-          ? {
-              file: chatSelection.file,
-              start_line: chatSelection.startLine,
-              end_line: chatSelection.endLine,
-              text: chatSelection.text,
-            }
-          : null,
       });
       setRunId(newRunId);
 

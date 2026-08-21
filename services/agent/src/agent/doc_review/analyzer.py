@@ -60,7 +60,8 @@ def _norm_key(text: str) -> str:
 _ANALYZE_SCHEMA = (
     '{"findings": [{"risk_type": "...", "title": "...", '
     '"risk_level": "low|medium|high|critical", "description": "...", '
-    '"suggestion": "...", "evidence_text": "逐字引用原文"}]}'
+    '"suggestion": "...", "rule_ref": "命中规则的 rule_id（可省）", '
+    '"evidence_text": "逐字引用原文"}]}'
 )
 
 
@@ -126,10 +127,12 @@ async def analyze_document(
         if result is not None:
             await result
 
-    # 预拼每个风险维度的规则文本（并发单元共享）
+    # 预拼每个风险维度的规则文本（并发单元共享；source 带法规名/章节供模型引用）
     rules_text_by_risk = {
         rt: (
-            "\n".join(f"- [{r.rule_id}] {r.content}" for r in rules if r.risk_type == rt)
+            "\n".join(
+                f"- [{r.rule_id}] {r.source}：{r.content}" for r in rules if r.risk_type == rt
+            )
             or "（无，模型自主判断）"
         )
         for rt in classification.risk_types

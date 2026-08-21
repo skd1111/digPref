@@ -24,6 +24,7 @@ const SETTINGS_SEGS = [
   'codenav',
   'toolchain',
   'workspace',
+  'compile',
   'advanced',
 ];
 

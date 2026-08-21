@@ -17,8 +17,10 @@ export interface ChatMessage {
    * 渲染为可折叠的灰色 step block（intent / plan / tool_call / tool_result / repair / summarise / explain）。
    * error = 流异常终止的系统消息（2026-08-07），前端渲染「重试」按钮。
    * search = 搜索/检索类工具调用（2026-08-10），前端渲染 aicss 风格搜索卡片。
+   * changed_files = 任务结束汇总的改动文件清单（2026-08-19），content 为路径 JSON 数组，
+   *   前端渲染可点击卡片，点击在 Monaco 打开对应文件。
    */
-  kind?: 'execution' | 'normal' | 'error' | 'search';
+  kind?: 'execution' | 'normal' | 'error' | 'search' | 'changed_files';
   /** execution kind 时附带的分类标签 + 耗时（前端用来着色） */
   category?: string;
   latencyMs?: number;

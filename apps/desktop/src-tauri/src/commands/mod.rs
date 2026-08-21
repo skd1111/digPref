@@ -24,3 +24,4 @@ pub mod reqflow;       // 运营专家需求改造工作流（需求卡片 V1）
 pub mod ops;           // Phase 2H 运营工作台业务记录
 pub mod datadict;      // Phase 2H 数据字典
 pub mod expert_teams;  // 专家团资产（设置页维护 + 运营模式自动注入）
+pub mod compile;       // 文件树右键编译（2026-08-19）

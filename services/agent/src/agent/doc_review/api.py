@@ -187,20 +187,26 @@ async def _run_analysis(storage: DocReviewStorage, doc_id: str, run_id: str) -> 
                 "risk_types": risk_types,
             },
         )
+        # 检索驱动的类型自动判定：无需人工指定文档类型。
+        # 一次混合检索拿全部维度的规则；命中但分类器漏勾的维度自动补进分析
+        provider = build_default_rule_provider()
+        rules_by_type = await provider.search(parsed.full_text)
+        activated = [rt for rt in rules_by_type if rt not in classification.risk_types]
+        if activated:
+            classification.risk_types = [*classification.risk_types, *activated]
+            logger.info(
+                "doc_review risk_types auto-activated by retrieval doc_id=%s added=%s",
+                doc_id,
+                [rt.value for rt in activated],
+            )
+        rules = [rule for rt_rules in rules_by_type.values() for rule in rt_rules]
+        risk_types = [rt.value for rt in classification.risk_types]
         await storage.update_run(
             run_id,
             status="analyzing",
             doc_category=classification.doc_category.value,
             risk_types=risk_types,
         )
-        provider = build_default_rule_provider()
-        rules = []
-        for risk_type in classification.risk_types:
-            rules.extend(
-                await provider.get_rules(
-                    doc_category=classification.doc_category.value, risk_type=risk_type
-                )
-            )
         t0 = time.perf_counter()
         findings = await analyze_document(
             parsed=parsed,

@@ -28,9 +28,10 @@ import { RouterDashboard } from '@/components/router/RouterDashboard';
 import { CodeNavSettingsPanel } from '@/components/codenav/CodeNavSettingsPanel';
 import { ToolchainSettingsPanel } from './settings/ToolchainSettingsPanel';
 import { WorkspaceSettingsPanel } from './settings/WorkspaceSettingsPanel';
+import { CompileSettingsPanel } from './settings/CompileSettingsPanel';
 import { AdvancedSettingsPanel } from './settings/AdvancedSettingsPanel';
 
-type SectionId = 'envs' | 'models' | 'gen-limits' | 'dspark' | 'secrets' | 'terminal' | 'about' | 'skills' | 'expert-teams' | 'router' | 'codenav' | 'toolchain' | 'workspace' | 'advanced';
+type SectionId = 'envs' | 'models' | 'gen-limits' | 'dspark' | 'secrets' | 'terminal' | 'about' | 'skills' | 'expert-teams' | 'router' | 'codenav' | 'toolchain' | 'workspace' | 'compile' | 'advanced';
 
 const SECTIONS: { id: SectionId; label: string; icon: string }[] = [
   { id: 'envs', label: 'Environments', icon: '🌍' },
@@ -46,10 +47,11 @@ const SECTIONS: { id: SectionId; label: string; icon: string }[] = [
   { id: 'router', label: '路由仪表盘', icon: '🧭' },
   { id: 'codenav', label: '代码导航', icon: '🔍' },
   { id: 'toolchain', label: '工具链', icon: '🛠' },  // Phase 18
+  { id: 'compile', label: '编译配置', icon: '🔨' },  // 文件树右键编译（2026-08-19）
   { id: 'advanced', label: '高级设置', icon: '⚙' },  // 推理模式 + 会话自主性（2026-08-05）
 ];
 
-const KNOWN_SEGS: SectionId[] = ['envs', 'models', 'gen-limits', 'dspark', 'secrets', 'terminal', 'about', 'skills', 'expert-teams', 'router', 'codenav', 'toolchain', 'workspace', 'advanced'];
+const KNOWN_SEGS: SectionId[] = ['envs', 'models', 'gen-limits', 'dspark', 'secrets', 'terminal', 'about', 'skills', 'expert-teams', 'router', 'codenav', 'toolchain', 'workspace', 'compile', 'advanced'];
 
 export function SettingsView(): JSX.Element {
   const location = useLocation();
@@ -161,6 +163,7 @@ export function SettingsView(): JSX.Element {
           {active === 'codenav' && <CodeNavSettingsPanel />}
           {active === 'toolchain' && <ToolchainSettingsPanel />}
           {active === 'workspace' && <WorkspaceSettingsPanel />}
+          {active === 'compile' && <CompileSettingsPanel />}
           {active === 'advanced' && <AdvancedSettingsPanel />}
         </main>
       </div>

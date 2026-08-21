@@ -9,6 +9,7 @@
  *   /settings/skills          -> 技能
  *   /settings/codenav         -> 代码导航
  *   /settings/workspace       -> 工作空间（默认安装目录/workspace，可自定义）
+ *   /settings/compile         -> 编译配置（编译器目录 + 产物输出目录，2026-08-19）
  *   /settings/advanced        -> 高级设置（推理模式 + 会话自主性）
  */
 import { createBrowserRouter } from 'react-router-dom';
@@ -36,6 +37,7 @@ export const router = createBrowserRouter([
       { path: 'settings/codenav', element: <SettingsView /> },
       { path: 'settings/toolchain', element: <SettingsView /> },  // Phase 18
       { path: 'settings/workspace', element: <SettingsView /> },  // 工作空间路径
+      { path: 'settings/compile', element: <SettingsView /> },  // 编译配置（2026-08-19）
       { path: 'settings/advanced', element: <SettingsView /> },  // 高级设置（2026-08-05）
     ],
   },

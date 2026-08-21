@@ -143,11 +143,16 @@ vi.mock('@/ipc/invoke', () => ({
     chatCompressHistory: (...args: unknown[]) => chatCompressHistory(...args),
     chatAttachFile: vi.fn(),
     cancel: vi.fn(),
+    sessionsCreate: vi.fn().mockResolvedValue({ id: 'sess-test' }),
+    sessionsAppendMessage: vi.fn().mockResolvedValue(undefined),
+    biznavProfile: vi.fn().mockResolvedValue({ has_profile: false, profile: '' }),
   },
-  invoke: vi.fn(),
+  invoke: vi.fn().mockResolvedValue('run-test'),
 }));
 
 import { ChatInput } from '@/components/chat/ChatInput';
+import { invoke } from '@/ipc/invoke';
+import { useCodeNavStore } from '@/store/codeNavStore';
 
 /** 构造 N 轮对话（每轮 user+assistant 各 8 字符 = 各 2 tok） */
 function turns(n: number, offset = 0): ChatMessage[] {
@@ -166,6 +171,7 @@ describe('ChatInput 上下文指示器与清理/压缩菜单', () => {
   beforeEach(() => {
     localStorage.clear();
     chatCompressHistory.mockClear();
+    (invoke as unknown as ReturnType<typeof vi.fn>).mockClear();
   });
 
   afterEach(async () => {
@@ -269,6 +275,42 @@ describe('ChatInput 上下文指示器与清理/压缩菜单', () => {
     const compressBtn = allButtons(document.body).find((b) => b.textContent?.includes('压缩上下文'));
     expect(compressBtn).toBeTruthy();
     expect(compressBtn!.disabled).toBe(true);
+  });
+
+  it('选区代码拼进 prompt 发送，且不写「用户关注以下代码」system 日志（2026-08-19 回归）', async () => {
+    useCodeNavStore.getState().attachChatSelection({
+      file: 'D:/proj/src/Foo.java',
+      startLine: 1,
+      endLine: 2,
+      text: 'public class Foo {}',
+      label: 'L1-L2 · 2 行',
+      auto: true,
+    });
+    await render();
+    const ta = container.querySelector('textarea')!;
+    const setValue = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')!.set!;
+    await act(async () => {
+      setValue.call(ta, '这个类是干嘛的');
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const sendBtn = allButtons(container).find((b) => b.title === '发送')!;
+    await act(async () => {
+      sendBtn.click();
+    });
+
+    const calls = (invoke as unknown as ReturnType<typeof vi.fn>).mock.calls.filter((c) => c[0] === 'agent_chat');
+    expect(calls.length).toBe(1);
+    const args = calls[0][1] as { prompt: string; selection?: unknown };
+    // 选区代码直接进 prompt（此前只写 UI 日志，代码从未到达后端）
+    expect(args.prompt).toContain('[用户当前关注的代码 · L1-L2 · 2 行');
+    expect(args.prompt).toContain('public class Foo {}');
+    expect(args.prompt).toContain('【用户问题】\n这个类是干嘛的');
+    // 死参数已删：不再传 Rust 不认的 selection
+    expect(args.selection).toBeUndefined();
+    // 对话流不再写「用户关注以下代码」system 日志
+    const tab = useChatStore.getState().tabs[0];
+    expect(tab.messages.some((m) => m.content.includes('用户关注以下代码'))).toBe(false);
+    useCodeNavStore.getState().clearChatSelection();
   });
 
   it('压缩失败：内联报错且不清数据', async () => {

@@ -8,15 +8,22 @@
  *   - 渲染 Tab 条（已打开文件列表，可切换 / 关闭）
  *   - 用 @monaco-editor/react 渲染激活文件（按 path 建 model，切换保留视图状态）
  *   - 接入 useCodeNavExtension（右键 AI 跳转 / 解释 / 导入）
+ *   - 语法错误实时检查（2026-08-19）：内容防抖送后端 tree-sitter 校验，诊断画红色波浪线
  *   - 消费 revealTarget：跨文件跳转时自动打开目标文件 + revealLineInCenter 闪烁
  */
 import { useEffect, useRef, useState } from 'react';
 import Editor from '@monaco-editor/react';
 import type * as monaco from 'monaco-editor';
+import * as monacoEditor from 'monaco-editor';
 
 import { ipc } from '@/ipc/invoke';
 import { useCodeNavStore } from '@/store/codeNavStore';
 import { useCodeNavExtension, revealAndFlash } from './CodeNavExtension';
+
+/** 语法检查支持的后缀（与后端 language_registry 对齐） */
+const SYNTAX_CHECK_EXT = /\.(java|py|ts|tsx)$/i;
+/** 内容变化 → 校验防抖（避免每敲一个字符就请求一次） */
+const SYNTAX_CHECK_DEBOUNCE_MS = 500;
 
 interface TabMenuState {
   x: number;
@@ -58,6 +65,58 @@ export function CodeEditorPane(): JSX.Element {
 
   // 注册右键 AI 动作（跳转 / 解释 / 导入）
   useCodeNavExtension({ editor: editorRef.current, modelPath: activeFilePath });
+
+  // 语法错误检查（2026-08-19）：编辑器内容 → 后端 tree-sitter 校验 → 红色波浪线。
+  // 纯语法级（缺分号/括号不闭合）；语义错误不在范围。后端未就绪时静默不阻塞编辑。
+  useEffect(() => {
+    if (!editorReady || !activeFilePath) return;
+    const ed = editorRef.current;
+    const model = ed?.getModel() ?? null;
+    if (!ed || !model) return;
+    if (!SYNTAX_CHECK_EXT.test(activeFilePath)) return;
+
+    let cancelled = false;
+    let timer: number | null = null;
+    const path = activeFilePath;
+
+    const runCheck = async (): Promise<void> => {
+      try {
+        const res = await ipc.codeNavCheck({ file_path: path, content: model.getValue() });
+        if (cancelled) return;
+        // 陈旧响应防护：编辑器已切到其他 model → 丢弃不画
+        if (editorRef.current?.getModel() !== model) return;
+        monacoEditor.editor.setModelMarkers(
+          model,
+          'codenav-syntax',
+          res.diagnostics.map((d) => ({
+            severity: monacoEditor.MarkerSeverity.Error,
+            message: d.message,
+            startLineNumber: d.line,
+            startColumn: d.column,
+            endLineNumber: d.end_line,
+            endColumn: d.end_column,
+          })),
+        );
+      } catch {
+        // Agent 未就绪 / 网络失败 → 本次不显示，下次编辑触发重新校验
+      }
+    };
+
+    // 打开文件先查一次；之后内容变化防抖 500ms
+    timer = window.setTimeout(() => void runCheck(), 200);
+    const sub = model.onDidChangeContent(() => {
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => void runCheck(), SYNTAX_CHECK_DEBOUNCE_MS);
+    });
+
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+      sub.dispose();
+      // 切文件/关闭时清掉旧标记，避免波浪线串到下一个文件
+      monacoEditor.editor.setModelMarkers(model, 'codenav-syntax', []);
+    };
+  }, [editorReady, activeFilePath]);
 
   // revealTarget 指向未打开的文件 → 读盘后加入 Tab（跨文件跳转目标可能尚未打开）
   useEffect(() => {

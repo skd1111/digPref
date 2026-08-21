@@ -72,6 +72,11 @@ interface ChatState {
   // 不持久化（不进 persist）：重启/新会话回落 interactive，需重新开关 + 弹窗确认。
   autonomy: 'interactive' | 'auto';
 
+  // 本轮任务改动文件累积（2026-08-19）：agentStream 收 builtin_tool_done
+  // （write_file / edit_file 成功）写入，done 时汇总成 changed_files 卡片追入对话。
+  // 不持久化（运行态；卡片消息本身随 tabs 持久化）。
+  changedFiles: string[];
+
   // tab 操作
   newTab: (title?: string, mode?: WorkMode) => void;
   closeTab: (id: string) => void;
@@ -97,6 +102,10 @@ interface ChatState {
   setOpsNavContext: (ctx: FeatureContextPayload | null) => void;
   setAlignmentFeatures: (fs: FeatureContextPayload[] | null) => void;
   setSelectedSkill: (s: { skill_id: string; skill_name: string; matched_keywords: string[] } | null) => void;
+
+  // 2026-08-19 改动文件累积（去重）+ 清空
+  addChangedFile: (path: string) => void;
+  clearChangedFiles: () => void;
 
   // Phase 4 V0
   setInferenceMode: (mode: 'normal' | 'performance') => void;
@@ -167,6 +176,7 @@ export const useChatStore = create<ChatState>()(
     selectedSkill: null,
     inferenceMode: 'normal',  // Phase 4 V0: 默认正常模式（端侧优先）
     autonomy: 'interactive',  // Phase 18: 默认交互模式（安全默认值）
+    changedFiles: [],          // 2026-08-19: 本轮改动文件累积（运行态）
     runStartTs: null,
     lastRunMs: null,
 
@@ -309,6 +319,13 @@ export const useChatStore = create<ChatState>()(
 
     // Phase 18
     setAutonomy: (a) => set({ autonomy: a }),
+
+    // 2026-08-19 改动文件累积（同路径去重）+ 清空
+    addChangedFile: (path) =>
+      set((s) =>
+        s.changedFiles.includes(path) ? s : { changedFiles: [...s.changedFiles, path] },
+      ),
+    clearChangedFiles: () => set({ changedFiles: [] }),
 
     // 2026-08-07
     setRunStartTs: (ts) => set({ runStartTs: ts }),
