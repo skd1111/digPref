@@ -20,6 +20,7 @@ Phase 18：首次进入先过自主性决策矩阵（dual/autonomy）：
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -28,11 +29,18 @@ from typing import Any
 from agent.audit.store import audit
 from agent.config import settings
 from agent.dual.autonomy import AutonomyDecision, decide, is_hard_blocked
+from agent.graph.exemptions import add_exempt, exemption_scope, is_exempt, tool_kind_key
 from agent.graph.interrupt import check_decision, cleanup_approval, start_approval
 from agent.graph.state import AgentState, next_step, record_trace
 from agent.safety.write_detector import is_write_call
 
 logger = logging.getLogger(__name__)
+
+# 等待审批时的图循环节流（BUGFIX #138）：route_after_hitl 在 awaiting_approval 时
+# 把图路由回本节点，此前等待分支无任何 sleep → 约 130 次/秒空转（实测 1 秒 200+
+# 条相同思维链、一次审批刷出 1300+ 步）。与 interrupt 后台轮询的 0.25s 对齐：
+# 决策延迟无感知（后台任务 0.25s 才把决策写进内存缓存），空转降三个量级。
+_WAIT_POLL_SEC = 0.25
 
 
 async def hitl_gate_node(state: AgentState, llm: Any | None = None) -> dict:
@@ -75,6 +83,18 @@ async def hitl_gate_node(state: AgentState, llm: Any | None = None) -> dict:
         # 这是后续进入（由 edges 路由回来检查决策）
         decision = await check_decision(existing_id)
         if decision:
+            # 「此后都按此执行」（2026-08-25）：批准 + 登记本会话同类豁免；
+            # 出口归一为 approve，下游（dispatcher/catalog/loop）无需感知新值。
+            # 硬阻断操作不会走到这里（前端不提供该按钮，且首次进入先过 is_hard_blocked）。
+            if decision == "approve_always":
+                scope, kind = exemption_scope(state), tool_kind_key(call)
+                add_exempt(scope, kind)
+                await _audit_autonomy(
+                    state, call,
+                    AutonomyDecision(action="approve", decided_by="session_exempt"),
+                    reason=f"用户选择「此后都按此执行」：{kind}（scope={scope}）",
+                )
+                decision = "approve"
             # 决策已到达 → 清理并返回
             await cleanup_approval(existing_id)
             return {
@@ -99,13 +119,14 @@ async def hitl_gate_node(state: AgentState, llm: Any | None = None) -> dict:
         # 写入 reject；但 Agent 重启 / 任务丢失时无人写决策，不能无限等待
         started = state.get("approval_started_at")
         if started is None:
-            # 存量进行中的审批无时间戳 → 从当前时刻起补记，下轮开始守卫
+            # 存量进行中的审批无时间戳 → 从当前时刻起补记，下轮开始守卫。
+            # 注意：稳态等待不回写 awaiting_approval —— 状态合并保留原值 True，
+            # 路由不受影响，但节点输出不再携带该字段 → 思维链不再每次重入都
+            # 刷一条相同的「已发起审批请求」（BUGFIX #139，配合 #138 节流）。
+            await asyncio.sleep(_WAIT_POLL_SEC)  # 节流，防图循环空转（BUGFIX #138）
             return {
                 "approval_started_at": time.time(),
-                "awaiting_approval": True,
-                "trace": [
-                    record_trace("hitl_gate", "running", reason="waiting", approval_id=existing_id)
-                ],
+                # 不记 trace：每次重入都记会在思维链刷出大量相同条目（BUGFIX #139）
             }
         if time.time() - float(started) >= settings.approval_timeout_sec:
             await cleanup_approval(existing_id)
@@ -122,18 +143,39 @@ async def hitl_gate_node(state: AgentState, llm: Any | None = None) -> dict:
                     )
                 ],
             }
-        return {
-            "awaiting_approval": True,
-            "trace": [
-                record_trace("hitl_gate", "running", reason="waiting", approval_id=existing_id)
-            ],
-        }
+        await asyncio.sleep(_WAIT_POLL_SEC)  # 节流，防图循环空转（BUGFIX #138）
+        # 稳态等待不产出任何输出字段：状态合并保留 awaiting_approval=True 照常路由，
+        # collector 无内容可记 → 思维链不再每次重入刷一条相同条目（BUGFIX #139）
+        return {}
 
     # ---- 首次进入：发起审批 ----
     approval_id = str(uuid.uuid4())
 
-    # Phase 18：硬阻断检测 + 自主性决策矩阵
+    # Phase 18：硬阻断检测 + 自主性决策矩阵（硬阻断永远优先于会话豁免）
     blocked = is_hard_blocked(call)
+
+    # 会话豁免（2026-08-25）：用户在本会话已对该工具类选过「此后都按此执行」
+    # → 自动放行（审计留痕）；硬阻断不受豁免影响。
+    if not blocked:
+        scope, kind = exemption_scope(state), tool_kind_key(call)
+        if is_exempt(scope, kind):
+            await _audit_autonomy(
+                state, call,
+                AutonomyDecision(action="approve", decided_by="session_exempt"),
+                reason=f"会话豁免命中：{kind}（scope={scope}）",
+            )
+            return {
+                "approval_id": None,
+                "approval_decision": "approve",
+                "awaiting_approval": False,
+                "trace": [
+                    record_trace(
+                        "hitl_gate", "ok", reason="session_exempt",
+                        risk_level=risk_level, kind=kind,
+                    )
+                ],
+            }
+
     verdict = decide(
         risk_level=risk_level,
         autonomy=state.get("autonomy") or "interactive",

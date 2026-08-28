@@ -140,7 +140,7 @@ class EvalCollector:
 
     def record_hitl(self, *, decision: str) -> None:
         self.hitl_requested += 1
-        if decision == "approve":
+        if decision in ("approve", "approve_always"):
             self.hitl_approved += 1
         else:
             self.hitl_rejected += 1

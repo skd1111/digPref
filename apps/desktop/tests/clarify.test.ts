@@ -76,6 +76,45 @@ describe('stripClarifyBlock', () => {
   it('无块时原样返回', () => {
     expect(stripClarifyBlock('hello')).toBe('hello');
   });
+
+  it('围栏内 JSON 损坏也照样剥离，原始 JSON 不裸露给用户（#149）', () => {
+    const broken = '结论如下\n\n```clarify\n[{"question": "x", "options": [BROKEN```';
+    // 围栏闭合但 JSON 非法：解析不出卡片，正文仍只留可读部分（不含 JSON）
+    expect(parseClarifyBlock(broken)).toBeNull();
+    expect(stripClarifyBlock(broken)).toBe('结论如下');
+  });
+});
+
+describe('多选题卡片（multi 标记，BUGFIX #149）', () => {
+  const MULTI_BLOCK = [
+    '您希望侧重哪些内容？',
+    '',
+    '```clarify',
+    '[{"question": "侧重哪些内容？（可多选）", "multi": true, "options": [',
+    '{"text": "基础身份", "reason": "", "recommended": true},',
+    '{"text": "核心能力", "reason": "", "recommended": false}]}]',
+    '```',
+  ].join('\n');
+
+  it('解析 multi=true（后端题干含「多选」字样时下发）', () => {
+    const r = parseClarifyBlock(MULTI_BLOCK);
+    expect(r).not.toBeNull();
+    expect(r!.questions[0].multi).toBe(true);
+    expect(r!.questions[0].options).toHaveLength(2);
+  });
+
+  it('旧数据无 multi 字段 → 按单选渲染（向后兼容）', () => {
+    const r = parseClarifyBlock(BLOCK);
+    expect(r!.questions[0].multi).toBe(false);
+    expect(r!.questions[1].multi).toBe(false);
+  });
+
+  it('multi 非布尔值（模型超发脏字段）不炸解析，归一为 false', () => {
+    const dirty = '```clarify\n[{"question": "q", "multi": "yes", "options": [{"text": "a"}, {"text": "b"}]}]```';
+    const r = parseClarifyBlock(dirty);
+    expect(r).not.toBeNull();
+    expect(r!.questions[0].multi).toBe(false);
+  });
 });
 
 describe('确认卡（参数摘要 + 确认/修改，2026-08-14）', () => {

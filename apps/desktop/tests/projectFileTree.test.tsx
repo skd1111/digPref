@@ -44,7 +44,6 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 
 import { ProjectFileTree } from '@/components/codenav/ProjectFileTree';
 import { pickAndImportFolder } from '@/components/codenav/fileOps';
-import { CompileSettingsPanel } from '@/views/settings/CompileSettingsPanel';
 import { useCodeNavStore } from '@/store/codeNavStore';
 import { useBiznavStore } from '@/store/biznavStore';
 
@@ -191,33 +190,5 @@ describe('多选 / 右键编译（2026-08-19）', () => {
 
     fireEvent.contextMenu(screen.getByTitle('/proj/src'));
     expect(screen.getByText('⚙ 编译此目录')).toBeTruthy();
-  });
-});
-
-describe('编译配置设置面板（2026-08-19）', () => {
-  it('加载已有配置并可保存（javac 目录 + 输出目录）', async () => {
-    compileConfigGet.mockResolvedValue({
-      javac_dir: 'C:/jdk/bin',
-      python_dir: '',
-      gcc_dir: '',
-      output_dir: '',
-    });
-    compileConfigSave.mockImplementation(async (cfg: unknown) => cfg);
-
-    render(<CompileSettingsPanel />);
-    await waitFor(() =>
-      expect((screen.getByDisplayValue('C:/jdk/bin') as HTMLInputElement).value).toBe('C:/jdk/bin'),
-    );
-
-    // 填输出目录后保存
-    const outInput = screen.getByPlaceholderText('留空 = 工作空间 workspace/compiled');
-    fireEvent.change(outInput, { target: { value: 'D:/out' } });
-    fireEvent.click(screen.getByText('保存'));
-    await waitFor(() => expect(compileConfigSave).toHaveBeenCalledTimes(1));
-    expect(compileConfigSave.mock.calls[0][0]).toMatchObject({
-      javac_dir: 'C:/jdk/bin',
-      output_dir: 'D:/out',
-    });
-    await waitFor(() => expect(screen.getByText(/已保存/)).toBeTruthy());
   });
 });

@@ -54,6 +54,13 @@ class ChatRequest(BaseModel):
     # 历史压缩摘要（2026-08-17）：断点之前的旧对话已被 LLM 压缩成摘要，
     # 注入 graph 初始 messages 时作为 system 消息置于 history 之前。
     history_summary: str | None = Field(default=None, alias="historySummary")
+    # Skill 粘性（2026-08-26）：前端记录上一轮命中的 skill（skill_matched 事件），
+    # 本轮未命中新 skill 且属追问/修改类输入时由 intent_node 继承。
+    last_skill_id: str | None = Field(default=None, alias="lastSkillId")
+    # 任务级工作目录（2026-08-26）：一个聊天页签 = 一个任务文件夹。
+    # task_id = 前端页签唯一标识（映射持久化）；task_title = 首问摘要（文件夹命名）。
+    task_id: str | None = Field(default=None, alias="taskId")
+    task_title: str | None = Field(default=None, alias="taskTitle")
 
 
 @router.post("/{run_id}/stream")
@@ -88,6 +95,12 @@ async def chat_stream(run_id: str, body: ChatRequest, request: Request):
     summary_text = (body.history_summary or "").strip()[:_HISTORY_SUMMARY_MAX_LEN] or None
 
     async def event_gen():
+        # 多会话并发（2026-08-26）：把本 run 的模型选择/推理模式写入当前异步上下文，
+        # 同一任务链（图节点/LLM 调用）自动继承；并发跑的另一个会话不会互踩。
+        # 上方实例字段写入保留（单跑兼容 + 日志）；读取侧 contextvar 优先。
+        from agent.llm.router import bind_run_scope
+
+        bind_run_scope(body.model_override, body.inference_mode)
         try:
             async for evt in stream_graph_events(
                 graph,
@@ -103,20 +116,22 @@ async def chat_stream(run_id: str, body: ChatRequest, request: Request):
                     # 页面上下文（2026-08-14）：前端当前页签/场景，注入 intent /
                     # decompose prompt 消除“连接”这类模糊动词的歧义
                     "page_context": body.context or None,
+                    # Skill 粘性 + 任务级工作目录（2026-08-26）
+                    "last_skill_id": (body.last_skill_id or "").strip() or None,
+                    "task_id": (body.task_id or "").strip() or None,
+                    "task_title": (body.task_title or "").strip() or None,
                 },
             ):
                 yield _sse_format(evt)
         except asyncio.CancelledError:
-            # BUGFIX #118：CancelledError 属 BaseException，except Exception 接不住。
-            # 客户端断开 / 超时取消时补发终止信号（连接还活着时前端能收到，
-            # 已断开则写入失败也无害），随后重新抛出保持协作式取消语义。
-            yield _sse_format(
-                {"event": "error", "data": {"kind": "error", "message": "运行被取消"}}
-            )
+            # BUGFIX #152（同 stream.py）：取消源自客户端关连接，yield 写不出去且违反
+            # GeneratorExit 协议；直接重抛，终止信号由 Rust 桥 DONE(cancelled) 兑底。
             raise
         except Exception as exc:
+            # 生成器自身意外（stream_graph_events 内部已自带 error+done，这里是双保险）：
+            # error + done 一起发，前端靠 done 解 busy；BUGFIX #152 前 done 放 finally，
+            # 消费方关闭时 GeneratorExit 会把它吞掉 → 前端永久转圈。
             yield _sse_format({"event": "error", "data": {"kind": "error", "message": str(exc)}})
-        finally:
             yield _sse_format({"event": "done", "data": {"kind": "done", "runId": run_id}})
 
     return StreamingResponse(
@@ -134,6 +149,21 @@ async def chat_stream(run_id: str, body: ChatRequest, request: Request):
 async def chat_create(body: ChatRequest) -> dict:
     """Non-streaming variant — useful for tests / scripts."""
     return {"run_id": str(uuid.uuid4()), "prompt": body.prompt}
+
+
+@router.post("/{run_id}/cancel")
+async def chat_cancel(run_id: str) -> dict:
+    """协作式取消（执行过程可视化）：置 run 级取消旗标。
+
+    既有停止链路是「关 SSE 连接 → uvicorn 取消图任务」；本接口补另一条
+    主动路径，覆盖取消信号在 HITL 等待 / 节点内部长操作时未及时穿透的场景：
+    流循环与工具循环在边界检查旗标短路，收尾时 done 带 cancelled=true。
+    幂等、不报错（旗标对已结束/不存在的 run 无害）。
+    """
+    from agent.graph.stream import request_run_cancel
+
+    request_run_cancel(run_id)
+    return {"ok": True, "run_id": run_id, "cancelled": True}
 
 
 # ---- 会话标题摘要（2026-08-07）---------------------------------------------

@@ -121,6 +121,87 @@ class TestErrors:
         assert elapsed < 3, f"工具卡死阻塞了主流程：{elapsed:.1f}s"
 
 
+class TestDoclingFallback:
+    """V9：markitdown 失败 / 结果为空时的 Docling 兜底（可选依赖）。"""
+
+    def _sample(self, tmp_path):
+        sample = tmp_path / "report.docx"
+        sample.write_bytes(b"PK\x03\x04 placeholder")
+        return sample
+
+    def test_fallback_when_markitdown_returns_empty(self, tmp_path, monkeypatch):
+        import agent.builtin.markdown_convert as mc
+
+        monkeypatch.setattr(settings, "builtin_markitdown_executable", "")
+        monkeypatch.setattr(mc, "_library_convert_impl", lambda _p: "")
+        monkeypatch.setattr(mc, "_docling_available", lambda: True)
+        monkeypatch.setattr(mc, "_docling_convert_impl", lambda _p: "| 列 | 值 |\n| a | 1 |")
+        result = mc.builtin_file_to_markdown(path=str(self._sample(tmp_path)))
+        assert result.ok is True
+        assert "| a | 1 |" in result.content
+        assert result.meta["backend"] == "docling"
+
+    def test_fallback_when_markitdown_raises(self, tmp_path, monkeypatch):
+        import agent.builtin.markdown_convert as mc
+
+        def _boom(_path: str) -> str:
+            raise RuntimeError("corrupt layout")
+
+        monkeypatch.setattr(settings, "builtin_markitdown_executable", "")
+        monkeypatch.setattr(mc, "_library_convert_impl", _boom)
+        monkeypatch.setattr(mc, "_docling_available", lambda: True)
+        monkeypatch.setattr(mc, "_docling_convert_impl", lambda _p: "# 兜底正文")
+        result = mc.builtin_file_to_markdown(path=str(self._sample(tmp_path)))
+        assert result.ok is True
+        assert "兜底正文" in result.content
+        assert result.meta["backend"] == "docling"
+
+    def test_fallback_when_markitdown_missing(self, tmp_path, monkeypatch):
+        """markitdown 未安装且未配 CLI：docling 可用时顶上，不再报 unavailable。"""
+        import agent.builtin.markdown_convert as mc
+
+        def _no_library(_path: str) -> str:
+            raise ImportError("markitdown")
+
+        monkeypatch.setattr(settings, "builtin_markitdown_executable", "")
+        monkeypatch.setattr(mc, "_library_convert_impl", _no_library)
+        monkeypatch.setattr(mc, "_docling_available", lambda: True)
+        monkeypatch.setattr(mc, "_docling_convert_impl", lambda _p: "docling 结果")
+        result = mc.builtin_file_to_markdown(path=str(self._sample(tmp_path)))
+        assert result.ok is True
+        assert result.meta["backend"] == "docling"
+
+    def test_docling_unavailable_keeps_original_error(self, tmp_path, monkeypatch):
+        """docling 也未安装：保留 markitdown 原错误，不误报成功。"""
+        import agent.builtin.markdown_convert as mc
+
+        def _boom(_path: str) -> str:
+            raise RuntimeError("corrupt layout")
+
+        monkeypatch.setattr(settings, "builtin_markitdown_executable", "")
+        monkeypatch.setattr(mc, "_library_convert_impl", _boom)
+        monkeypatch.setattr(mc, "_docling_available", lambda: False)
+        result = mc.builtin_file_to_markdown(path=str(self._sample(tmp_path)))
+        assert result.ok is False
+
+    def test_docling_failure_does_not_mask_result(self, tmp_path, monkeypatch):
+        """docling 自身报错时静默跳过，不抛到调用方。"""
+        import agent.builtin.markdown_convert as mc
+
+        def _boom(_path: str) -> str:
+            raise RuntimeError("corrupt layout")
+
+        def _docling_boom(_path: str) -> str:
+            raise ValueError("docling crashed")
+
+        monkeypatch.setattr(settings, "builtin_markitdown_executable", "")
+        monkeypatch.setattr(mc, "_library_convert_impl", _boom)
+        monkeypatch.setattr(mc, "_docling_available", lambda: True)
+        monkeypatch.setattr(mc, "_docling_convert_impl", _docling_boom)
+        result = mc.builtin_file_to_markdown(path=str(self._sample(tmp_path)))
+        assert result.ok is False
+
+
 @needs_markitdown
 class TestConvert:
     """真实转换（HTML 样本；依赖进程内库或外部 CLI）。"""

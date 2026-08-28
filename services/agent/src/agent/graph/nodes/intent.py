@@ -4,11 +4,77 @@ from __future__ import annotations
 
 import time
 import uuid
+from typing import TYPE_CHECKING
 
 from agent.graph.state import AgentState, record_trace
 from agent.llm.router import LMRouter
 from agent.observability.cot_log import cot as cot_log
 from agent.observability.trace_store import record as record_trace_persisted
+
+if TYPE_CHECKING:
+    from agent.skills.models import SkillRoutingResult
+
+# Skill 粘性（2026-08-26）：追问/修改类短句的线索词 —— 命中且输入不长时继承上一轮 skill
+_FOLLOWUP_CUES = (
+    "太丑",
+    "不好看",
+    "重新",
+    "重做",
+    "再来",
+    "优化",
+    "美化",
+    "调整",
+    "修改",
+    "改一下",
+    "改成",
+    "换",
+    "不对",
+    "不行",
+    "不满意",
+    "继续",
+    "接着",
+    "加上",
+    "补充",
+    "删掉",
+    "去掉",
+    "这份",
+    "这个",
+    "刚才",
+    "上面",
+    "上一个",
+)
+# 粘性生效的输入长度上限：长输入大概率是新任务，不继承旧 skill（关键词层会重新判）
+_FOLLOWUP_MAX_LEN = 120
+
+
+def _looks_like_followup(prompt: str) -> bool:
+    """短句 + 修改/反馈线索词 → 判为对上一轮产物的追问。"""
+    p = prompt.strip()
+    if not p or len(p) > _FOLLOWUP_MAX_LEN:
+        return False
+    return any(cue in p for cue in _FOLLOWUP_CUES)
+
+
+def _inherit_last_skill(prompt: str, last_skill_id: str) -> SkillRoutingResult | None:
+    """构造继承的 SkillRoutingResult；不满足条件返 None（失败静默，不抛异常）。"""
+    sid = last_skill_id.strip()
+    if not sid or not _looks_like_followup(prompt):
+        return None
+    try:
+        from agent.skills import api as skills_api
+        from agent.skills.models import SkillRoutingResult
+
+        last = skills_api._loader.get(sid) if skills_api._loader else None
+        if not last or not last.enabled:
+            return None
+        return SkillRoutingResult(
+            skill_id=sid,
+            skill_name=last.name,
+            confidence=0.5,
+            matched_keywords=[],
+        )
+    except Exception:
+        return None
 
 
 async def intent_node(state: AgentState, llm: LMRouter) -> dict:
@@ -124,6 +190,13 @@ async def intent_node(state: AgentState, llm: LMRouter) -> dict:
             )
             # V1 用 async 路由（LLM 优先 + 关键词回退）；Ollama 不可用时静默降级
             routing = await router.route_async(prompt)
+            if not routing.skill_id:
+                # Skill 粘性（2026-08-26）：本轮未命中新 skill，但前端透传了上一轮
+                # 命中的 skill 且本轮是追问/修改类短句（如「太丑了，用 skill 优化」）
+                # → 继承上一轮 skill，避免脱离设计规范的裸生成。
+                inherited = _inherit_last_skill(prompt, str(state.get("last_skill_id") or ""))
+                if inherited:
+                    routing = inherited
             if routing.skill_id:
                 skill_match = {
                     "active_skill_id": routing.skill_id,

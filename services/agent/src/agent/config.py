@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     builtin_markitdown_executable: str = ""
     # file_to_markdown 工具：转换超时（秒）
     builtin_markitdown_timeout_sec: float = Field(default=60.0, ge=1.0, le=600.0)
+    # office 工具族：OfficeCLI 二进制路径（可选覆盖；默认空 = 捆绑二进制 > PATH 探测）
+    builtin_officecli_executable: str = ""
+    # office 工具族：OfficeCLI 子进程超时（秒；渲染 / 批量操作可能较慢，默认 120）
+    builtin_officecli_timeout_sec: float = Field(default=120.0, ge=1.0, le=1800.0)
 
     # ---- Phase 4 本地端侧模型 ----
     # 文本小模型（Qwen2.5-0.5B，意图分类/列计划）
@@ -231,8 +235,9 @@ class Settings(BaseSettings):
     # ---- 动态工具加载与工具调用（Phase 13 V2 / 2026-08-03）----
     # 总开关：false 时主图走既有 planner → tool_runner 路径（测试用 / 回退）
     tool_loop_enabled: bool = True
-    # 动态工具循环最大轮次（防死循环）
-    tool_loop_max_turns: int = Field(default=8, ge=2, le=30)
+    # 动态工具循环最大轮次（防死循环；2026-08-25 默认 8→24：长链任务如
+    # PPT 生成 10+ 步在 8 轮下必被误杀；死循环改由停滞熔断拦截，见 loop.py）
+    tool_loop_max_turns: int = Field(default=24, ge=2, le=30)
     # 单轮最多注册候选工具数（与提示词 MAX_SELECTED_TOOLS 一致）
     tool_loop_max_selected: int = Field(default=5, ge=1, le=20)
     # 单条工具结果注入上下文的最大字符数

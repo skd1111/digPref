@@ -178,6 +178,15 @@
   outline-offset: 2px;
 }
 
+/* 执行块 → 思维链跳转命中闪烁（BUGFIX #153，2026-08-26） */
+@keyframes trace-flash {
+  0% { box-shadow: 0 0 0 3px rgba(16, 163, 127, 0.55); background-color: #ecfdf5; }
+  100% { box-shadow: 0 0 0 0 rgba(16, 163, 127, 0); background-color: #ffffff; }
+}
+.trace-flash {
+  animation: trace-flash 2s ease-out;
+}
+
 /* —— 轻量 Markdown 渲染排版（2026-08-07，助手消息用）—— */
 .md-body {
   font-size: 12px;

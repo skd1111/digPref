@@ -53,7 +53,7 @@ class _ScriptedLLM:
     async def repair_call(self, *, original, error, history):
         return original
 
-    async def summarise(self, *, intent, user_prompt, plan, results):
+    async def summarise(self, *, intent, user_prompt, plan, results, history=None):
         return "Mock final answer.", ["db"]
 
 

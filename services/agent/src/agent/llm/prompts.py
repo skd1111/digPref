@@ -107,3 +107,82 @@ def current_time_text() -> str:
     """
     now = datetime.now().astimezone()
     return f"{now.strftime('%Y-%m-%d %H:%M:%S %z')} {_WEEKDAY_CN[now.weekday()]}"
+
+
+# LangChain BaseMessage 的 .type → 会话 role 映射。
+# 根治 BUGFIX #163：state["messages"] 带 add_messages reducer，LangGraph 会把
+# 入图时的 {"role": ..., "content": ...} dict 统一转成 HumanMessage / AIMessage
+# 对象，而 BaseMessage **没有 .role 属性**（只有 .type，取值 human / ai / system）。
+# 此前全仓 6 处消费点各自手写 `getattr(h, "role", None)`，对象形态一律取不到：
+# 4 处静默丢弃整条历史（终答/意图/planner/原生工具循环看不见前文），
+# 2 处 fallback 成默认 "user"（assistant 回复被误标成用户提问，比丢弃更隐蔽）。
+_LC_TYPE_TO_ROLE = {
+    "human": "user",
+    "ai": "assistant",
+    "system": "system",
+    # 少数场景下 BaseMessage 子类直接以目标名命名，原样透传避免二次映射丢失
+    "user": "user",
+    "assistant": "assistant",
+}
+
+
+def normalize_message(msg: object) -> tuple[str, str] | None:
+    """把一条会话消息归一成 ``(role, content)``，不认识的形态返回 ``None``。
+
+    这是全仓消费 ``state["messages"]`` 的**唯一**解析入口（根治 BUGFIX #163）。
+    支持三种形态：
+
+    - LangChain ``BaseMessage``：读 ``.type`` 并按 ``_LC_TYPE_TO_ROLE`` 映射
+    - ``dict``：读 ``role`` / ``content`` 键
+    - 其他：返回 ``None``
+
+    调用方**必须**把 ``None`` 当作「跳过这一条」，不要 fallback 成默认 role ——
+    把 assistant 误标成 user 会让模型看到一段全是用户自言自语的对话。
+    """
+    if isinstance(msg, dict):
+        raw_role = msg.get("role")
+        content = msg.get("content")
+    else:
+        # BaseMessage 优先读 .type；个别自定义对象可能真带 .role，兼容之
+        raw_role = getattr(msg, "type", None) or getattr(msg, "role", None)
+        content = getattr(msg, "content", None)
+    role = _LC_TYPE_TO_ROLE.get(str(raw_role or "").strip().lower())
+    if role is None:
+        return None
+    text = str(content or "").strip()
+    if not text:
+        return None
+    return role, text
+
+
+def format_history_brief(
+    history: list | None,
+    *,
+    max_messages: int = 8,
+    per_message_chars: int = 400,
+) -> str:
+    """把会话历史（BaseMessage 或 dict）压成注入终答 prompt 的简报。
+
+    背景（BUGFIX #135）：终答链路（summarise）此前只拿到当轮 user_prompt，
+    跨轮追问（如上一轮「做介绍你自己的 PPT」+ 本轮「是你自己这个智能体客户端」）
+    模型看不见前文 → 反问「没有明确任务指令」。把最近几轮 user/assistant
+    原文（单条截断）拼进 summarise 用户消息恢复上下文连贯。
+    空历史返 ""（调用方据此决定是否注入段落）。
+
+    根治 BUGFIX #163：改走 :func:`normalize_message`，BaseMessage 形态不再被
+    静默过滤。同时放行 ``system`` 角色 —— stream.py 会把「前段对话摘要」与
+    「任务台账锚点」以 system 消息注入 messages 头部，那正是跨轮上下文里
+    信息密度最高的两条，此前一并被丢掉了。
+    """
+    if not history:
+        return ""
+    lines: list[str] = []
+    for h in history:
+        parsed = normalize_message(h)
+        if parsed is None:
+            continue
+        role, text = parsed
+        if len(text) > per_message_chars:
+            text = text[:per_message_chars] + "…（已截断）"
+        lines.append(f"[{role}] {text}")
+    return "\n".join(lines[-max_messages:])

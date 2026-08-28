@@ -43,6 +43,25 @@ def test_list_skills(client):
     assert data["skills"][0]["id"] == "test_skill"
 
 
+def test_init_loader_seeds_builtin_office_skills(tmp_path, monkeypatch):
+    """V9.5 回归：init_loader 先播种内置 Office 种子再加载，/skills/list 可见。"""
+    import agent.skills.loader as loader_mod
+
+    skills_dir = tmp_path / "eaide" / "skills"
+    monkeypatch.setattr(loader_mod, "SKILLS_DIR", skills_dir)
+    saved_loader = api_mod._loader
+    try:
+        api_mod.init_loader()
+        ids = {s.id for s in api_mod._loader.list()}
+        assert {"office_doc_writer", "office_excel_analyst", "office_pptx_designer"} <= ids
+        # 幂等：二次启动不重复播种、不覆盖（文件数不变）
+        before = sorted(p.name for p in skills_dir.glob("*.yaml"))
+        api_mod.init_loader()
+        assert sorted(p.name for p in skills_dir.glob("*.yaml")) == before
+    finally:
+        api_mod._loader = saved_loader
+
+
 def test_get_skill(client):
     r = client.get("/skills/test_skill")
     assert r.status_code == 200

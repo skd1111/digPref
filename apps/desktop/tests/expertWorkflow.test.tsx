@@ -107,6 +107,11 @@ function passedFile() {
 
 const selection = { staticHit: null, featureHit: FEATURE as never };
 
+/** 草稿区默认收起（BUGFIX #134）：历史草稿需点提醒栏展开后才可见表单 */
+function expandDraftPanel(): void {
+  fireEvent.click(screen.getByText(/展开填写/).closest("button")!);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   (ipc.opsCaseGet as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -275,6 +280,8 @@ describe("交付草稿表单（BUGFIX #78）", () => {
     );
 
     expect(screen.getByText(/交付草稿/)).toBeTruthy();
+    // 历史草稿默认收起（BUGFIX #134），点提醒栏展开后才见表单
+    expandDraftPanel();
     // 页签 + 草稿卡标题各一处
     expect(screen.getAllByText("对公开户资料清单").length).toBeGreaterThanOrEqual(1);
 
@@ -315,7 +322,65 @@ describe("交付草稿表单（BUGFIX #78）", () => {
         onSaveTeamPreset={() => undefined}
       />,
     );
+    expandDraftPanel();
     expect(screen.getByText("自动预填")).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 草稿区默认收起（BUGFIX #134）：启动恢复的历史草稿不自动铺屏，
+// 只留提醒栏；本会话新到达的草稿才自动展开
+// ---------------------------------------------------------------------------
+
+describe("草稿区默认收起（BUGFIX #134）", () => {
+  it("启动恢复的历史草稿默认收起为提醒栏，表单不自动出现", () => {
+    (ipc.opsCaseGet as ReturnType<typeof vi.fn>).mockResolvedValue({
+      case_id: "bank__ops_open",
+      files: [],
+      qa: [],
+      drafts: [DRAFT],
+    });
+    useOpsCaseStore.setState({ drafts: [DRAFT as never] });
+    render(
+      <ExpertWorkflowPanel
+        selection={selection}
+        projectName="bank"
+        onSaveTeamPreset={() => undefined}
+      />,
+    );
+    // 提醒栏可见，表单控件与提交按钮不出现
+    expect(screen.getByText(/展开填写/)).toBeTruthy();
+    expect(screen.queryByText("提交给专家审核")).toBeNull();
+    // 点开提醒栏 → 表单出现，可再收起
+    expandDraftPanel();
+    expect(screen.getByText("提交给专家审核")).toBeTruthy();
+    fireEvent.click(screen.getByText(/▾ 收起/).closest("button")!);
+    expect(screen.queryByText("提交给专家审核")).toBeNull();
+  });
+
+  it("专家回答附带的新草稿到达后草稿区自动展开", async () => {
+    (ipc.opsCaseAsk as ReturnType<typeof vi.fn>).mockResolvedValue({
+      qa: { id: "QA-1", question: "要清单", answer: "好的", created_at: 1 },
+      draft: DRAFT,
+    });
+    render(
+      <ExpertWorkflowPanel
+        selection={selection}
+        projectName="bank"
+        onSaveTeamPreset={() => undefined}
+      />,
+    );
+    // 无草稿时连提醒栏都没有
+    expect(screen.queryByText(/展开填写/)).toBeNull();
+    // 通过专家卡提问框发起提问（专家卡输入框带 placeholder，按此区分）
+    const askInput = screen.getByPlaceholderText(/提问…（回车发送）/);
+    fireEvent.change(askInput, { target: { value: "给我一份资料清单" } });
+    fireEvent.keyDown(askInput, { key: "Enter" });
+    // 新草稿到达 → 自动展开，无需点提醒栏（此时也不存在提醒栏）
+    await waitFor(() => {
+      expect(screen.queryByText(/展开填写/)).toBeNull();
+      expect(screen.getByText("提交给专家审核")).toBeTruthy();
+    });
   });
 });
 
@@ -395,6 +460,7 @@ describe("草稿增强（BUGFIX #85）", () => {
         onSaveTeamPreset={() => undefined}
       />,
     );
+    expandDraftPanel();
     // 上传控件文案存在；file 字段不是文本框（逐字段显现动效，等第二字段出现）
     expect(screen.getByText(/点击选择文件/)).toBeTruthy();
     await waitFor(() => {
@@ -466,13 +532,15 @@ describe("草稿页签与审核交互（BUGFIX #86/#87）", () => {
       files: [fileB as never],
       drafts: [draftA as never, draftB as never],
     });
-    return render(
+    const view = render(
       <ExpertWorkflowPanel
         selection={selection}
         projectName="bank"
         onSaveTeamPreset={() => undefined}
       />,
     );
+    expandDraftPanel();
+    return view;
   }
 
   it("多草稿用页签切换不接龙，默认停在最新草稿", () => {
@@ -513,6 +581,7 @@ describe("草稿页签与审核交互（BUGFIX #86/#87）", () => {
         onSaveTeamPreset={() => undefined}
       />,
     );
+    expandDraftPanel();
     await waitFor(() => expect(screen.getByText(/正在审核草稿/)).toBeTruthy());
   });
 });
@@ -537,6 +606,7 @@ describe("全屏草稿表单（BUGFIX #93）", () => {
         onSaveTeamPreset={() => undefined}
       />,
     );
+    expandDraftPanel();
     fireEvent.click(screen.getByText(/⛶ 全屏/));
     await waitFor(() => expect(screen.getByText(/✕ 退出全屏/)).toBeTruthy());
   };

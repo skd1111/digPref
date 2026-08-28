@@ -143,3 +143,43 @@ pub fn reveal_in_explorer(path: String) -> Result<String, String> {
 
     Ok(path)
 }
+
+/// 用系统默认程序打开文件 / 目录（2026-08-26，对话中文件路径点击直接打开）。
+///
+/// - Windows：`cmd /c start "" "<path>"`（关联程序，如 pptx → PowerPoint）
+/// - macOS：`open <path>`；Linux：`xdg-open <path>`
+///
+/// path 不存在时返回错误，前端据此提示（文件可能已被清理）。
+#[tauri::command]
+pub fn open_with_default(path: String) -> Result<String, String> {
+    let p = std::path::Path::new(&path);
+    if !p.exists() {
+        return Err(format!("路径不存在：{path}"));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        // start 的第一个带引号参数是窗口标题占位，路径整体加引号防空格；
+        // raw_arg 原样透传，避免 std 转义破坏引号（同 reveal_in_explorer）。
+        let mut cmd = Command::new("cmd.exe");
+        cmd.raw_arg(format!("/c start \"\" \"{path}\""));
+        cmd.spawn().map_err(|e| format!("启动默认程序失败：{e}"))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("启动默认程序失败：{e}"))?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("启动默认程序失败：{e}"))?;
+    }
+
+    Ok(path)
+}

@@ -68,6 +68,28 @@ export interface CredentialStatus {
   present: boolean;
 }
 
+// ---- MCP 服务器配置（设置页「MCP」面板；与 Agent /mcp-config 对齐）----
+export interface McpServerSpec {
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  allowed_tools: string[];
+  auto_start: boolean;
+  working_dir: string | null;
+}
+
+export interface McpConfigResponse {
+  path: string;
+  exists: boolean;
+  servers: Record<string, McpServerSpec>;
+}
+
+export interface McpTestResult {
+  ok: boolean;
+  tools?: { name: string; description: string }[];
+  error?: string;
+}
+
 // Phase 5 V1: 审核专家工作台 类型镜像
 export interface AuditTask {
   task_id: string;
@@ -1288,6 +1310,24 @@ export const ipc = {
   revealInExplorer: (path: string) =>
     invoke<string>("reveal_in_explorer", { path }),
 
+  // 用系统默认程序打开文件（2026-08-26：对话中文件路径点击直接打开）
+  openWithDefault: (path: string) =>
+    invoke<string>("open_with_default", { path }),
+
+  // 任务目录文件清单（2026-08-26）：产物/中间文件，验收清理卡用
+  taskFilesGet: (taskId: string) =>
+    invoke<{ task_dir: string; task_dir_exists: boolean; artifacts: string[]; intermediates: string[] }>(
+      "task_files_get",
+      { taskId },
+    ),
+
+  // 验收后清理任务目录内除产物外的文件（2026-08-26）
+  taskCleanup: (taskId: string, keep: string[] = []) =>
+    invoke<{ ok: boolean; deleted: string[]; kept: string[]; task_dir_removed: boolean }>(
+      "task_cleanup",
+      { taskId, keep },
+    ),
+
   // 开发者工具开关（F12 / Ctrl+Shift+I；受 config.yaml 的 devtools 控制）
   openDevtools: () => invoke<string>("open_devtools"),
 
@@ -2029,4 +2069,49 @@ export const ipc = {
 
   /** 列出全部预览窗口 label */
   previewListWindows: () => invoke<string[]>("preview_list_windows"),
+
+  // ---- V9 Office 预览（OfficeCLI 渲染 docx/xlsx/pptx → HTML/PNG，2026-08-25）----
+
+  /**
+   * 渲染 Office 文件为预览产物。html 模式返 {html} 渲染页全文（srcDoc 展示）；
+   * screenshot 模式返 {image_base64, page}。经 Rust 代理（WebView 受 CSP 不能直连 8765）。
+   */
+  officePreviewRender: (
+    path: string,
+    mode: 'html' | 'screenshot' = 'html',
+    page?: number,
+  ) =>
+    invoke<{
+      ok: boolean;
+      session_id: string;
+      mode: 'html' | 'screenshot';
+      html?: string;
+      html_url?: string;
+      image_base64?: string;
+      page?: number;
+    }>("office_preview_render", { path, mode, page }),
+
+  /** 停止 Office 预览会话（后端清理临时目录；best-effort） */
+  officePreviewStop: (sessionId: string) =>
+    invoke<{ ok: boolean; stopped: boolean }>("office_preview_stop", { sessionId }),
+
+  // ---- MCP 服务器配置（设置页「MCP」面板）----
+
+  /** GET /mcp-config —— 读取 mcp.yaml 注册表 */
+  mcpConfigGet: () => invoke<McpConfigResponse>("mcp_config_get"),
+
+  /** PUT /mcp-config —— 整表覆盖保存（Agent 侧校验 + 原子写盘） */
+  mcpConfigSave: (servers: Record<string, McpServerSpec>) =>
+    invoke<{ ok: boolean; servers: Record<string, McpServerSpec> }>(
+      "mcp_config_save",
+      { servers },
+    ),
+
+  /** POST /mcp-config/test —— 对单条配置做真实 stdio 握手 + list_tools */
+  mcpConfigTest: (entry: { name: string } & McpServerSpec) =>
+    invoke<McpTestResult>("mcp_config_test", { entry }),
+
+  /** POST /mcp-config/reload —— 重读 mcp.yaml 并重建运行中连接 */
+  mcpConfigReload: () =>
+    invoke<{ ok: boolean; servers: string[] }>("mcp_config_reload"),
 } as const;

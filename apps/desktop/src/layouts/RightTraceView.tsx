@@ -10,12 +10,15 @@
  *   1. 会话思维链 —— 启动时自动加载最近会话；实时会话经 SSE 切换
  *   2. AI 解释 —— 仅在用户手动选区点「AI 解释」后才出现（无内容时整块隐藏）
  *
- * 新执行 push 到顶；自动滚动到底。
+ * 新条目推入后自动滚到底（贴底跟随：用户上滚回看时不打断，2026-08-25；
+ * BUGFIX #151：跟随意图改由滚动事件记录 —— 防批量刷新一次增高 >80px 时
+ * 「渲染后才量距」误判为未贴底、永久断随）。
  */
 import { useEffect, useRef, useState, useMemo } from 'react';
 import { ExecutionTrace } from '@/components/trace/ExecutionTrace';
 import { ThinkingChainPanel } from '@/components/thinking/ThinkingChainPanel';
 import { isMockSource, isMockText } from '@/lib/mockFilter';
+import { useThinkingStore } from '@/store/thinkingStore';
 import { useTraceStore } from '@/store/traceStore';
 import { useUIStore } from '@/store/uiStore';
 
@@ -23,7 +26,21 @@ export function RightTraceView(): JSX.Element {
   const rawConsole = useTraceStore((s) => s.consoleEntries);
   const clearConsole = useTraceStore((s) => s.clearConsole);
   const mode = useUIStore((s) => s.mode);
+  // 思维链步数变化 = 新条目到达 → 触发外层滚动（此前只依赖下方代码解释条目，
+  // 思维链超屏后新增不跟随，2026-08-25）
+  const thinkingStepCount = useThinkingStore((s) => s.steps.length);
+  const thinkingLoading = useThinkingStore((s) => s.loading);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  // 贴底跟随意图（BUGFIX #151）：由用户滚动事件实时记录，而非在新内容渲染后才量距——
+  // 防抖刷新一次拉回多条长卡片（单次增高 >80px）时，旧方案把「被内容撑离底部」
+  // 误判成「用户上滚」，从此不再跟随（实测：思维链停在半屏，新条目撞出视口）。
+  const stickToBottom = useRef(true);
+  const handleScroll = (): void => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
   // 渲染层兜底：
   //   1. 控制台不显示任何 mock 数据（含历史条目）
   //   2. 只展示手动触发的 AI 解释（codenav.explain）；agent 运行时日志不入控制台
@@ -59,12 +76,27 @@ export function RightTraceView(): JSX.Element {
     }
   };
 
-  // 新条目 / 流式增量更新时自动滚到底
+  // 新条目 / 流式增量 / 思维链刷新时自动滚到底；用户上滚回看时不强制拉回。
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    const el = scrollRef.current;
+    if (!el) return;
+    if (stickToBottom.current) {
+      el.scrollTop = el.scrollHeight;
     }
-  }, [consoleEntries]);
+  }, [consoleEntries, thinkingStepCount, thinkingLoading]);
+
+  // 内容增长兑底（#151）：卡片展开/折叠、字体/异步渲染等不触发上方依赖的
+  // 高度变化也由 ResizeObserver 接住，贴底意图存续期间持续钉底。
+  useEffect(() => {
+    const target = contentRef.current;
+    const scroller = scrollRef.current;
+    if (!target || !scroller) return;
+    const ro = new ResizeObserver(() => {
+      if (stickToBottom.current) scroller.scrollTop = scroller.scrollHeight;
+    });
+    ro.observe(target);
+    return () => ro.disconnect();
+  }, []);
 
   return (
     <div className="flex h-full flex-col">
@@ -72,7 +104,7 @@ export function RightTraceView(): JSX.Element {
         className="flex items-center justify-between border-b px-3 py-2 text-sm font-semibold"
         style={{ color: '#1f1f1f' }}
       >
-        <span>控制台 · 思维链</span>
+        <span>控制台 · 执行过程</span>
         <button
           type="button"
           onClick={() => clearConsole()}
@@ -89,11 +121,12 @@ export function RightTraceView(): JSX.Element {
         </button>
       </header>
 
-      <div ref={scrollRef} className="flex-1 overflow-auto p-2">
+      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-auto p-2">
+        <div ref={contentRef}>
         {/* 上半：Phase 16 思维链（仅开发模式；其他模式后端照常记录但不显示） */}
         <div className="mb-3">
           <div className="mb-1 text-2xs font-semibold uppercase tracking-wider" style={{ color: '#616161' }}>
-            {mode === 'full' ? '思维链' : '执行链路'}
+            {mode === 'full' ? '执行过程' : '执行链路'}
           </div>
           {mode === 'full' ? <ThinkingChainPanel /> : <ExecutionTrace />}
         </div>
@@ -112,6 +145,7 @@ export function RightTraceView(): JSX.Element {
             />
           </div>
         )}
+        </div>
       </div>
     </div>
   );

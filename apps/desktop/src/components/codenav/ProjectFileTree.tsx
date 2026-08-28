@@ -11,7 +11,11 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useCodeNavStore } from '@/store/codeNavStore';
 import { useUIStore } from '@/store/uiStore';
+import { useOfficePreviewStore } from '@/store/officePreviewStore';
 import { ipc } from '@/ipc/invoke';
+
+/** Office 文档后缀（V9 右键预览入口判定） */
+const OFFICE_SUFFIX_RE = /\.(docx|xlsx|pptx)$/i;
 
 interface TreeNode {
   name: string;
@@ -499,6 +503,32 @@ export function ProjectFileTree(): JSX.Element | null {
                 }}
               >
                 ⚙ 编译已选 {selected.size} 项
+              </button>
+            )}
+            {/* V9 Office 预览（2026-08-25）：仅 docx/xlsx/pptx 文件显示 */}
+            {!contextMenu.isDir && OFFICE_SUFFIX_RE.test(contextMenu.path) && (
+              <button
+                className="block w-full px-3 py-1 text-left text-ui text-[#333333] hover:bg-[#ececec]"
+                onClick={() => {
+                  const target = contextMenu.path;
+                  setContextMenu(null);
+                  void useOfficePreviewStore.getState().openPreview(target);
+                }}
+              >
+                📄 Office 预览
+              </button>
+            )}
+            {/* V9.6 HTML 演示预览（2026-08-25）：视觉演示稿（单文件 HTML）直读展示 */}
+            {!contextMenu.isDir && /\.html$/i.test(contextMenu.path) && (
+              <button
+                className="block w-full px-3 py-1 text-left text-ui text-[#333333] hover:bg-[#ececec]"
+                onClick={() => {
+                  const target = contextMenu.path;
+                  setContextMenu(null);
+                  void useOfficePreviewStore.getState().openHtml(target);
+                }}
+              >
+                🎨 HTML 演示预览
               </button>
             )}
             {contextMenu.isRoot && (

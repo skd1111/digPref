@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -24,7 +25,12 @@ import httpx
 
 from agent.dual.prompt_loader import FINAL_ANSWER_STYLE
 from agent.llm.json_discipline import RETRY_PROMPT, extract_json
-from agent.llm.prompts import current_time_text, load_prompt
+from agent.llm.prompts import (
+    current_time_text,
+    format_history_brief,
+    load_prompt,
+    normalize_message,
+)
 from agent.llm.token_usage import record_openai_usage
 from agent.llm.types import Intent
 
@@ -62,6 +68,60 @@ def _strip_think(text: str) -> str:
         if start > 0:
             cleaned = cleaned[start:]
     return cleaned.strip()
+
+
+def _raise_http_with_body(r: httpx.Response) -> None:
+    """raise_for_status + 把服务端错误正文带进异常信息（BUGFIX #137）。
+
+    云端 4xx 的响应体（如 MiniMax 400 回的 220 字节 JSON，含上下文超限/
+    参数非法等具体原因）是排障唯一线索；只留 'Client error 400 Bad Request'
+    会让日志与用户可见终答都变黑盒（2026-08-25 实测：工具循环在工具成功后
+    因下一轮 LLM 调用 400 整轮硬停，用户只看到一句 HTTPStatusError 无法定位）。
+    """
+    try:
+        r.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        detail = (r.text or "").strip()[:500]
+        logger.error("LLM HTTP %s from %s: %s", r.status_code, r.url, detail or "(空响应体)")
+        raise httpx.HTTPStatusError(
+            f"{exc} | 服务端返回：{detail or '(空响应体)'}",
+            request=exc.request,
+            response=exc.response,
+        ) from exc
+
+
+# ---- 多厂商协议适配（2026-08-27，BUGFIX #159） ---------------------------------
+# OpenAI 兼容 ≠ OpenAI 相同：各家对 OpenAI 专属参数的容忍度不一，
+# 400 时按响应体关键字做一次性参数适配重试，避免整个任务因参数名差异硬失败。
+
+# 429 同后端退避重试的等待上限（秒）：超过则直接上抛切降级链，避免长尾阻塞。
+_RETRY_AFTER_CAP_S = 3.0
+
+
+def _unsupported_param(body_text: str, payload: dict) -> str | None:
+    """从 400 响应体识别是哪个参数不被后端支持（关键字匹配，大小写不敏感）。"""
+    lowered = (body_text or "").lower()
+    if "response_format" in lowered or "json_schema" in lowered:
+        if "response_format" in payload:
+            return "response_format"
+    if "max_completion_tokens" in lowered or "max_tokens" in lowered:
+        if "max_tokens" in payload:
+            return "max_tokens"
+    return None
+
+
+def _retry_after_seconds(r: httpx.Response) -> float | None:
+    """解析 429 的 Retry-After 头；缺失 / 非法 / 超上限返回 None。"""
+    raw = (r.headers.get("Retry-After") or "").strip()
+    if not raw:
+        return None
+    try:
+        wait = float(raw)
+    except ValueError:
+        return None
+    if wait < 0 or wait > _RETRY_AFTER_CAP_S:
+        return None
+    return wait
 
 
 # ---- PrivateLLMClient ---------------------------------------------------------
@@ -179,6 +239,63 @@ class PrivateLLMClient:
 
     # ---- HTTP 底层 -----------------------------------------------------------
 
+    @staticmethod
+    def _adapt_payload(payload: dict[str, Any], param: str) -> dict[str, Any]:
+        """400 参数适配：去掉/替换不支持的参数后生成新 payload（原对象不变）。"""
+        adapted = dict(payload)
+        if param == "response_format":
+            adapted.pop("response_format", None)
+        elif param == "max_tokens":
+            # OpenAI o1 系之后改用 max_completion_tokens；部分后端反之。
+            adapted["max_completion_tokens"] = adapted.pop("max_tokens")
+        return adapted
+
+    async def _post_chat(
+        self,
+        payload: dict[str, Any],
+        *,
+        client: httpx.AsyncClient,
+        timeout: httpx.Timeout | None = None,
+    ) -> dict:
+        """POST /chat/completions + 多厂商兼容重试（BUGFIX #159）。
+
+        两类重试，均最多一次，避免对同一错误反复打后端：
+        1. 429 限流：解析 Retry-After（≤3s）同后端退避重发一次；缺失/超限/再次 429
+           直接上抛（走降级链）。
+        2. 400 参数不支持：按响应体关键字识别（response_format / max_tokens），
+           适配后重发一次（json_schema 降级为纯 prompt 约束、max_tokens 换名）。
+        其余错误原样上抛（_raise_http_with_body 已带响应体正文）。
+        """
+        url = f"{self.base_url}/chat/completions"
+        current = payload
+        adapted = False
+        rate_retried = False
+        while True:
+            if timeout is not None:
+                r = await client.post(url, json=current, timeout=timeout)
+            else:
+                r = await client.post(url, json=current)
+            if r.status_code == 429 and not rate_retried:
+                wait = _retry_after_seconds(r)
+                if wait is not None:
+                    logger.info("LLM 429 rate limited, retrying after %.1fs", wait)
+                    rate_retried = True
+                    await asyncio.sleep(wait)
+                    continue
+            elif r.status_code == 400 and not adapted:
+                param = _unsupported_param(r.text or "", current)
+                if param:
+                    logger.warning(
+                        "LLM 400: 参数 %s 不被后端支持，适配后重试（%s）",
+                        param,
+                        (r.text or "")[:200],
+                    )
+                    current = self._adapt_payload(current, param)
+                    adapted = True
+                    continue
+            _raise_http_with_body(r)
+            return cast(dict[str, Any], r.json())
+
     async def _chat_completion(
         self,
         messages: list[dict],
@@ -218,12 +335,7 @@ class PrivateLLMClient:
                 },
             }
 
-        r = await self.client.post(
-            f"{self.base_url}/chat/completions",
-            json=payload,
-        )
-        r.raise_for_status()
-        body = r.json()
+        body = await self._post_chat(payload, client=self.client)
         # 安全取嵌套字段：防御 LLM 返回格式异常
         choices = body.get("choices", [])
         if not choices:
@@ -299,9 +411,7 @@ class PrivateLLMClient:
             timeout=httpx.Timeout(timeout or 90.0, connect=5.0),
             headers=self._auth_headers(),
         ) as client:
-            r = await client.post(f"{self.base_url}/chat/completions", json=payload)
-            r.raise_for_status()
-            body = r.json()
+            body = await self._post_chat(payload, client=client)
         choices = body.get("choices") or []
         if not choices:
             raise ValueError("LLM 返回了空的 choices 列表")
@@ -406,12 +516,11 @@ class PrivateLLMClient:
 
         msgs: list[dict] = [{"role": "system", "content": load_prompt("intent_router")}]
         for h in (history or [])[-4:]:
-            role = getattr(h, "role", None) or (h.get("role") if isinstance(h, dict) else None)
-            content = getattr(h, "content", None) or (
-                h.get("content") if isinstance(h, dict) else None
-            )
-            if role in ("user", "assistant") and content:
-                msgs.append({"role": role, "content": str(content)})
+            parsed = normalize_message(h)
+            if parsed is None:
+                continue
+            role, content = parsed
+            msgs.append({"role": role, "content": content})
         user_content = text
         if page_context.strip():
             user_content = f"[页面上下文：{page_context.strip()}]\n\n{text}"
@@ -463,10 +572,11 @@ class PrivateLLMClient:
         )
         msgs: list[dict] = [{"role": "system", "content": sys_prompt}]
         for h in history[-6:]:
-            if hasattr(h, "role") and hasattr(h, "content"):
-                msgs.append({"role": h.role, "content": h.content})
-            elif isinstance(h, dict):
-                msgs.append({"role": h.get("role", "user"), "content": h.get("content", "")})
+            parsed = normalize_message(h)
+            if parsed is None:
+                continue
+            role, content = parsed
+            msgs.append({"role": role, "content": content})
         msgs.append({"role": "user", "content": user_prompt})
 
         try:
@@ -557,6 +667,7 @@ class PrivateLLMClient:
         user_prompt: str,
         plan: list[dict],
         results: list[dict],
+        history: list | None = None,
     ) -> tuple[str, list[str]]:
         """汇总工具执行结果，生成自然语言终答。
 
@@ -567,6 +678,9 @@ class PrivateLLMClient:
         )
         results_brief = json.dumps(results, ensure_ascii=False, indent=2, default=str)
         plan_brief = json.dumps(plan, ensure_ascii=False, indent=2, default=str)
+        # 会话历史简报（BUGFIX #135）：终答此前只看见当轮 user_prompt，
+        # 跨轮追问模型会反问「没有明确任务指令」；拼入最近几轮原文恢复连贯。
+        history_brief = format_history_brief(history)
         try:
             result = await self._chat_json_with_retry(
                 [
@@ -576,12 +690,19 @@ class PrivateLLMClient:
                         "content": (
                             f"Intent: {intent}\n"
                             f"User question: {user_prompt}\n\n"
-                            # 当前时间注入（BUGFIX #112）：模型对「今天」无可靠感知，
-                            # 不注入会凭训练知识编造日期；summarise.md §5.1 以此为唯一基准。
-                            f"Current time: {current_time_text()}\n\n"
-                            f"Plan executed:\n{plan_brief}\n\n"
-                            f"Tool results (may be truncated):\n{results_brief}\n\n"
-                            "Produce the final answer."
+                            + (
+                                f"Recent conversation (当前问题可能建立在这些对话之上，保持上下文连贯):\n{history_brief}\n\n"
+                                if history_brief
+                                else ""
+                            )
+                            + (
+                                # 当前时间注入（BUGFIX #112）：模型对「今天」无可靠感知，
+                                # 不注入会凭训练知识编造日期；summarise.md §5.1 以此为唯一基准。
+                                f"Current time: {current_time_text()}\n\n"
+                                f"Plan executed:\n{plan_brief}\n\n"
+                                f"Tool results (may be truncated):\n{results_brief}\n\n"
+                                "Produce the final answer."
+                            )
                         ),
                     },
                 ],
@@ -626,13 +747,11 @@ class PrivateLLMClient:
         # 共享 client 的 90s 默认超时不够 → 单请求放宽到 300s；
         # 但 connect 阶段仍限 10s —— 否则后端不可达时整个请求会
         # 卡在 TCP 连接阶段最长 300s，chat 前端表现为长时间无响应。
-        r = await self.client.post(
-            f"{self.base_url}/chat/completions",
-            json=payload,
+        body = await self._post_chat(
+            payload,
+            client=self.client,
             timeout=httpx.Timeout(300.0, connect=10.0),
         )
-        r.raise_for_status()
-        body = r.json()
         choices = body.get("choices", [])
         if not choices:
             raise ValueError("LLM 返回了空的 choices 列表")

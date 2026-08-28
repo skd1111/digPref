@@ -87,6 +87,9 @@ interface OpsCaseStore extends OpsCaseState {
   ) => Promise<string | null>;
   /** 最近一次直开的草稿 id（面板据此自动全屏展开表单） */
   lastDirectDraftId: string;
+  /** 本次会话新到达的草稿 id（专家回答/直开）：面板据此自动展开草稿区；
+   *  loadCase 恢复的历史草稿不置位 → 启动/切业务不自动弹出表单（BUGFIX #134） */
+  lastNewDraftId: string;
   /** 交付草稿（BUGFIX #78）：保存填写值 / 提交审核 */
   saveDraft: (draftId: string, values: Record<string, string>) => Promise<void>;
   submitDraft: (draftId: string) => Promise<boolean>;
@@ -143,6 +146,7 @@ export const useOpsCaseStore = create<OpsCaseStore>((set, get) => ({
   exporting: false,
   unreadByTeam: {},
   lastDirectDraftId: "",
+  lastNewDraftId: "",
 
   loadCase: async (projectName, featureId) => {
     if (!featureId) {
@@ -166,6 +170,9 @@ export const useOpsCaseStore = create<OpsCaseStore>((set, get) => ({
           loading: false,
           // 初次加载的历史结果不算未读（避免一进页面满屏红点）
           unreadByTeam: {},
+          // 历史草稿不触发自动展开；也清掉上个业务残留的直开标记（BUGFIX #134）
+          lastDirectDraftId: "",
+          lastNewDraftId: "",
         });
         return;
       } catch (e) {
@@ -191,6 +198,7 @@ export const useOpsCaseStore = create<OpsCaseStore>((set, get) => ({
       error: null,
       unreadByTeam: {},
       lastDirectDraftId: "",
+      lastNewDraftId: "",
     }),
 
   clearCase: async (projectName, featureId) => {
@@ -313,10 +321,13 @@ export const useOpsCaseStore = create<OpsCaseStore>((set, get) => ({
         member_key: memberKey,
         question: question.trim(),
       });
-      // 模板/清单类回答会附带可直填草稿（BUGFIX #78）：同步进草稿列表
+      // 模板/清单类回答会附带可直填草稿（BUGFIX #78）：同步进草稿列表；
+      // 置位 lastNewDraftId → 草稿区自动展开（历史恢复的草稿不展开，BUGFIX #134）
+      const newDraft = r.draft ? toDraft(r.draft) : null;
       set((s) => ({
         qa: [...s.qa, toQa(r.qa)],
-        drafts: r.draft ? [...s.drafts, toDraft(r.draft)] : s.drafts,
+        drafts: newDraft ? [...s.drafts, newDraft] : s.drafts,
+        lastNewDraftId: newDraft ? newDraft.id : s.lastNewDraftId,
       }));
     } catch (e) {
       set({ error: errMsg(e) });
@@ -336,10 +347,12 @@ export const useOpsCaseStore = create<OpsCaseStore>((set, get) => ({
         output_name: outputName,
       });
       const draft = toDraft(r.draft);
-      // 幂等：后端复用既有草稿时前端不重复追加，只把它设为直开目标
+      // 幂等：后端复用既有草稿时前端不重复追加，只把它设为直开目标；
+      // lastNewDraftId 同步置位 → 草稿区展开（即使是复用旧草稿也要看见，BUGFIX #134）
       set((s) => ({
         drafts: s.drafts.some((d) => d.id === draft.id) ? s.drafts : [...s.drafts, draft],
         lastDirectDraftId: draft.id,
+        lastNewDraftId: draft.id,
       }));
       return draft.id;
     } catch (e) {

@@ -3,8 +3,9 @@
 ; 通过 tauri.conf.json 的 `bundle.windows.nsis.installerHooks` 引用此文件。
 ; 文件里的宏定义会被自动 include 进生成的 installer.nsi。
 ;
-; 内含两个宏：
-;   NSIS_HOOK_PREINSTALL  - 安装前（运行检测 + 用户确认 + 快捷方式清理）
+; 内含三个宏：
+;   NSIS_HOOK_PREINSTALL  - 安装前（增量覆盖策略 + 运行检测 + 用户确认 + 快捷方式清理）
+;   NSIS_HOOK_POSTINSTALL - 安装后（恢复默认覆盖策略）
 ;   NSIS_HOOK_POSTUNINSTALL - 卸载后（清 EAIDE 数据目录）
 
 ; ============================================================
@@ -18,6 +19,16 @@
 
 !macro NSIS_HOOK_PREINSTALL
   SetShellVarContext current
+
+  ; ─── 增量安装（v2.109）：未变化的随包文件不重写 ──────────
+  ; NSIS 默认 SetOverwrite on 会把全部随包文件（主 exe / eaide-agent.exe /
+  ; driver wheels / officecli 二进制）无条件重写一遍，既慢又抹掉未变化文件。
+  ; ifdiff 语义：已存在文件时间戳与随包文件相同 → 跳过；更旧或更新 → 覆盖。
+  ; （File 命令默认保留源文件时间戳，故「构建产物没变」⇔「时间戳没变」。）
+  ; 注意：Agent 运行期写入安装目录的用户资产（skills/ workspace/ *.db /
+  ; config/llm-config.json 等）本就不在安装器负载内，升级天然不触碰；
+  ; ifdiff 只作用于安装器负载内的文件。
+  SetOverwrite ifdiff
 
   ; ─── 0) 检测主程序是否正在运行 ───────────────────────────
   ; 原理：Windows 对正在运行的 EXE 施加独占文件锁，
@@ -61,6 +72,18 @@
   ; ─── 3) 通知 Windows shell 文件已变更 ────────────────────
   ;    SHChangeNotify(SHCNE_ASSOCCHANGED=0x08000000, SHCNF_IDLIST=0x0000, NULL, NULL)
   System::Call "shell32::SHChangeNotify(i 0x08000000, i 0x0000, p 0, p 0)"
+!macroend
+
+
+; ============================================================
+; POSTINSTALL: 恢复默认覆盖策略（v2.109）
+; ============================================================
+;   PREINSTALL 里的 SetOverwrite ifdiff 只应作用于随包文件的 File 释放；
+;   安装段收尾处恢复 on，防止策略泄漏到后续步骤 / 未来新增的释放逻辑。
+;   （Tauri 模板在 Section Install 末尾 !insertmacro 本宏。）
+
+!macro NSIS_HOOK_POSTINSTALL
+  SetOverwrite on
 !macroend
 
 

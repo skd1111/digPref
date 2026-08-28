@@ -387,7 +387,14 @@ class TestDispatcherV6:
                 "name": "word_generate",
                 "args": {"path": str(out), "markdown": "# 已批准"},
             },
-            {"run_id": "test-v6-approved", "approval_decision": "approve"},
+            {
+                "run_id": "test-v6-approved",
+                "approval_decision": "approve",
+                # 2026-08-26 任务目录规则：绝对路径在用户对话原文中出现过才视为用户指定，
+                # 否则会被重定向进工作空间；这里明确指定落盘位置，维持原用例语义。
+                "user_prompt": f"生成到 {out}",
+                "messages": [],
+            },
         )
         assert result["tool_result"]["ok"] is True
         assert out.exists()

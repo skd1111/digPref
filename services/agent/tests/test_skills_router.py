@@ -94,6 +94,97 @@ def test_build_system_prompt_with_skill(router):
     assert "## 当前技能" in out
 
 
+# ---- 2026-08-26 关键词归一化 + 中英混排兜底 -------------------------------
+
+
+@pytest.fixture
+def office_router(tmp_path):
+    """内置 PPT skill 同构关键词集（做ppt/生成ppt/演示文稿…）。"""
+    d = tmp_path / "office_skills"
+    d.mkdir()
+    (d / "pptx.yaml").write_text(
+        """
+schema_version: "1.0"
+id: office_pptx_designer
+name: PPT 汇报生成规范
+trigger_keywords: [做ppt, 生成ppt, 演示文稿, 幻灯片]
+""",
+        encoding="utf-8",
+    )
+    loader = SkillLoader(d)
+    loader.load_all()
+    return SkillRouter(loader)
+
+
+def test_keyword_split_phrasing_hits_ppt_skill(office_router):
+    """真实案例：「做一个介绍下你自己的ppt」不含连续「做ppt」也要命中。"""
+    r = office_router.route("做一个介绍下你自己（EAIDE 企业 AI 助理）的ppt")
+    assert r.skill_id == "office_pptx_designer"
+
+
+def test_keyword_with_space_and_case(office_router):
+    r = office_router.route("帮我 做个 PPT 吧")
+    assert r.skill_id == "office_pptx_designer"
+
+
+def test_keyword_normalize_exact(office_router):
+    r = office_router.route("生成PPT")  # 大写 + 无空格
+    assert r.skill_id == "office_pptx_designer"
+
+
+def test_pure_chinese_keyword_still_works(office_router):
+    r = office_router.route("来一份演示文稿")
+    assert r.skill_id == "office_pptx_designer"
+
+
+def test_no_token_no_false_hit(office_router):
+    r = office_router.route("今天天气怎么样")
+    assert r.skill_id is None
+
+
+# ---- 2026-08-26 Skill 粘性（intent_node 继承上一轮技能） -----------------
+
+
+def test_followup_prompt_detected():
+    from agent.graph.nodes.intent import _looks_like_followup
+
+    assert _looks_like_followup("也太丑了，用你自带的skill优化一下")
+    assert _looks_like_followup("重新做，配色换成绿色")
+    assert not _looks_like_followup("今天几号")
+    # 长输入判为新任务，不继承
+    assert not _looks_like_followup("优化" + "需求" * 80)
+
+
+def test_inherit_last_skill_requires_loader_hit(tmp_path, monkeypatch):
+    from agent.graph.nodes import intent as intent_mod
+    from agent.skills import api as skills_api
+
+    d = tmp_path / "skills"
+    d.mkdir()
+    (d / "pptx.yaml").write_text(
+        """
+schema_version: "1.0"
+id: office_pptx_designer
+name: PPT 汇报生成规范
+trigger_keywords: [做ppt]
+""",
+        encoding="utf-8",
+    )
+    loader = SkillLoader(d)
+    loader.load_all()
+    saved = skills_api._loader
+    monkeypatch.setattr(skills_api, "_loader", loader)
+    try:
+        got = intent_mod._inherit_last_skill("太丑了，优化一下", "office_pptx_designer")
+        assert got is not None and got.skill_id == "office_pptx_designer"
+        # 非追问短句 → 不继承
+        assert intent_mod._inherit_last_skill("今天几号", "office_pptx_designer") is None
+        # 未知/不存在的前轮 skill → 不继承
+        assert intent_mod._inherit_last_skill("太丑了", "no_such_skill") is None
+    finally:
+        monkeypatch.setattr(skills_api, "_loader", saved)
+
+
 def test_classify_with_llm_fenced_json(monkeypatch):
     """围栏 JSON 仍可解析，null skill 也正常（spec §4.5 第三层）。"""
     import asyncio

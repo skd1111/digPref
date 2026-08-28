@@ -10,6 +10,7 @@ import { router } from "./router";
 import { useAgentStream } from "@/hooks/useAgentStream";
 import { useAgentHealth } from "@/hooks/useAgentHealth";
 import { PreviewEventBridge } from "@/components/preview/PreviewEventBridge";
+import { OfficePreviewPanel } from "@/components/office/OfficePreviewPanel";
 
 // ---- ErrorBoundary（防止渲染异常导致白屏）-----------------------------------
 
@@ -70,6 +71,8 @@ export function App(): JSX.Element {
     <ErrorBoundary>
       <PreviewEventBridge />
       <RouterProvider router={router} />
+      {/* V9 Office 预览浮层（文件树右键 / 聊天产物卡片触发） */}
+      <OfficePreviewPanel />
     </ErrorBoundary>
   );
 }

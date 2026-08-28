@@ -23,7 +23,7 @@ const OPTIONS: Array<{
     id: "files",
     label: "文件列表",
     icon: "📁",
-    hint: "工程目录树（界面不变，右侧思维链）",
+    hint: "工程目录树（界面不变，右侧执行过程）",
   },
   {
     id: "features",

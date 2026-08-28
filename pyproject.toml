@@ -124,6 +124,8 @@ module = [
     "dmPython",
     "clickhouse_connect",
     "markitdown",
+    "docling",
+    "docling.*",
     "pyarrow",
     "pyarrow.*",
 ]

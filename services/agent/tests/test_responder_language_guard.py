@@ -37,7 +37,7 @@ class _FakeLLM:
         self._raise = raise_exc
         self.calls: list[dict] = []
 
-    async def summarise(self, *, intent, user_prompt, plan, results):
+    async def summarise(self, *, intent, user_prompt, plan, results, history=None):
         self.calls.append(
             {"intent": intent, "user_prompt": user_prompt, "plan": plan, "results": results}
         )

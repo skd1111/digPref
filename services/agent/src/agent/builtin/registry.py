@@ -63,6 +63,12 @@ from agent.builtin.llm_admin import (
 from agent.builtin.logfile import builtin_log_read_lines, builtin_log_search
 from agent.builtin.markdown_convert import builtin_file_to_markdown
 from agent.builtin.models import BUILTIN_TOOL_NAMES, RiskLevel
+from agent.builtin.office import (
+    builtin_office_create,
+    builtin_office_edit,
+    builtin_office_read,
+    builtin_office_validate,
+)
 from agent.builtin.schemas import get_builtin_schema
 from agent.builtin.search import builtin_grep
 
@@ -120,6 +126,11 @@ TOOL_RISK_LEVEL: dict[str, RiskLevel] = {
     # V8 LLM 管理工具（2026-08-14：模型接入）
     "model_config_upsert": "high",  # 写 router.db 模型注册表 → 强制 HITL
     "probe_chat_endpoint": "read",  # 只发最小探测请求，不写任何状态
+    # V9 Office 文档工具族（读 / 校验只读；改 / 建写文件 → HITL）
+    "office_read": "read",
+    "office_edit": "medium",  # 直接改原文件 → 强制 HITL，绝不绕过
+    "office_create": "medium",  # 新建 / 模板填充落盘 → 强制 HITL
+    "office_validate": "read",
 }
 
 
@@ -181,7 +192,21 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "glob": "Glob pattern matching (e.g. **/*.py). Returns sorted paths. Read-only.",
     "hash": "Compute file hash (md5 / sha1 / sha256 / blake2b). Read-only.",
     "base64": "Base64 encode/decode a string or file content. Read-only.",
-    "shell": "Execute a shell command. Requires HITL approval (critical risk). Use sparingly.",
+    "shell": (
+        "Execute ONE command. Requires HITL approval (critical risk). Use sparingly. "
+        "PREFER the `argv` array form — it runs the program directly, bypassing the shell: "
+        'argv=["C:\\Program Files\\python.exe", "script.py"]. No quoting, no escaping, no '
+        "operator restrictions. This is the ONLY reliable way to run an executable whose path "
+        "contains spaces. "
+        "The `command` string form goes through a shell and rejects operators "
+        "(; & | < > ` $ parentheses) — use it only when you need shell features. "
+        "To change directory use the `cwd` parameter; `cd` does NOT persist across calls "
+        "(each call is a fresh process). "
+        "Prefer builtin_list_dir / builtin_find / builtin_read_file / builtin_stat_file over "
+        "dir / where / type / if-exist. "
+        "ok=false means the command FAILED (nonzero exit) — read `error` and change approach "
+        "instead of retrying variants of the same command."
+    ),
     "datetime_now": (
         "Get the current date/time (defaults to system local timezone; optional UTC offset "
         "hours, e.g. 8 for UTC+8). Returns date, weekday and the Chinese lunar date (农历, "
@@ -307,6 +332,39 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "(401/403 reported as auth_required). Read-only. Use for 测试模型/地址是否可达、"
         "连通性测试、接入后验证."
     ),
+    # V9 Office 文档工具族（OfficeCLI，2026-08-25）
+    "office_read": (
+        "Read the structure / text of an existing Word (.docx) / Excel (.xlsx) / "
+        "PowerPoint (.pptx) file via OfficeCLI. action='outline|text|annotated|stats' "
+        "returns a semantic view; action='get' with element_path (e.g. /slide[1]/shape[2], "
+        "1-based) returns the element tree as JSON; action='query' with a CSS-like "
+        "selector (e.g. 'paragraph[style=Heading1]') returns matching elements. "
+        "Use for 看/检查/提取现有 Office 文档结构. Read-only."
+    ),
+    "office_edit": (
+        "Modify an existing Word / Excel / PowerPoint file element-by-element via "
+        "OfficeCLI. op='set' changes props of the element at element_path or selector; "
+        "op='add' inserts a new element (type + props) under element_path; op='remove' "
+        "deletes; op='move' relocates (to_parent + index); op='batch' applies a list of "
+        "commands atomically (any failure rolls back everything). Paths use OfficeCLI "
+        "syntax (1-based, e.g. /body/p[1]/r[1]). Requires HITL approval (medium risk). "
+        "Use for 改 Word/Excel/PPT、调整排版、批量替换. After editing, run "
+        "builtin_office_validate to self-check."
+    ),
+    "office_create": (
+        "Create a new Word / Excel / PowerPoint file via OfficeCLI. Without template: "
+        "creates a blank document (type from extension). With template: fills {{key}} "
+        "placeholders from data (merge) — design the layout once, fill deterministically "
+        "many times. Requires HITL approval (medium risk). Use for 生成报告/方案/报表/PPT、"
+        "按模板批量出文件. Prefer this over builtin_word_generate for rich formatting; "
+        "after creating, run builtin_office_validate to self-check."
+    ),
+    "office_validate": (
+        "Validate a Word / Excel / PowerPoint file (OpenXML schema) and enumerate quality "
+        "issues (text overflow, missing alt text, formula errors, overlapping shapes). "
+        "Returns {valid, issues}. Read-only. ALWAYS call after office_create / office_edit "
+        "to close the edit → validate → fix loop."
+    ),
 }
 
 
@@ -367,6 +425,11 @@ class BuiltinToolRegistry:
             # V8 LLM 管理工具（2026-08-14：模型接入/连通性探测）
             "model_config_upsert": builtin_model_config_upsert,
             "probe_chat_endpoint": builtin_probe_chat_endpoint,
+            # V9 Office 文档工具族（OfficeCLI 读写 / 渲染）
+            "office_read": builtin_office_read,
+            "office_edit": builtin_office_edit,
+            "office_create": builtin_office_create,
+            "office_validate": builtin_office_validate,
         }
 
     def get(self, name: str) -> Callable[..., Any] | None:
@@ -393,6 +456,15 @@ class BuiltinToolRegistry:
         for name in BUILTIN_TOOL_NAMES:
             desc = TOOL_DESCRIPTIONS.get(name, "")
             risk = TOOL_RISK_LEVEL.get(name, "read")
+            if name == "shell":
+                # 运行时 shell 语法提醒（2026-08-27）：pwsh 与 cmd 的内建命令 / 别名
+                # 差异很大（pwsh 的 `where` 是 Where-Object，不是 where.exe），
+                # 模型不知道自己在跟哪个 shell 说话就会写出跑不通的命令。
+                from agent.builtin.shell import shell_syntax_note
+
+                note = shell_syntax_note()
+                if note:
+                    desc = f"{desc} {note}"
             lines.append(f"- builtin_{name}: {desc} [risk={risk}]")
         lines.append("")
         lines.append(

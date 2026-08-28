@@ -18,17 +18,20 @@ router = APIRouter(prefix="/approval", tags=["approval"])
 
 
 class ApprovalDecision(BaseModel):
-    decision: str  # "approve" | "reject"
+    decision: str  # "approve" | "reject" | "approve_always"（2026-08-25）
     operator: str | None = None
+
+
+_VALID_DECISIONS = ("approve", "reject", "approve_always")
 
 
 @router.post("/{approval_id}")
 async def decide(approval_id: str, body: ApprovalDecision) -> dict:
-    if body.decision not in ("approve", "reject"):
+    if body.decision not in _VALID_DECISIONS:
         return {
             "approval_id": approval_id,
             "ok": False,
-            "error": "decision must be 'approve' or 'reject'",
+            "error": "decision must be 'approve', 'reject' or 'approve_always'",
         }
     await post_decision(approval_id, body.decision)
     await audit(

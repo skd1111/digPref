@@ -37,10 +37,13 @@ def build_response_cache_key(
     user_prompt: str,
     plan: list[Any],
     results: list[Any],
+    history_brief: str = "",
 ) -> str:
     """L1 精确响应缓存 Key：sha256(canonical(规范化请求载荷))。
 
-    进入 key 的字段：task_kind / intent / 归一化 user_prompt / plan / results。
+    进入 key 的字段：task_kind / intent / 归一化 user_prompt / plan / results /
+    history_brief（BUGFIX #135：终答接入会话历史后，同问不同上下文必须不同 key，
+    否则跨会话误命中旧答案）。
     禁止进入：request_id、trace_id、时间戳、凭证（见模块 docstring）。
     """
     payload = {
@@ -49,6 +52,7 @@ def build_response_cache_key(
         "user_prompt": normalize_text(user_prompt),
         "plan": plan,
         "results": results,
+        "history_brief": normalize_text(history_brief),
     }
     digest = hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
     return f"l1:{digest}"

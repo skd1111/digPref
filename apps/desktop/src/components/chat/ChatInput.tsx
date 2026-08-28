@@ -24,6 +24,8 @@ import { useState, useCallback, useEffect, useMemo, useRef, type KeyboardEvent }
 import { invoke, ipc } from '@/ipc/invoke';
 import { useChatStore, useFeatureContextPromptSnippet, useExpertTeamPromptSnippet, tabContextMessages, estimateHistoryTokens } from '@/store/chatStore';
 import { parseClarifyBlock } from '@/lib/clarify';
+import { expandOptionReply } from '@/lib/optionReply';
+import { buildUserHistory } from '@/lib/chatHistory';
 import {
   buildAttachmentsSnippet,
   readFileAsBase64,
@@ -46,8 +48,11 @@ const profileCache = new Map<string, string>();
 
 /** 压缩时保留最近 5 轮原文（10 条 user/assistant），其余进 LLM 摘要（2026-08-17） */
 const COMPRESS_KEEP_MESSAGES = 10;
-/** 上下文大小警示阈值（估算 token）：超过后指示器变橙提醒可压缩/清理 */
+/** 上下文大小警示阈值（估算 token）：模型窗口未知时的回退（已知时改用窗口的 90%） */
 const CTX_WARN_TOKENS = 8000;
+/** 自动压缩阈值（2026-08-28）：会话历史估算 token 达到上下文窗口 90% 时，
+ *  发送前自动触发压缩（手动入口保留不变） */
+export const CTX_AUTO_COMPRESS_RATIO = 0.9;
 
 async function getProjectProfile(projectName: string): Promise<string> {
   const cached = profileCache.get(projectName);
@@ -67,6 +72,10 @@ export function ChatInput(): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  // 历史记录快捷输入（2026-08-26）：空输入框按 ↑ 进入浏览（终端习惯），
+  // historyIdx = null 未在浏览 / 0 最新 / 增大向更早翻；进入前暂存草稿，↓ 到底或 Esc 恢复
+  const [historyIdx, setHistoryIdx] = useState<number | null>(null);
+  const historyDraftRef = useRef('');
   // 项目画像停用（2026-08-14）：值为被停用的工程名 —— 该工程发送时不再注入画像，
   // 切到其他工程自动恢复（用户偶尔做无关小需求时不想被画像带偏）
   const [profileSuppressed, setProfileSuppressed] = useState<string | null>(null);
@@ -79,8 +88,9 @@ export function ChatInput(): JSX.Element {
     attachmentsRef.current = attachments;
   }, [attachments]);
   const appendChat = useChatStore((s) => s.append);
-  const setBusyStore = useChatStore((s) => s.setBusy);
-  const storeBusy = useChatStore((s) => s.busy);  // 2026-08-07：agent 运行态（驱动停止按钮）
+  // 2026-08-26 多会话并发：只看本页签是否在跑（其他页签在跑不拦本页签发送）
+  const tabBusy = useChatStore((s) => s.busyTabIds.includes(s.activeTabId));
+  const tabRunId = useChatStore((s) => s.tabRunIds[s.activeTabId]);
   const runId = useChatStore((s) => s.runId);
   const setRunId = useChatStore((s) => s.setRunId);
   const autonomy = useChatStore((s) => s.autonomy);  // Phase 18
@@ -134,20 +144,43 @@ export function ChatInput(): JSX.Element {
   const [ctxMenuOpen, setCtxMenuOpen] = useState(false);
   const [compressing, setCompressing] = useState(false);
   const activeTab = useMemo(() => tabs.find((t) => t.id === activeTabId), [tabs, activeTabId]);
+  // 历史快捷输入源（本页签用户消息，旧→新；倒序回填）
+  const userHistory = useMemo(
+    () => buildUserHistory(activeTab ? activeTab.messages : []),
+    [activeTab],
+  );
   // 将随下次发送的会话 history（断点过滤后）与估算 token
   const historyMsgs = useMemo(() => (activeTab ? tabContextMessages(activeTab) : []), [activeTab]);
   const historyTokens = useMemo(() => (activeTab ? estimateHistoryTokens(activeTab) : 0), [activeTab]);
+  // 上下文窗口（2026-08-28 自动压缩）：全局默认 = 生成限制 default_context_window；
+  // 每模型值 = 模型管理 max_context（两级回退，与后端 LMRouter 口径一致）
+  const [ctxLimits, setCtxLimits] = useState<{ defaultCtx: number; byModel: Record<string, number> } | null>(null);
+  // 有效上下文窗口（2026-08-28）：本页签会话模型的 max_context 优先，回落全局默认；
+  // null = Agent 未就绪/窗口未知 → 只保留手动压缩，不做自动触发
+  const ctxLimit = useMemo(() => {
+    if (!ctxLimits) return null;
+    if (chatModel && ctxLimits.byModel[chatModel]) return ctxLimits.byModel[chatModel];
+    return ctxLimits.defaultCtx;
+  }, [ctxLimits, chatModel]);
+  // 警示阈值：窗口已知用其 90%（与自动压缩同阈值，变橙即意味着下次发送会自动压缩）
+  const ctxWarnTokens = ctxLimit ? Math.floor(ctxLimit * CTX_AUTO_COMPRESS_RATIO) : CTX_WARN_TOKENS;
   const [modelOptions, setModelOptions] = useState<Array<{ name: string; label: string }>>([]);
   const refreshModelOptions = useCallback(async (): Promise<void> => {
     try {
-      const r = await ipc.routerListBackends();
+      const [r, limits] = await Promise.all([ipc.routerListBackends(), ipc.routerGetGenLimits()]);
+      const byModel: Record<string, number> = {};
+      for (const b of r.backends) {
+        if (typeof b.max_context === 'number' && b.max_context > 0) byModel[b.name] = b.max_context;
+      }
+      setCtxLimits({ defaultCtx: limits.limits.default_context_window, byModel });
       setModelOptions(
         r.backends
           .filter((b) => b.enabled)
           .map((b) => ({ name: b.name, label: `${b.name} · ${b.model_name}` })),
       );
     } catch {
-      // Agent 未就绪：选项留空不阻塞发送（选中项仍在，就绪后自然可选）
+      // Agent 未就绪：选项留空不阻塞发送（选中项仍在，就绪后自然可选）；
+      // 窗口未知时跳过自动压缩（仅保留手动入口）
     }
   }, []);
   useEffect(() => {
@@ -281,11 +314,93 @@ export function ChatInput(): JSX.Element {
       .catch((e) => console.warn('[sessions] 会话归档创建失败（不阻塞对话）:', e));
   }, []);
 
+  /** 压缩核心（手动/自动共用，2026-08-28）：保留最近 5 轮原文，其余旧对话交后端
+   *  本地优先 LLM 链生成摘要替换。返回是否真的执行了压缩（窗口/历史不足返 false）。 */
+  const runCompression = useCallback(async (): Promise<boolean> => {
+    const s = useChatStore.getState();
+    if (s.busy || compressing) return false;
+    const tab = s.tabs.find((t) => t.id === activeTabId);
+    if (!tab) return false;
+    const msgs = tabContextMessages(tab);
+    if (msgs.length <= COMPRESS_KEEP_MESSAGES) return false;
+    const toCompress = msgs.slice(0, -COMPRESS_KEEP_MESSAGES);
+    setCompressing(true);
+    setError(null);
+    try {
+      const res = await ipc.chatCompressHistory({
+        messages: toCompress.map((m) => ({ role: m.role, content: m.content })),
+        ...(tab.contextSummary ? { historySummary: tab.contextSummary } : {}),
+      });
+      // 断点 = 最后一条被压缩的消息（断点及之前全部排除）；
+      // 保留的最近 5 轮仍在断点之后，继续随发送进后端
+      useChatStore
+        .getState()
+        .applyTabCompression(activeTabId, res.summary, toCompress[toCompress.length - 1].id);
+      appendChat({
+        id: `ctx-compress-${Date.now()}`,
+        role: 'system',
+        kind: 'execution',
+        category: 'log',
+        content: `📦 上下文已压缩：${Math.floor(toCompress.length / 2)} 轮旧对话 → 摘要（≈${formatChars(res.beforeTokens)} tok → ≈${formatChars(res.afterTokens)} tok，最近 ${COMPRESS_KEEP_MESSAGES / 2} 轮保留原文）`,
+        status: 'ok',
+      });
+      return true;
+    } finally {
+      setCompressing(false);
+    }
+  }, [activeTabId, appendChat, compressing]);
+
   /** 共享发送管道：普通输入与 ClarifyCard 回复都走这里 */
   const sendUserMessage = useCallback(async (rawText: string): Promise<void> => {
-    const trimmed = rawText.trim();
-    // 本地 busy（发送中）与 store busy（agent 运行中）都拦，避免并发 run
-    if (!trimmed || busy || useChatStore.getState().busy) return;
+    // 选项编号单字回复扩展（BUGFIX #150）：孤立「A/2」用上一条助手消息的选项
+    // 确定性展开为结构化确认文本，防模型对着孤立编号丢上下文；非编号原样返回
+    const s0 = useChatStore.getState();
+    const t0 = s0.tabs.find((t) => t.id === s0.activeTabId);
+    let lastAssistantContent = '';
+    if (t0) {
+      for (let i = t0.messages.length - 1; i >= 0; i--) {
+        const m = t0.messages[i];
+        if (m.role === 'assistant' && m.content) {
+          lastAssistantContent = m.content;
+          break;
+        }
+      }
+    }
+    const trimmed = expandOptionReply(rawText.trim(), lastAssistantContent);
+    // 本地 busy（发送中）与本页签运行态拦截；其他页签在跑不影响本页签（多会话并发，2026-08-26）
+    if (!trimmed || busy || useChatStore.getState().busyTabIds.includes(activeTabId)) return;
+
+    // 自动压缩（2026-08-28）：发送前会话历史估算 token 达上下文窗口 90% 时自动压缩，
+    // 保证本轮发送的 history + 摘要不撑爆模型窗口；失败不阻塞发送（本轮照旧带上原历史），
+    // 手动入口保留不变；窗口未知（Agent 未就绪）时不自动触发。压缩在写用户消息之前，
+    // 新消息属「保留的最近 5 轮」不受影响；断点/摘要更新后由下方 store 新读自然生效。
+    if (ctxLimit != null && !compressing) {
+      const tabNow = useChatStore.getState().tabs.find((t) => t.id === activeTabId);
+      if (tabNow && estimateHistoryTokens(tabNow) > ctxLimit * CTX_AUTO_COMPRESS_RATIO) {
+        try {
+          const done = await runCompression();
+          if (done) {
+            appendChat({
+              id: `ctx-auto-compress-${Date.now()}`,
+              role: 'system',
+              kind: 'execution',
+              category: 'log',
+              content: `🤖 上下文已达模型窗口 ${Math.round(CTX_AUTO_COMPRESS_RATIO * 100)}%，本次发送前已自动压缩（最近 ${COMPRESS_KEEP_MESSAGES / 2} 轮保留原文）`,
+              status: 'ok',
+            });
+          }
+        } catch (e) {
+          appendChat({
+            id: `ctx-auto-compress-err-${Date.now()}`,
+            role: 'system',
+            kind: 'execution',
+            category: 'log',
+            content: `⚠️ 上下文自动压缩失败，本轮按原历史发送：${String(e)}`,
+            status: 'err',
+          });
+        }
+      }
+    }
 
     // 附加文件（2026-08-14）：就绪的附件写一条 system 提示，内容只进后端 prompt
     const readyAttachments = attachments.filter((a) => a.status === 'ready' && a.content);
@@ -311,7 +426,6 @@ export function ChatInput(): JSX.Element {
     });
 
     setBusy(true);
-    setBusyStore(true);
     setError(null);
     // 2026-08-07：整轮耗时起点 + 清上一轮结果
     useChatStore.getState().setRunStartTs(Date.now());
@@ -361,37 +475,50 @@ export function ChatInput(): JSX.Element {
         modelOverride: activeTab?.chatModel ?? null,
         // 页面上下文（2026-08-14）：当前会话页签名 + 模式随请求进后端，
         // 注入 intent/decompose prompt，消除「连接」这类模糊动词的场景歧义
-        // （如当前页签就是「内网模型接入配置」时，「连接」= 写入接入配置）
-        pageContext: { page: { workMode, tabTitle: activeTab?.title ?? '' } },
+        // （如当前页签就是「内网模型接入配置」时，「连接」= 写入接入配置）；
+        // tabId（2026-08-25）：会话级审批豁免（「此后都按此执行」）的作用域键，
+        // 豁免只在当前页签生效，切新会话不复用
+        pageContext: { page: { workMode, tabTitle: activeTab?.title ?? '', tabId: activeTab?.id ?? '' } },
+        // Skill 粘性（2026-08-26）：上一轮命中的 skill，追问/修改轮由后端继承，
+        // 防「太丑了重做」脱离设计规范的裸生成
+        lastSkillId: chatState.lastSkillId ?? null,
+        // 任务级工作目录（2026-08-26）：一个聊天页签 = 一个任务文件夹；
+        // taskId 用页签 id，taskTitle 取页签首个用户问题（文件夹命名用）
+        taskId: activeTab?.id ?? null,
+        taskTitle: activeTab?.messages.find((m) => m.role === 'user' && m.content)?.content ?? trimmed,
       });
       setRunId(newRunId);
+      // 2026-08-26 多会话并发：登记 run→页签归属（驱动思考指示器/阶段文案/产物隔离）；
+      // 后端返回 run_id 后才登记，发送失败无需回滚归属（从未写入）
+      useChatStore.getState().startRun(newRunId, activeTabId);
 
       // sessions 后端归档（2026-08-07，best-effort）：首次发送懒创建 session，
       // 之后逐条追加；全链 fire-and-forget，失败不影响主对话
       archiveUserMessage(trimmed);
     } catch (e) {
       setError(String(e));
-      setBusyStore(false);
+      // 发送失败：startRun 尚未执行（无归属可清）；全局 busy 由其他并发 run 自己维护，不动它
     } finally {
       setText('');
       setBusy(false);
+      setHistoryIdx(null);  // 发送后退出历史浏览态（下次 ↑ 从新历史最新条开始）
       // 发送后清掉选区与附加文件（一次性附加）
       clearChatSelection();
       setAttachments([]);
     }
-  }, [busy, chatSelection, appendChat, setBusyStore, setRunId, clearChatSelection, workMode, autonomy, inferenceMode, featureSnippet, expertTeamSnippet, projectName, alignmentActive, archiveUserMessage, attachments, profileActive, cleanMode]);
+  }, [busy, activeTabId, chatSelection, appendChat, setRunId, clearChatSelection, workMode, autonomy, inferenceMode, featureSnippet, expertTeamSnippet, projectName, alignmentActive, archiveUserMessage, attachments, profileActive, cleanMode, ctxLimit, compressing, runCompression]);
 
   const submit = useCallback(async (): Promise<void> => {
     await sendUserMessage(text);
   }, [sendUserMessage, text]);
 
-  /** 停止当前 run：调 Rust agent_cancel（后端 SSE 桥会补发 done(cancelled) 解除 busy） */
+  /** 停止当前页签的 run（多会话并发：按页签归属取 runId） */
   const stopRun = useCallback((): void => {
-    if (!runId) return;
-    void ipc.cancel(runId).catch(() => undefined);
-    // 前端乐观解锁，不等后端事件；useAgentStream 的 done 事件会再刷一次双保险
-    setBusyStore(false);
-  }, [runId, setBusyStore]);
+    const target = useChatStore.getState().tabRunIds[activeTabId] ?? runId;
+    if (!target) return;
+    void ipc.cancel(target).catch(() => undefined);
+    // 不做乐观全局解锁：done(cancelled) 到达时 endRun 按 run 清归属，不误伤其他并发 run
+  }, [runId, activeTabId]);
 
   /** 清理上下文（2026-08-17，断点式）：界面消息保留可回看，但此后的发送
    *  不再携带之前的历史；同时作废旧的压缩摘要 */
@@ -412,47 +539,24 @@ export function ChatInput(): JSX.Element {
     setCtxMenuOpen(false);
   }, [activeTabId, appendChat, compressing]);
 
-  /** 压缩上下文（2026-08-17）：保留最近 5 轮原文，其余旧对话交后端
-   *  本地优先 LLM 链生成摘要替换；失败内联提示不清数据 */
+  /** 压缩上下文（2026-08-17，手动入口）：失败内联提示不清数据 */
   const compressContext = useCallback(async (): Promise<void> => {
     const s = useChatStore.getState();
     if (s.busy || compressing) return;
     const tab = s.tabs.find((t) => t.id === activeTabId);
     if (!tab) return;
-    const msgs = tabContextMessages(tab);
-    if (msgs.length <= COMPRESS_KEEP_MESSAGES) {
+    if (tabContextMessages(tab).length <= COMPRESS_KEEP_MESSAGES) {
       setError(`历史不足 ${COMPRESS_KEEP_MESSAGES / 2} 轮，无需压缩（压缩会保留最近 ${COMPRESS_KEEP_MESSAGES / 2} 轮原文）`);
       setCtxMenuOpen(false);
       return;
     }
-    const toCompress = msgs.slice(0, -COMPRESS_KEEP_MESSAGES);
-    setCompressing(true);
-    setError(null);
     try {
-      const res = await ipc.chatCompressHistory({
-        messages: toCompress.map((m) => ({ role: m.role, content: m.content })),
-        ...(tab.contextSummary ? { historySummary: tab.contextSummary } : {}),
-      });
-      // 断点 = 最后一条被压缩的消息（断点及之前全部排除）；
-      // 保留的最近 5 轮仍在断点之后，继续随发送进后端
-      useChatStore
-        .getState()
-        .applyTabCompression(activeTabId, res.summary, toCompress[toCompress.length - 1].id);
-      appendChat({
-        id: `ctx-compress-${Date.now()}`,
-        role: 'system',
-        kind: 'execution',
-        category: 'log',
-        content: `📦 上下文已压缩：${Math.floor(toCompress.length / 2)} 轮旧对话 → 摘要（≈${formatChars(res.beforeTokens)} tok → ≈${formatChars(res.afterTokens)} tok，最近 ${COMPRESS_KEEP_MESSAGES / 2} 轮保留原文）`,
-        status: 'ok',
-      });
-      setCtxMenuOpen(false);
+      await runCompression();
     } catch (e) {
       setError(String(e));
-    } finally {
-      setCompressing(false);
     }
-  }, [activeTabId, appendChat, compressing]);
+    setCtxMenuOpen(false);
+  }, [activeTabId, compressing, runCompression]);
 
   // 错误消息「重试」：ChatMessage 发 CHAT_RETRY_EVENT → 重发最后一条用户消息
   useEffect(() => {
@@ -485,15 +589,49 @@ export function ChatInput(): JSX.Element {
     return () => window.removeEventListener(CHAT_SEND_EVENT, onQuickSend);
   }, [sendUserMessage]);
 
+  // 切页签时退出历史浏览态（历史源按页签隔离，浏览位置不跨页签携带）
+  useEffect(() => {
+    setHistoryIdx(null);
+  }, [activeTabId]);
+
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
       // Enter 发送，Shift+Enter 换行（与 VSCode Copilot Chat 一致）
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         void submit();
+        return;
+      }
+      // 历史记录快捷输入（2026-08-26）：空输入框按 ↑ 进入浏览；浏览中 ↑/↓ 翻页；
+      // 非浏览态且输入框非空时 ↑↓ 保持原生光标移动，不劫持多行编辑；
+      // ↓ 到底或 Esc 退出浏览并恢复进入前的草稿；Enter 直接发送选中条目（同终端）
+      if (e.key === 'ArrowUp' && (historyIdx !== null || text === '') && userHistory.length > 0) {
+        e.preventDefault();
+        const next = historyIdx === null ? 0 : Math.min(historyIdx + 1, userHistory.length - 1);
+        if (historyIdx === null) historyDraftRef.current = text;
+        setHistoryIdx(next);
+        setText(userHistory[userHistory.length - 1 - next]);
+        return;
+      }
+      if (e.key === 'ArrowDown' && historyIdx !== null) {
+        e.preventDefault();
+        const next = historyIdx - 1;
+        if (next < 0) {
+          setHistoryIdx(null);
+          setText(historyDraftRef.current);
+        } else {
+          setHistoryIdx(next);
+          setText(userHistory[userHistory.length - 1 - next]);
+        }
+        return;
+      }
+      if (e.key === 'Escape' && historyIdx !== null) {
+        e.preventDefault();
+        setHistoryIdx(null);
+        setText(historyDraftRef.current);
       }
     },
-    [submit],
+    [submit, historyIdx, text, userHistory],
   );
 
   return (
@@ -648,11 +786,11 @@ export function ChatInput(): JSX.Element {
             onKeyDown={handleKeyDown}
             disabled={busy}
             placeholder={
-              storeBusy
+              tabBusy
                 ? 'Agent 正在处理…（可先输入下一个问题，或点停止）'
                 : chatSelection
                   ? `告诉我你想做什么（已附加 ${chatSelection.label}）…`
-                  : '告诉我你想做什么… (Enter 发送, Shift+Enter 换行)'
+                  : '告诉我你想做什么… (Enter 发送, Shift+Enter 换行, 空输入框按 ↑ 调历史)'
             }
             className="block w-full resize-none bg-transparent px-3 pt-2.5 pb-1 text-sm focus:outline-none disabled:opacity-50"
             rows={2}
@@ -693,12 +831,16 @@ export function ChatInput(): JSX.Element {
                 type="button"
                 onClick={() => setCtxMenuOpen((v) => !v)}
                 disabled={busy}
-                title={`将随下次发送的会话历史 ≈${historyTokens.toLocaleString()} tokens（点击查看清理/压缩）`}
+                title={
+                  ctxLimit
+                    ? `将随下次发送的会话历史 ≈${historyTokens.toLocaleString()} / ${ctxLimit.toLocaleString()} tokens（达 ${Math.round(CTX_AUTO_COMPRESS_RATIO * 100)}% 会在发送前自动压缩；点击查看清理/压缩）`
+                    : `将随下次发送的会话历史 ≈${historyTokens.toLocaleString()} tokens（点击查看清理/压缩）`
+                }
                 className="flex h-7 items-center gap-1 rounded-full border px-2 text-[10px] transition-colors hover:opacity-80 disabled:opacity-50"
                 style={{
-                  borderColor: historyTokens >= CTX_WARN_TOKENS ? '#f59e0b' : '#e7e5e4',
-                  color: historyTokens >= CTX_WARN_TOKENS ? '#b45309' : '#6b7280',
-                  backgroundColor: historyTokens >= CTX_WARN_TOKENS ? '#fffbeb' : '#ffffff',
+                  borderColor: historyTokens >= ctxWarnTokens ? '#f59e0b' : '#e7e5e4',
+                  color: historyTokens >= ctxWarnTokens ? '#b45309' : '#6b7280',
+                  backgroundColor: historyTokens >= ctxWarnTokens ? '#fffbeb' : '#ffffff',
                 }}
               >
                 🧠 ≈{formatChars(historyTokens)} tok
@@ -713,12 +855,13 @@ export function ChatInput(): JSX.Element {
                   >
                     <div className="px-1 pb-1.5 text-[10px]" style={{ color: '#6b7280' }}>
                       会话历史：{Math.floor(historyMsgs.length / 2)} 轮 · ≈{historyTokens.toLocaleString()} tokens
+                      {ctxLimit ? ` / ${ctxLimit.toLocaleString()}（${Math.round((historyTokens / ctxLimit) * 100)}%，达 ${Math.round(CTX_AUTO_COMPRESS_RATIO * 100)}% 发送前自动压缩）` : ''}
                       {activeTab?.contextSummary ? ' · 已含压缩摘要' : ''}
                     </div>
                     <button
                       type="button"
                       onClick={clearContext}
-                      disabled={storeBusy || compressing || historyMsgs.length === 0}
+                      disabled={tabBusy || compressing || historyMsgs.length === 0}
                       className="mb-1 block w-full rounded px-2 py-1.5 text-left text-[11px] transition-colors hover:bg-[#f5f5f4] disabled:cursor-not-allowed disabled:opacity-40"
                       style={{ color: '#1f1f1f' }}
                       title="界面消息保留可回看，但此后的发送不再携带之前的历史"
@@ -728,7 +871,7 @@ export function ChatInput(): JSX.Element {
                     <button
                       type="button"
                       onClick={() => void compressContext()}
-                      disabled={storeBusy || compressing || historyMsgs.length <= COMPRESS_KEEP_MESSAGES}
+                      disabled={tabBusy || compressing || historyMsgs.length <= COMPRESS_KEEP_MESSAGES}
                       className="block w-full rounded px-2 py-1.5 text-left text-[11px] transition-colors hover:bg-[#f5f5f4] disabled:cursor-not-allowed disabled:opacity-40"
                       style={{ color: '#1f1f1f' }}
                       title={`把旧对话压缩成摘要替换历史（保留最近 ${COMPRESS_KEEP_MESSAGES / 2} 轮原文）`}
@@ -785,11 +928,11 @@ export function ChatInput(): JSX.Element {
             <span className="ml-auto hidden text-[10px] sm:inline" style={{ color: '#9ca3af' }}>
               Enter 发送 · Shift+Enter 换行
             </span>
-            {storeBusy ? (
+            {tabBusy ? (
               // 运行中 → 停止按钮（红调圆形，Codex 风格）
               <button
                 onClick={stopRun}
-                disabled={!runId}
+                disabled={!tabRunId}
                 title="停止当前任务"
                 className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full border transition-colors hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-40"
                 style={{ borderColor: '#dc2626', color: '#dc2626', backgroundColor: '#ffffff' }}

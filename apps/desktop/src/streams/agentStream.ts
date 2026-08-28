@@ -37,9 +37,20 @@ export function subscribeAgentStream(handler: Handler): () => void {
     listen<AgentStreamEvent>(EVT.AGENT_AUTO_DECISION, (e) => handler(e.payload)),
     // Phase 1B V1：内置工具完成事件（2026-08-19 起用于累积改动文件清单）
     listen<AgentStreamEvent>(EVT.BUILTIN_TOOL_DONE, (e) => handler(e.payload)),
+    // 2026-08-26：内置工具开始事件（把「思考中」细化为「工具调用中：某动作」）
+    listen<AgentStreamEvent>(EVT.BUILTIN_TOOL_STARTED, (e) => handler(e.payload)),
+    // Phase 2D V0：skill 路由命中（2026-08-26 起记录 lastSkillId 供追问轮继承）
+    listen<AgentStreamEvent>(EVT.AGENT_SKILL_MATCHED, (e) => handler(e.payload)),
+    // 执行过程可视化（Claude Code 式）：run 开始 / 工具进度 / shell 流式输出 / 写前 Diff 预览
+    listen<AgentStreamEvent>(EVT.AGENT_RUN_STARTED, (e) => handler(e.payload)),
+    listen<AgentStreamEvent>(EVT.AGENT_TOOL_PROGRESS, (e) => handler(e.payload)),
+    listen<AgentStreamEvent>(EVT.AGENT_SHELL_CHUNK, (e) => handler(e.payload)),
+    listen<AgentStreamEvent>(EVT.AGENT_FILE_WRITE_PREVIEW, (e) => handler(e.payload)),
     // 生命周期通道：流结束和错误
     listen<AgentStreamEvent>(EVT.AGENT_DONE, (e) => handler(e.payload)),
     listen<AgentStreamEvent>(EVT.AGENT_ERROR, (e) => handler(e.payload)),
+    // 流保活心跳（BUGFIX #161）：看门狗据此感知流存活，静默超阈解锁防永久卡死
+    listen<AgentStreamEvent>(EVT.AGENT_HEARTBEAT, (e) => handler(e.payload)),
   ]).then((results) => {
     if (cancelled) {
       // 在 subscribe 完成前已取消 → 立即取消所有

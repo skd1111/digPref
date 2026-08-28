@@ -397,12 +397,36 @@ class TestPythonFallbackShell:
     async def test_echo_ok(self):
         from agent.builtin.shell import builtin_shell
 
-        r = await builtin_shell("echo hello v2", allowed_prefixes=["echo"])
+        # 2026-08-27：Windows 上默认 shell 改为 pwsh（装了才用），而 pwsh 的
+        # `echo a b` 是两个参数 → 输出两行；cmd 是一整串 → 一行。这里显式加引号
+        # 保证跨 shell 行为一致（这条差异已写进工具描述，模型能看到）。
+        r = await builtin_shell('echo "hello v2"', allowed_prefixes=["echo"])
         assert r.ok, r.error
         assert r.content["exit_code"] == 0
         assert "hello v2" in r.content["stdout"]
         assert r.content["timed_out"] is False
         assert r.risk_level == "critical"
+        assert r.content["shell"] in ("pwsh", "cmd", "sh")
+
+    @pytest.mark.asyncio
+    async def test_result_reports_which_shell(self):
+        """模型必须知道自己在跟哪个 shell 说话 —— pwsh 的 where/dir/type 都是别名，
+        语法与 cmd 有实质差异（BUGFIX #165 的相邻风险）。"""
+        from agent.builtin.shell import builtin_shell, current_shell_name, shell_syntax_note
+
+        r = await builtin_shell('echo "x"', allowed_prefixes=["echo"])
+        assert r.content["shell"] == current_shell_name()
+        assert shell_syntax_note(), "每种 shell 都要有写法提醒（注入工具描述）"
+
+    @pytest.mark.asyncio
+    async def test_shell_note_reaches_tool_description(self):
+        """语法提醒必须真的进 LLM system prompt，否则等于没说。"""
+        from agent.builtin.registry import get_default_registry
+        from agent.builtin.shell import shell_syntax_note
+
+        desc = get_default_registry().generate_tool_descriptions()
+        shell_line = next(li for li in desc.splitlines() if li.startswith("- builtin_shell:"))
+        assert shell_syntax_note() in shell_line
 
     @pytest.mark.asyncio
     async def test_blocks_metacharacters(self):
@@ -447,9 +471,87 @@ class TestPythonFallbackShell:
         else:
             cmd = "sleep 5"
         r = await builtin_shell(cmd, allowed_prefixes=[cmd.split(" ")[0]], timeout_sec=1)
-        assert r.ok, r.error
+        # 根治 BUGFIX #165：超时是失败 —— 被强杀的命令没有产出。
+        # 此前断言 r.ok（"进程成功启动"语义），让 tools/loop.py 的停滞熔断看不见空转。
+        assert not r.ok, "timeout must be reported as failure"
+        assert "timeout" in (r.error or "")
         assert r.content["timed_out"] is True
         assert r.content["exit_code"] == 124
+
+
+    # ---- 根治 BUGFIX #165：ok 语义 = 命令达成目标 ----------------------------
+
+    @pytest.mark.asyncio
+    async def test_nonzero_exit_is_failure(self):
+        """核心回归：命令跑了但失败 → ok=False，真实原因进 error。
+
+        此前无条件 ok=True（"进程成功启动"语义），退出码埋在 content 里。
+        后果：tools/loop.py 的停滞熔断（连续 3 轮零成功 → 掐断）计数器一次都涨不
+        起来，模型对着同一条失败命令换了 22 种写法，把 24 轮编排预算烧光。
+        """
+        from agent.builtin.shell import builtin_shell
+
+        r = await builtin_shell("exit 3", allowed_prefixes=["exit"])
+        assert not r.ok, "nonzero exit must be failure"
+        assert "exit_code=3" in (r.error or "")
+        assert r.content is not None, "失败也要保留 content 供模型读 stdout/stderr"
+        assert r.content["exit_code"] == 3
+
+    @pytest.mark.asyncio
+    async def test_allow_nonzero_exit_opt_in(self):
+        """findstr / grep 无匹配返 1、diff 有差异返 1 —— 显式放行。"""
+        from agent.builtin.shell import builtin_shell
+
+        r = await builtin_shell("exit 3", allowed_prefixes=["exit"], allow_nonzero_exit=True)
+        assert r.ok, r.error
+        assert r.content["exit_code"] == 3
+
+    @pytest.mark.asyncio
+    async def test_unknown_command_reports_failure_with_reason(self):
+        """命令不存在时 error 必须带真实原因，而不是让模型去 content.stderr 里翻。"""
+        from agent.builtin.shell import builtin_shell
+
+        r = await builtin_shell(
+            "definitely-not-a-real-command-xyz",
+            allowed_prefixes=["definitely-not-a-real-command-xyz"],
+        )
+        assert not r.ok
+        assert "exit_code=" in (r.error or "")
+
+    @pytest.mark.asyncio
+    async def test_block_hints_are_actionable(self):
+        """拦截必须给出路，否则模型盲试到预算耗尽（BUGFIX #165 的推手）。"""
+        from agent.builtin.shell import builtin_shell
+
+        r = await builtin_shell("echo a && echo b", allowed_prefixes=["echo"])
+        assert not r.ok
+        assert r.hint and "builtin_shell" in r.hint, f"应提示拆分调用: {r.hint}"
+
+        r2 = await builtin_shell("echo a | findstr b", allowed_prefixes=["echo"])
+        assert r2.hint and "builtin_grep" in r2.hint
+
+        # cmd 的 `if exist (...)` 是那次事故里的真实写法之一
+        r3 = await builtin_shell(r'if exist "C:\x" (echo y)', allowed_prefixes=["if"])
+        assert r3.hint and "builtin_stat_file" in r3.hint
+
+        r4 = await builtin_shell("dir x", allowed_prefixes=["echo"])
+        assert r4.hint and "builtin_list_dir" in r4.hint, "白名单拦截也要带 hint"
+
+    @pytest.mark.asyncio
+    async def test_windows_prefers_pwsh_when_available(self):
+        """Windows 上装了 pwsh 就用 pwsh（引号规则比 cmd 一致），否则回退 cmd。"""
+        import sys as _sys
+
+        if _sys.platform != "win32":
+            pytest.skip("Windows-only shell 选择逻辑")
+        from agent.builtin import shell as shell_mod
+
+        argv = shell_mod._win_shell_argv("echo hi")
+        if shell_mod._WIN_PWSH_PATH:
+            assert "pwsh" in argv[0].lower()
+            assert "-NoProfile" in argv and "-NonInteractive" in argv
+        else:
+            assert argv[:2] == ["cmd", "/C"]
 
 
 # ---- dispatcher HITL 前置闸门 ------------------------------------------------
@@ -659,3 +761,202 @@ class TestV2PublicAPI:
         from agent.builtin.tauri_bridge import is_v1_5_implemented
 
         assert is_rust_tool_v1_5_implemented is is_v1_5_implemented
+
+
+# ---- 根治 BUGFIX #166：argv 免引号路径 + cwd + glob 参数名 ------------------
+
+
+class TestShellArgvForm:
+    """argv 数组形式 —— 绕过 shell 引号规则。
+
+    背景：模型为了调用一个路径含空格的 python.exe 连试 22 轮 —— cmd 下直接调用
+    不成立，pwsh 下唯一正确的 `& "路径"` 写法又被危险操作符拦截，被逼进死角。
+    argv 直接 exec，没有引号 / 转义 / 操作符，是唯一可靠路径。
+    """
+
+    @pytest.mark.asyncio
+    async def test_argv_runs_interpreter_with_spaces_in_path(self):
+        import sys as _sys
+
+        from agent.builtin.shell import builtin_shell
+
+        r = await builtin_shell(argv=[_sys.executable, "-c", "print('argv-ok')"])
+        assert r.ok, r.error
+        assert "argv-ok" in r.content["stdout"]
+        assert r.content["shell"] == "none", "argv 不经 shell"
+        assert r.content["argv"][0] == _sys.executable
+
+    @pytest.mark.asyncio
+    async def test_argv_skips_dangerous_operator_check(self):
+        """argv 元素不会被 shell 解释 → 含 & 的字面量参数不该被拦。"""
+        import sys as _sys
+
+        from agent.builtin.shell import builtin_shell
+
+        r = await builtin_shell(argv=[_sys.executable, "-c", "print('a&b|c;d')"])
+        assert r.ok, r.error
+        assert "a&b|c;d" in r.content["stdout"]
+
+    @pytest.mark.asyncio
+    async def test_argv_whitelist_uses_first_element(self):
+        import sys as _sys
+
+        from agent.builtin.shell import builtin_shell
+
+        r = await builtin_shell(argv=[_sys.executable, "-c", "pass"], allowed_prefixes=["nope"])
+        assert not r.ok
+        assert "command_not_allowed" in r.error
+
+    @pytest.mark.asyncio
+    async def test_argv_rejects_non_string_elements(self):
+        from agent.builtin.shell import builtin_shell
+
+        r = await builtin_shell(argv=["echo", 123])  # type: ignore[list-item]
+        assert not r.ok
+        assert "invalid_argv" in r.error
+
+    @pytest.mark.asyncio
+    async def test_empty_argv_and_empty_command(self):
+        from agent.builtin.shell import builtin_shell
+
+        assert "empty_command" in ((await builtin_shell(argv=[""])).error or "")
+        r = await builtin_shell("")
+        assert "empty_command" in (r.error or "")
+        assert "argv" in (r.hint or ""), "空命令时应推荐 argv 形式"
+
+    @pytest.mark.asyncio
+    async def test_cwd_takes_effect(self):
+        """cd 不跨调用生效，切目录必须用 cwd（实测模型在此白花 3 轮）。"""
+        import sys as _sys
+        import tempfile
+        from pathlib import Path as _Path
+
+        from agent.builtin.shell import builtin_shell
+
+        with tempfile.TemporaryDirectory() as td:
+            r = await builtin_shell(
+                argv=[_sys.executable, "-c", "import os;print(os.getcwd())"], cwd=td
+            )
+            assert r.ok, r.error
+            assert _Path(r.content["stdout"].strip()).resolve() == _Path(td).resolve()
+            assert r.content["cwd"]
+
+    @pytest.mark.asyncio
+    async def test_cwd_must_exist(self):
+        import sys as _sys
+
+        from agent.builtin.shell import builtin_shell
+
+        r = await builtin_shell(argv=[_sys.executable, "-c", "pass"], cwd="/nope/xyz/123")
+        assert not r.ok
+        assert "cwd_not_a_directory" in r.error
+
+
+class TestShellRobustness:
+    @pytest.mark.asyncio
+    async def test_windows_path_first_token_not_mangled(self):
+        r"""shlex POSIX 模式会啃掉 Windows 反斜杠 → 正确的白名单也被判违规。
+
+        输入  C:\Users\x\Enterprise AI IDE\python.exe
+        posix=True  → 'C:UsersxEnterprise'   ← 审计里的真实报错
+        posix=False → 'C:\Users\x\Enterprise'
+        """
+        import sys as _sys
+
+        from agent.builtin.shell import _first_token
+
+        if _sys.platform != "win32":
+            pytest.skip("Windows 路径分词专项")
+        raw = r"C:\Users\79834\AppData\Local\Enterprise AI IDE\python.exe --version"
+        assert "\\" in _first_token(raw), "反斜杠不得被吞掉"
+        # 带引号的完整路径应被完整取出且剥掉引号
+        quoted = r'"C:\Program Files\python.exe" script.py'
+        assert _first_token(quoted).startswith("C:\Program Files")
+
+    @pytest.mark.asyncio
+    async def test_unbalanced_quotes_do_not_crash(self):
+        from agent.builtin.shell import _first_token
+
+        assert _first_token('echo "unclosed') == "echo"
+
+    def test_strip_ansi_removes_pwsh_colour_codes(self):
+        """pwsh 彩色报错会把 [31;1m 混进 stderr，挤占 error 的有效信息。"""
+        from agent.builtin.shell import _strip_ansi
+
+        assert _strip_ansi("[31;1mResourceUnavailable[0m: x") == "ResourceUnavailable: x"
+        assert _strip_ansi("\x1b[31mred\x1b[0m") == "red"
+        assert _strip_ansi("array[0] = x") == "array[0] = x", "普通方括号不能被吃掉"
+
+    def test_stderr_digest_is_ansi_free(self):
+        from agent.builtin.shell import _stderr_digest
+
+        assert "[31" not in _stderr_digest("[31;1mboom[0m", "")
+
+
+class TestGlobArgAlias:
+    """glob 参数名 root / base_dir 互为别名（BUGFIX #166）。
+
+    schema 对模型声明 base_dir（可选，默认 "."），Rust GlobArgs 却叫 root 且无默认
+    → 模型按 schema 传参时拿到空串，validate_path("") 报 empty path，
+    glob 工具**永远不可用**。实测模型三次尝试 glob 全被打回，只能退回 shell。
+    """
+
+    def test_build_rust_args_accepts_base_dir(self):
+        from agent.builtin.tauri_bridge import build_rust_args
+
+        out = build_rust_args("glob", {"pattern": "**/*.py", "base_dir": "/tmp"})
+        assert out["root"] == "/tmp"
+
+    def test_build_rust_args_accepts_root(self):
+        from agent.builtin.tauri_bridge import build_rust_args
+
+        out = build_rust_args("glob", {"pattern": "**/*.py", "root": "/tmp"})
+        assert out["root"] == "/tmp"
+
+    def test_build_rust_args_defaults_to_cwd_not_empty(self):
+        """缺省必须回落 "."，绝不能是空串 —— 空串会被 path 沙箱判 empty path。"""
+        from agent.builtin.tauri_bridge import build_rust_args
+
+        out = build_rust_args("glob", {"pattern": "**/*.py"})
+        assert out["root"] == ".", f"缺省应为 '.'，实际 {out['root']!r}"
+
+    def test_python_fallback_accepts_both_names(self):
+        from agent.builtin.fallbacks import builtin_glob_py
+
+        assert builtin_glob_py(pattern="*", base_dir=".").ok
+        assert builtin_glob_py(pattern="*", root=".").ok
+
+    def test_python_fallback_tolerates_rust_only_args(self):
+        """dispatcher 直接 **args 展开时不能因 Rust 专用参数抛 TypeError。"""
+        from agent.builtin.fallbacks import builtin_glob_py
+
+        assert builtin_glob_py(pattern="*", root=".", max_results=10, allowed_roots=[]).ok
+
+
+class TestShellArgvPassThrough:
+    def test_build_rust_args_forwards_argv_and_cwd(self):
+        """桌面端走 Rust —— 新参数不透传等于没修（BUGFIX #165/#166）。"""
+        from agent.builtin.tauri_bridge import build_rust_args
+
+        out = build_rust_args(
+            "shell",
+            {
+                "argv": ["python", "x.py"],
+                "cwd": "/tmp",
+                "allow_nonzero_exit": True,
+                "timeout_sec": 5,
+            },
+        )
+        assert out["argv"] == ["python", "x.py"]
+        assert out["cwd"] == "/tmp"
+        assert out["allow_nonzero_exit"] is True
+        assert out["timeout_sec"] == 5
+
+    def test_tool_description_advertises_argv_and_cwd(self):
+        """模型只看工具描述 —— argv / cwd 不写进去等于不存在。"""
+        from agent.builtin.registry import get_default_registry
+
+        desc = get_default_registry().generate_tool_descriptions()
+        line = next(li for li in desc.splitlines() if li.startswith("- builtin_shell:"))
+        assert "argv" in line
+        assert "cwd" in line

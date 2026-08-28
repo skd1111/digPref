@@ -71,6 +71,11 @@ BUILTIN_TOOL_NAMES: tuple[str, ...] = (
     # V8 LLM 管理工具（2026-08-14：模型接入 / 连通性探测）
     "model_config_upsert",
     "probe_chat_endpoint",
+    # V9 Office 文档工具族（2026-08-25：OfficeCLI 读写 / 渲染引擎）
+    "office_read",
+    "office_edit",
+    "office_create",
+    "office_validate",
 )
 
 
@@ -128,6 +133,12 @@ class ToolResult:
         meta: 元数据（size / line_count / hit_count / elapsed_ms）。
         needs_hitl: 是否触发 HITL（dispatcher 写操作时设置）。
         risk_level: 风险等级（供 audit / downstream policy）。
+        name: 工具名。根治 BUGFIX #164：TS 侧 ToolResult 声明 name 必填，
+            Python 侧此前从不填充（协议漂移），前端拿不到 name 无法配对卡片。
+        call_id: 调用标识，与同一次调用的 tool_call 事件一致（前端配对用）。
+        ui: UI 摘要（summary/icon/path/lines/truncated）——执行过程可视化：
+            大结果体只进 LLM 上下文（result_spill），前端工具卡只展示摘要。
+            镜像 shared-protocol ToolResultUi。
     """
 
     ok: bool = False
@@ -137,6 +148,9 @@ class ToolResult:
     meta: dict = field(default_factory=dict)
     needs_hitl: bool = False
     risk_level: RiskLevel = "read"
+    name: str | None = None
+    call_id: str | None = None
+    ui: dict | None = None
 
     def to_dict(self) -> dict:
         """序列化为 dict（存入 AgentState / audit / SSE）。"""
@@ -148,6 +162,9 @@ class ToolResult:
             "meta": self.meta,
             "needs_hitl": self.needs_hitl,
             "risk_level": self.risk_level,
+            "name": self.name,
+            "call_id": self.call_id,
+            "ui": self.ui,
         }
 
     @classmethod

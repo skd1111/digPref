@@ -140,9 +140,14 @@ def build_rust_args(
             "allowed_roots": allowed_roots,
         }
     elif tool_name == "glob":
+        # 参数名兼容（根治 BUGFIX #166）：schema 对模型声明的是 `base_dir`
+        # （可选，默认 "."），Rust GlobArgs 却叫 `root` 且无默认 —— 模型按 schema
+        # 传 base_dir 时这里取到空串，validate_path("") 直接报 "empty path"，
+        # glob 工具**永远不可用**。实测模型三次尝试 glob 全被打回，只能退回 shell，
+        # 进而撞上 Windows 引号地狱。两个名字都接，缺省一律回落到 "."。
         base = {
             "pattern": args.get("pattern", ""),
-            "root": args.get("root", ""),
+            "root": args.get("root") or args.get("base_dir") or ".",
             "max_results": int(args.get("max_results", 1000)),
             "allowed_roots": allowed_roots,
         }
@@ -161,9 +166,14 @@ def build_rust_args(
     elif tool_name == "shell":
         base = {
             "command": args.get("command", ""),
+            # argv / cwd / allow_nonzero_exit 透传（BUGFIX #165 / #166）：
+            # 此前只传 command，Rust 端拿不到新参数 → 桌面端（走 Rust）等于没修。
+            "argv": list(args.get("argv") or []),
+            "cwd": args.get("cwd") or "",
             "allowed_prefixes": list(args.get("allowed_prefixes") or []),
             "timeout_sec": int(args.get("timeout_sec", 30)),
             "require_hitl": require_hitl,
+            "allow_nonzero_exit": bool(args.get("allow_nonzero_exit", False)),
         }
     return base
 

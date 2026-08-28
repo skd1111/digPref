@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
@@ -115,6 +116,14 @@ _CHANNEL_BY_KIND = {
     "preview_hmr_connected": "agent://preview_hmr_connected",
     "preview_hmr_disconnected": "agent://preview_hmr_disconnected",
     "preview_build_error": "agent://preview_build_error",
+    # 执行过程可视化（Claude Code 式） SSE 三处同步（CLAUDE.md §4）
+    # run_started：流建立后第一帧；tool_progress：长耗时工具阶段文案；
+    # shell_chunk：shell 执行期间流式输出片段（结束帧带 exit_code）；
+    # file_write_preview：写类工具落盘前下发 unified diff 供前端预览+审批。
+    "run_started": "agent://run_started",
+    "tool_progress": "agent://tool_progress",
+    "shell_chunk": "agent://shell_chunk",
+    "file_write_preview": "agent://file_write_preview",
 }
 
 
@@ -126,13 +135,93 @@ def _sse_event(event: str, data: Any) -> dict:
 # 心跳保活间隔（秒）—— BUGFIX #118：Rust sse_bridge 的 reqwest 客户端 read_timeout=60s，
 # LLM 慢调用 / HITL 等审批期间流长时间无字节，客户端会主动断开 → uvicorn 取消图任务 →
 # CancelledError 穿透 except Exception → done/error 发不出，前端永久卡「思考中」。
-# 每 15s 发一条 SSE 注释行（":" 开头，EventSource/reqwest-eventsource 均忽略）保活。
+# 每 15s 发一条具名 heartbeat 事件（BUGFIX #161：原为 SSE 注释行，reqwest 层面保活但
+# 前端不可见；改具名事件后前端看门狗能感知流静默，断连超阈主动解锁防永久卡死）。
 _HEARTBEAT_INTERVAL_SEC = 15.0
 
+# 无图块熔断（BUGFIX #152）：心跳只能防「客户端静默断连」，防不了「图在终止环节
+# 挂死而心跳照常发」（实测：responder 已产出终答但 astream 不退出，流被心跳保活，
+# read_timeout 永不触发 → 前端转圈几分钟不停）。合法场景里 HITL 等待也有 0.25s 一次的
+# 快照块，超过该阈值零块必属病态 → 主动收尾发 done 让前端解锁。
+_MAX_SILENCE_SEC = 600.0
 
-def _sse_heartbeat() -> dict[str, str]:
-    """SSE 注释行心跳（event 为空时 api 层只发 `data:` 行）。"""
-    return {"event": "", "data": "heartbeat"}
+# 过程事件轮询间隔（执行过程可视化）：图块到达间隔内（如单条长耗时工具执行期间）
+# 细粒度事件（shell_chunk / tool_progress）也不能被卡到节点结束才下发，
+# wait_for 超时改用小间隔轮询，心跳仍按 15s 节奏。
+_EVENT_POLL_INTERVAL_SEC = 0.4
+
+
+# ---- 协作式取消旗标（执行过程可视化）--------------------------------------
+#
+# 前端停止按钮既有链路是「关 SSE 连接 → uvicorn 取消图任务」，但取消信号在
+# HITL 等待 / 图节点内部长操作时不一定及时穿透。这里维护 run 级旗标：
+#   - api/chat.py 的 /chat/{run_id}/cancel 写入旗标；
+#   - 本文件流循环每次轮询检查，命中即提前收尾发 done；
+#   - DynamicToolLoop 每轮工具边界检查，命中即短路出循环。
+_CANCELLED_RUNS: set[str] = set()
+
+
+def request_run_cancel(run_id: str) -> None:
+    """置 run 取消旗标（幂等；空 run_id 忽略）。"""
+    rid = str(run_id or "").strip()
+    if rid:
+        _CANCELLED_RUNS.add(rid)
+
+
+def is_run_cancelled(run_id: str) -> bool:
+    """查 run 是否已被请求取消（图节点工具循环边界调用）。"""
+    return str(run_id or "").strip() in _CANCELLED_RUNS
+
+
+def clear_run_cancel(run_id: str) -> None:
+    """清除旗标（流收尾时调用，防集合无界增长与旧旗标误伤复用 run_id）。"""
+    _CANCELLED_RUNS.discard(str(run_id or "").strip())
+
+
+def _sse_heartbeat(run_id: str) -> dict[str, str]:
+    """具名心跳事件（BUGFIX #161）：前端看门狗据此感知流存活。"""
+    return _sse_event("heartbeat", {"kind": "heartbeat", "runId": run_id})
+
+
+def _task_artifact_note(task_id: Any) -> str | None:
+    """任务台账锚点（2026-08-26）：本任务此前交付的文件是硬事实，
+    以 system 消息注入初始 messages，防模型对「太丑了/改一下」类追问反问「看不到你说的内容」。
+    事实不可压（上下文锚点策略）：文件路径永远原样保留。
+    """
+    tid = str(task_id or "").strip()
+    if not tid:
+        return None
+    try:
+        from agent.paths import ledger_read
+
+        artifacts = ledger_read(tid).get("artifacts") or []
+    except Exception:
+        return None
+    if not artifacts:
+        return None
+    lines = [
+        "【本任务已交付的文件（用户提到“这个/那份/上面的文件”时指以下路径，禁止反问看不到内容）】"
+    ]
+    lines.extend(f"- {p}" for p in artifacts[-10:])
+    return "\n".join(lines)
+
+
+def _task_done_payload(extra_state: dict | None) -> dict:
+    """done 事件附带的任务级工作目录信息（2026-08-26）：前端据此弹验收清理卡。"""
+    payload: dict = {}
+    tid = str((extra_state or {}).get("task_id") or "").strip()
+    if not tid:
+        return payload
+    try:
+        from agent.paths import task_dir
+
+        d = task_dir(tid, str((extra_state or {}).get("task_title") or ""))
+        if d is not None:
+            payload["taskId"] = tid
+            payload["taskDir"] = str(d)
+    except Exception:
+        pass
+    return payload
 
 
 # ---- 公开入口 ---------------------------------------------------------------
@@ -179,6 +268,13 @@ async def stream_graph_events(
                     }
                 )
             initial_state["messages"] = prefix + list(history) + initial_state["messages"]
+        # 任务台账锚点（2026-08-26）：此前交付的文件路径注入为 system 事实，
+        # 让终答/工具链都知道「太丑了」指的是哪个文件（不依赖模型自己翻历史）
+        artifact_note = _task_artifact_note(extra_state.get("task_id"))
+        if artifact_note:
+            initial_state["messages"] = [
+                {"role": "system", "content": artifact_note},
+            ] + initial_state["messages"]
         initial_state.update(extra_state)
     # 补充初始 trace 条目
     initial_state["trace"] = [
@@ -191,6 +287,11 @@ async def stream_graph_events(
     # 跟踪已发送的 final_answer 内容（BUGFIX #115）：values 模式下工具循环
     # 与 responder 的快照都带 final_answer，不去重会导致同一回答在 UI 出现两次
     emitted_final_answers: set[str] = set()
+    # 同一 run 内终答消息的固定 id（BUGFIX #142）：终答会被后续节点精修
+    # （工具循环先出原文 → responder 补 clarify 选项块 / 中文重写），内容变化会
+    # 逃过 #115 的内容去重；复用同一 message id 让前端按 id update 原地覆盖，
+    # 而不是 append 出第二条几乎相同的 assistant 消息。空列表 = 尚未分配。
+    final_answer_msg_id: list[str] = []
     # 已下发的 trace 条目数（用列表包装以便在 _convert_chunk 里更新）：
     # 增量下发所有新增条目，工具循环每步操作都能进思维链（2026-08-17）
     sent_trace_count: list[int] = [len(initial_state.get("trace") or [])]
@@ -200,26 +301,60 @@ async def stream_graph_events(
     # 图执行不受影响）。防 Rust reqwest read_timeout=60s 静默断连。
     astream_iter = graph.astream(initial_state, cfg, stream_mode=["values", "updates"]).__aiter__()
     next_task: asyncio.Task[Any] | None = None
+    last_chunk_ts = time.monotonic()
+    # 执行过程可视化：心跳独立计时（轮询间隔缩小到 0.4s 后不能每次都发心跳）
+    last_heartbeat_ts = time.monotonic()
+    cancelled_by_flag = False
+
+    # 执行过程可视化：run 显式开始 —— 流建立后第一帧，前端据此锁定页签忙碌态，
+    # 与 done 配对形成 run 生命周期闭环（多会话并发时不靠流建立隐式感知）。
+    yield _sse_event("run_started", {"kind": "run_started", "runId": run_id})
 
     try:
         while True:
+            # 协作式取消（执行过程可视化）：前端 POST /chat/{run_id}/cancel 置旗标，
+            # 这里在图块边界命中即提前收尾（下方安全路径发 done）。
+            if is_run_cancelled(run_id):
+                cancelled_by_flag = True
+                break
             if next_task is None:
                 next_task = asyncio.ensure_future(astream_iter.__anext__())
             try:
                 chunk = await asyncio.wait_for(
-                    asyncio.shield(next_task), timeout=_HEARTBEAT_INTERVAL_SEC
+                    asyncio.shield(next_task),
+                    # 轮询间隔取两者较小：生产态 = 0.4s（过程事件及时下发）；
+                    # 测试 monkeypatch 心跳间隔时随动（回归套依赖心跳节奏）。
+                    timeout=min(_EVENT_POLL_INTERVAL_SEC, _HEARTBEAT_INTERVAL_SEC),
                 )
             except asyncio.TimeoutError:
-                yield _sse_heartbeat()
+                # BUGFIX #152：超过熔断阈值仍零图块 → 图已病态挂死，主动收尾（下方
+                # 安全路径发 done）；否则心跳会把这条死流永远保活，前端永久转圈。
+                if time.monotonic() - last_chunk_ts > _MAX_SILENCE_SEC:
+                    break
+                # 执行过程可视化：图块间隔内（单条长耗时工具执行期间）也要把已
+                # emit 的细粒度事件（shell_chunk / tool_progress）推出去，
+                # 不能卡到节点结束才下发。
+                for evt in await _drain_process_events():
+                    yield evt
+                if time.monotonic() - last_heartbeat_ts >= _HEARTBEAT_INTERVAL_SEC:
+                    last_heartbeat_ts = time.monotonic()
+                    yield _sse_heartbeat(run_id)
                 continue
             except StopAsyncIteration:
                 break
             next_task = None
+            last_chunk_ts = time.monotonic()
             if not isinstance(chunk, tuple) or len(chunk) != 2:
                 continue
             mode, payload = chunk
             for event in _convert_chunk(
-                mode, payload, run_id, emitted_approvals, sent_trace_count, emitted_final_answers
+                mode,
+                payload,
+                run_id,
+                emitted_approvals,
+                sent_trace_count,
+                emitted_final_answers,
+                final_answer_msg_id,
             ):
                 yield _sse_event(event["event"], event["data"])
             # V2 增量：消费 RouterEngine emit 的路由事件并推到 SSE 流
@@ -252,27 +387,9 @@ async def stream_graph_events(
             # Phase 15 V0：消费 preview HMR / 编译错误事件并推到 SSE 流
             for evt in await _drain_preview_events():
                 yield evt
-    except asyncio.CancelledError:
-        # BUGFIX #118：CancelledError 是 BaseException，下方 except Exception 接不住；
-        # 客户端断开 / 超时取消时补发 error，让还活着的连接能收到终止信号
-        # （done 由 finally 统一补发）
-        yield _sse_event(
-            "error",
-            {"kind": "error", "message": "运行被取消（客户端断开或超时）"},
-        )
-    except Exception as exc:
-        yield _sse_event(
-            "error",
-            {
-                "kind": "error",
-                "message": f"{type(exc).__name__}: {exc}",
-            },
-        )
-    finally:
-        # 提前退出（异常/消费方关闭）时收拾掉仍在等待的 astream 任务
-        if next_task is not None and not next_task.done():
-            next_task.cancel()
-        # 最后再 drain 一次，确保所有 buffered 路由事件都被推完
+        # 正常结束：缓冲事件收尾 + done 放在主流程安全路径（BUGFIX #152：
+        # 此前放 finally 里，消费方一关连接 yield 抛 GeneratorExit → done 永远
+        # 发不出，前端 busy 永久锁死；现只在生成器正常活着时发）
         for evt in await _drain_router_events():
             yield evt
         for evt in await _drain_biznav_events():
@@ -293,7 +410,64 @@ async def stream_graph_events(
             yield evt
         for evt in await _drain_preview_events():
             yield evt
-        yield _sse_event("done", {"kind": "done", "runId": run_id})
+        yield _sse_event(
+            "done",
+            {
+                "kind": "done",
+                "runId": run_id,
+                # 协作式取消命中时标记（前端据此展示「已停止」而非正常完结）
+                **({"cancelled": True} if cancelled_by_flag else {}),
+                **_task_done_payload(extra_state),
+            },
+        )
+    except asyncio.CancelledError:
+        # BUGFIX #152：取消源自消费方关连接（客户端断开 / Rust 桥 cancel），
+        # 此时 yield 要么写不出去、要么违反 async 生成器 GeneratorExit 协议
+        # （catch 后继续执行会 RuntimeError）——直接重抛；终止信号由 Rust 桥
+        # 自己的 DONE(cancelled)/ERROR 兑底（sse_bridge 两条分支都有）。
+        raise
+    except Exception as exc:
+        # 图执行异常：连接通常还活着，error + done 都发（前端靠 done 解 busy）
+        yield _sse_event(
+            "error",
+            {
+                "kind": "error",
+                "message": f"{type(exc).__name__}: {exc}",
+                "runId": run_id,
+            },
+        )
+        yield _sse_event(
+            "done", {"kind": "done", "runId": run_id, **_task_done_payload(extra_state)}
+        )
+    finally:
+        # BUGFIX #152：finally 只做同步清理，不 yield 不 await —— 消费方已关闭时
+        # 这里 yield 会抛 GeneratorExit 打断收尾，是本次 done 丢失的根因。
+        # 执行过程可视化：清除取消旗标，防集合无界增长与旧旗标误伤复用 run_id。
+        clear_run_cancel(run_id)
+        if next_task is not None and not next_task.done():
+            next_task.cancel()
+
+
+async def _drain_process_events() -> list[dict]:
+    """一次性排空所有进程内事件队列（执行过程可视化轮询排空用）。
+
+    顺序与主循环 / 收尾处的逐个 drain 一致；每个 drain 自带 best-effort 兜底。
+    """
+    events: list[dict] = []
+    for drain in (
+        _drain_router_events,
+        _drain_biznav_events,
+        _drain_skill_events,
+        _drain_builtin_events,
+        _drain_image_events,
+        _drain_ssh_events,
+        _drain_audit_events,
+        _drain_doc_review_events,
+        _drain_orchestrator_events,
+        _drain_preview_events,
+    ):
+        events.extend(await drain())
+    return events
 
 
 async def _drain_router_events() -> list[dict]:
@@ -525,6 +699,7 @@ def _convert_chunk(
     emitted_approvals: set[str],
     sent_trace_count: list[int] | None = None,
     emitted_final_answers: set[str] | None = None,
+    final_answer_msg_id: list[str] | None = None,
 ) -> list[dict]:
     """将一个 LangGraph 流块转换为 0..N 个 AgentStreamEvent 字典。"""
     events: list[dict] = []
@@ -576,6 +751,9 @@ def _convert_chunk(
                             "data": {
                                 "kind": "approval",
                                 "approval": approval_payload,
+                                # 多会话并发（2026-08-26）：审批卡也按 run 归属页签路由，
+                                # 避免并发时 A 会话的审批弹到 B 会话
+                                "runId": run_id,
                             },
                         }
                     )
@@ -587,15 +765,28 @@ def _convert_chunk(
             ):
                 if emitted_final_answers is not None:
                     emitted_final_answers.add(final_answer)
+                # 固定消息 id（BUGFIX #142）：同一 run 内终答被后续节点精修时内容变化，
+                # 会逃过 #115 的内容去重；首次分配一个 id，后续精修复用它，前端
+                # 按 id update 原地覆盖 → 对话里始终只有一条终答，不会 append 出重复消息。
+                if final_answer_msg_id is None:
+                    msg_id = str(uuid.uuid4())
+                elif final_answer_msg_id:
+                    msg_id = final_answer_msg_id[0]
+                else:
+                    msg_id = str(uuid.uuid4())
+                    final_answer_msg_id.append(msg_id)
                 events.append(
                     {
                         "event": "message",
                         "data": {
                             "kind": "message",
                             "message": {
-                                "id": str(uuid.uuid4()),
+                                "id": msg_id,
                                 "role": "assistant",
                                 "content": final_answer,
+                                # 多会话并发（2026-08-26）：消息带 run 归属，
+                                # 前端按 runId→页签路由，两个会话的流不串台
+                                "runId": run_id,
                             },
                         },
                     }
@@ -608,6 +799,15 @@ def _convert_chunk(
         for node_name, delta in payload.items():
             if not isinstance(delta, dict):
                 continue
+            # 工具调用配对标识（根治 BUGFIX #164）：tool_call 与 tool_result
+            # 此前各自 uuid4，前端无从配对 → running 卡片永久转圈。call_id 由
+            # tool_runner / builtin dispatcher 写进 call 字典，两条事件同源读取。
+            _pending_call = delta.get("pending_tool_call")
+            _call_id = None
+            _call_name = None
+            if isinstance(_pending_call, dict):
+                _call_id = _pending_call.get("call_id")
+                _call_name = _pending_call.get("name")
             if delta.get("pending_tool_call"):
                 events.append(
                     {
@@ -615,18 +815,29 @@ def _convert_chunk(
                         "data": {
                             "kind": "tool_call",
                             "id": str(uuid.uuid4()),
+                            "callId": _call_id,
                             "call": delta["pending_tool_call"],
+                            # 多会话并发（2026-08-26）：携带 run 归属供前端按页签路由
+                            "runId": run_id,
                         },
                     }
                 )
             if delta.get("tool_result") is not None:
+                _result = delta["tool_result"]
+                # name 回填：ToolResult.to_dict() 与 MCP invoke 返回值都不带 name，
+                # 但 TS 侧 ToolResult 声明 name 必填（协议漂移）。这里按 call 补齐，
+                # 让 callId 配对失败时前端仍有 name 兜底。
+                if isinstance(_result, dict) and not _result.get("name") and _call_name:
+                    _result = {**_result, "name": _call_name}
                 events.append(
                     {
                         "event": "tool_result",
                         "data": {
                             "kind": "tool_result",
                             "id": str(uuid.uuid4()),
-                            "result": delta["tool_result"],
+                            "callId": _call_id,
+                            "result": _result,
+                            "runId": run_id,
                         },
                     }
                 )
@@ -654,6 +865,7 @@ def _convert_chunk(
                             "matched_keywords": getattr(routing, "matched_keywords", [])
                             if routing
                             else [],
+                            "runId": run_id,
                         },
                     }
                 )

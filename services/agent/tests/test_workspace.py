@@ -103,10 +103,27 @@ class TestDispatcherRule:
         # 原 args 不被就地修改
         assert args["path"] == "结果.txt"
 
-    def test_user_absolute_path_untouched(self, _ws_env):
+    def test_user_mentioned_absolute_path_untouched(self, _ws_env):
+        """2026-08-26 收紧：绝对路径只有在用户对话原文中出现过才算用户指定。"""
+        target = str(_ws_env / "user" / "x.csv")
+        state = {"user_prompt": f"把结果导出到 {target}", "messages": []}
+        out = _apply_workspace_rule("excel_export", {"path": target}, state)
+        assert out["path"] == str(Path(target).resolve())
+
+    def test_model_fabricated_absolute_path_redirected(self, _ws_env):
+        """模型自造的绝对路径（对话未提及）→ 收进工作空间，防散落用户目录。"""
+        target = str(_ws_env / "user" / "x.csv")
+        state = {"user_prompt": "导出近一周的数据", "messages": []}
+        out = _apply_workspace_rule("excel_export", {"path": target}, state)
+        ws = (_ws_env / "root" / "workspace").resolve()
+        assert out["path"] == str(ws / "data" / "x.csv")
+
+    def test_legacy_call_without_state_redirects_absolute(self, _ws_env):
+        """无 state 的旧式调用同样收紧（绝对路径不在对话中 → 进工作空间）。"""
         target = str(_ws_env / "user" / "x.csv")
         out = _apply_workspace_rule("excel_export", {"path": target})
-        assert out["path"] == str(Path(target).resolve())
+        ws = (_ws_env / "root" / "workspace").resolve()
+        assert out["path"] == str(ws / "data" / "x.csv")
 
     def test_non_create_tool_untouched(self, _ws_env):
         args = {"path": "任意.txt"}

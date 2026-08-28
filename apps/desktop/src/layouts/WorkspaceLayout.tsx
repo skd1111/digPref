@@ -43,6 +43,8 @@ import { CollabCenter } from '@/views/CollabCenter';
 // reqflow V1：需求工作台（运营专家需求卡片管理）
 import { ReqWorkbenchView } from '@/views/ReqWorkbenchView';
 import { BusinessFeatureTree } from '@/components/asset-tree/BusinessFeatureTree';
+// 左侧「任务计划」面板（2026-08-28）：与资源管理器并列可切，竖向进度卡常驻展示
+import { LeftTaskPlanPanel } from '@/components/chat/LeftTaskPlanPanel';
 // Phase 6 V1.5：会话管理侧栏（穿透所有 mode；FTS5 搜索 + 会话列表 + 分支/共享/导出/恢复入口）
 import { SessionsPanel } from '@/components/sessions/SessionsPanel';
 // BUGFIX #67 (2026-08-13)：会话内嵌浏览视图（替换 <Outlet />；之前 router 没注册
@@ -331,6 +333,28 @@ const WORKSPACE_TRANSITION_CSS = `
 // ---- SideBar：左侧面板（始终显示，由 ActivityBar 控制内容） -------------
 
 function SideBar({ activity, mode }: { activity: ActivityId; mode: WorkMode }): JSX.Element {
+  // 左侧面板宽度可拖拽（2026-08-28）：同右侧控制台面板的 sash 方案
+  const panelWidth = useUIStore((s) => s.leftPanelWidth);
+  const setPanelWidth = useUIStore((s) => s.setLeftPanelWidth);
+  const leftView = useUIStore((s) => s.leftView);
+  const [dragging, setDragging] = useState(false);
+  const dragRef = useRef<{ startX: number; startW: number } | null>(null);
+  const onSashDown = (e: ReactPointerEvent<HTMLDivElement>): void => {
+    dragRef.current = { startX: e.clientX, startW: panelWidth };
+    setDragging(true);
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onSashMove = (e: ReactPointerEvent<HTMLDivElement>): void => {
+    const d = dragRef.current;
+    if (!d) return;
+    // 面板靠左：向右拖（clientX - startX > 0）变宽
+    setPanelWidth(d.startW + (e.clientX - d.startX));
+  };
+  const onSashUp = (): void => {
+    dragRef.current = null;
+    setDragging(false);
+  };
+
   // Phase 2F V0 收尾 (2026-07-28)：code-nav 全屏渲染 FindInFiles symbol 模式
   // SideBar 折叠让位 320px 双栏（用 JS early-return 而非 CSS :has，避免 ActivityBar 切换瞬间 SideBar 闪烁）。
   // 这与 collab 的 CSS :has 方案不同 —— V1 应统一为一种模式。
@@ -353,25 +377,45 @@ function SideBar({ activity, mode }: { activity: ActivityId; mode: WorkMode }): 
       />
     );
   }
+  // 任务计划视图生效范围：仅开发模式 + explorer activity（其它 activity 各有专属内容）
+  const showPlan = mode === 'full' && activity === 'explorer' && leftView === 'plan';
   return (
     <aside
-      className="workspace-sidebar flex flex-col overflow-hidden"
+      className="workspace-sidebar relative flex flex-col overflow-hidden"
       style={{
-        width: 260,
+        width: panelWidth,
         backgroundColor: '#f3f3f3',
         borderRight: '1px solid #e0e0e0',
-        transition: 'width 220ms cubic-bezier(0.4, 0, 0.2, 1)',
+        transition: dragging
+          ? 'none'
+          : 'width 220ms cubic-bezier(0.4, 0, 0.2, 1)',
       }}
     >
+      {/* 拖拽条：右缘 5px，hover 高亮；双击恢复默认 260 */}
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        title="拖动调节宽度，双击恢复默认"
+        onPointerDown={onSashDown}
+        onPointerMove={onSashMove}
+        onPointerUp={onSashUp}
+        onDoubleClick={() => setPanelWidth(260)}
+        className="absolute right-0 top-0 z-10 h-full w-[5px] hover:bg-[#0078d4]/40"
+        style={{ cursor: 'col-resize', backgroundColor: dragging ? 'rgba(0,120,212,0.4)' : 'transparent' }}
+      />
       <SideBarHeader activity={activity} mode={mode} />
       {/* Phase 2H：开发模式下显示 系统资产/文件列表/系统功能点 三态子切换；
-          会话管理/数据字典等自带专属内容的 activity 不显示（用户要求 2026-08-07） */}
-      {mode === 'full' && activity !== 'sessions' && activity !== 'search' && activity !== 'collab' && activity !== 'data-dict' && (
+          会话管理/数据字典等自带专属内容的 activity 不显示（用户要求 2026-08-07）；
+          任务计划视图下隐藏（计划面板自带全高内容区） */}
+      {mode === 'full' && !showPlan && activity !== 'sessions' && activity !== 'search' && activity !== 'collab' && activity !== 'data-dict' && (
         <LeftPanelDevSwitcher />
       )}
       <div className="flex-1 overflow-auto">
-        {/* Phase 9 协作中心：center 区域已全屏渲染，SideBar 折叠（CSS） */}
-        {activity === 'collab' ? (
+        {showPlan ? (
+          // 任务计划（2026-08-28）：竖向进度卡常驻左侧，不随对话区滚动丢失
+          <LeftTaskPlanPanel />
+        ) : activity === 'collab' ? (
+          // Phase 9 协作中心：center 区域已全屏渲染，SideBar 折叠（CSS）
           <PlaceholderPanel title="协作中心" hint="主区域全屏展示，点击 ActivityBar 其他图标切换" />
         ) : activity === 'search' ? (
           // Phase 2F：search activity 穿透所有 mode（搜索是横切能力，不被 mode 覆盖）
@@ -436,6 +480,10 @@ function SideBarHeader({
   // 旧实现把 useLeftPanelContent() 写在三元表达式里，仅 mode==='full' 时才调，
   // 切换左侧面板（系统资产/文件列表/系统功能点）时 hook 数量变化 → React #300。
   const content = useLeftPanelContent();
+  const leftView = useUIStore((s) => s.leftView);
+  const setLeftView = useUIStore((s) => s.setLeftView);
+  // 资源管理器 / 任务计划 并列切换（2026-08-28）：仅开发模式 + explorer activity
+  const switchable = mode === 'full' && activity === 'explorer';
   // Phase 2H：开发模式标题跟随 devPanelMode；但 sessions/search/collab 等自带专属内容的
   // activity 始终用 TITLES（否则会话管理会显示成「文件列表/系统功能点」，用户要求 2026-08-07）
   const title =
@@ -446,6 +494,37 @@ function SideBarHeader({
           ? '系统功能点'
           : TITLES[activity]
       : TITLES[activity];
+  if (switchable) {
+    return (
+      <div
+        className="flex h-[35px] items-stretch border-b text-ui font-semibold uppercase tracking-wide"
+        style={{ borderColor: '#e0e0e0', color: '#333333' }}
+      >
+        {([
+          ['explorer', TITLES.explorer],
+          ['plan', '任务计划'],
+        ] as Array<['explorer' | 'plan', string]>).map(([view, label]) => {
+          const activeView = leftView === view;
+          return (
+            <button
+              key={view}
+              type="button"
+              onClick={() => setLeftView(view)}
+              className="flex-1 border-b-2 px-2 transition-colors"
+              style={{
+                borderColor: activeView ? '#0078d4' : 'transparent',
+                color: activeView ? '#0078d4' : '#6e6e6e',
+                backgroundColor: activeView ? '#ffffff' : 'transparent',
+              }}
+              title={label}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
   return (
     <div
       className="flex h-[35px] items-center justify-between border-b px-4 text-ui font-semibold uppercase tracking-wide"

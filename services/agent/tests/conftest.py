@@ -79,7 +79,7 @@ def mock_llm():
         async def repair_call(self, *, original, error, history):
             return {**original, "args": {"sql": "SELECT 2"}}
 
-        async def summarise(self, *, intent, user_prompt, plan, results):
+        async def summarise(self, *, intent, user_prompt, plan, results, history=None):
             return "Mock final answer.", ["db"]
 
     return _Mock()

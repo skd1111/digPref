@@ -77,6 +77,11 @@ data-full = [
     "jinja2>=3.1",
     "RestrictedPython>=7.0",
 ]
+# V9: 复杂文档解析增强（file_to_markdown 的 Docling 兜底；表格结构还原更强）
+# markitdown 失败 / 结果为空时自动降级；缺失时静默跳过不崩溃（与 openpyxl 同模式）
+parse-full = [
+    "docling>=2.0",
+]
 
 [project.scripts]
 eaide-agent = "agent.main:run"

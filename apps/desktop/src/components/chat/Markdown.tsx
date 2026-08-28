@@ -13,6 +13,7 @@
  */
 import { useMemo, useState, type ReactNode } from 'react';
 import { AiTodoList } from './AiStatus';
+import { FilePathChip, isFilePath, renderTextWithPaths } from './FilePathChip';
 
 /** 行内标记正则：`code`、**bold**、*em*、~~del~~、[text](url)；\x0A 即换行符 */
 /* \x0A 为有意使用的控制字符（排除跨行匹配） */
@@ -26,18 +27,26 @@ function safeUrl(url: string): string {
   return /^https?:\/\//i.test(url) ? url : '#';
 }
 
-/** 行内语法解析为 React 节点（递归处理 bold 内部的 em 等） */
+/** 行内语法解析为 React 节点（递归处理 bold 内部的 em 等）。
+ *  纯文本与行内代码中的文件路径（2026-08-26）渲染为可点击 FilePathChip：
+ *  左键默认程序打开，右键资源管理器/复制等菜单。 */
 export function renderInline(text: string): ReactNode[] {
   const nodes: ReactNode[] = [];
   let last = 0;
   let k = 0;
   for (const m of text.matchAll(INLINE_RE)) {
     const idx = m.index ?? 0;
-    if (idx > last) nodes.push(text.slice(last, idx));
+    if (idx > last) nodes.push(...renderTextWithPaths(text.slice(last, idx), `t${k}`));
     const s = m[0];
     const key = `i${k++}`;
     if (s.startsWith('`')) {
-      nodes.push(<code key={key} className="md-ic">{s.slice(1, -1)}</code>);
+      const inner = s.slice(1, -1);
+      // 行内代码整体是文件路径 → 可交互胶囊（点击直接打开）；否则普通代码样式
+      if (isFilePath(inner)) {
+        nodes.push(<FilePathChip key={key} path={inner.trim()} />);
+      } else {
+        nodes.push(<code key={key} className="md-ic">{inner}</code>);
+      }
     } else if (s.startsWith('**')) {
       nodes.push(<strong key={key}>{renderInline(s.slice(2, -2))}</strong>);
     } else if (s.startsWith('~~')) {
@@ -56,7 +65,7 @@ export function renderInline(text: string): ReactNode[] {
     }
     last = idx + s.length;
   }
-  if (last < text.length) nodes.push(text.slice(last));
+  if (last < text.length) nodes.push(...renderTextWithPaths(text.slice(last), `t${k}`));
   return nodes;
 }
 

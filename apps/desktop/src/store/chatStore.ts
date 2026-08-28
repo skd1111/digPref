@@ -57,9 +57,6 @@ interface ChatState {
   // reqflow V1 需求对齐上下文：多功能点（功能点树「发起改造需求」写入）
   alignmentFeatures: FeatureContextPayload[] | null;
 
-  // Phase 2D V0 业务技能上下文（由 agentStream 写入，SKILL_MATCHED 事件）
-  selectedSkill: { skill_id: string; skill_name: string; matched_keywords: string[] } | null;
-
   // Phase 4 V0 推理模式：normal = 端侧优先，performance = 全走云端
   inferenceMode: 'normal' | 'performance';
 
@@ -76,6 +73,25 @@ interface ChatState {
   // （write_file / edit_file 成功）写入，done 时汇总成 changed_files 卡片追入对话。
   // 不持久化（运行态；卡片消息本身随 tabs 持久化）。
   changedFiles: string[];
+
+  // 本轮任务交付产物累积（2026-08-26）：创建类工具（office_create/word_generate/
+  // excel_export/pdf_merge 等）成功落盘的路径；done 时决定是否弹验收清理卡。
+  taskArtifacts: string[];
+
+  // Skill 粘性（2026-08-26）：最近一次命中的 skill（skill_matched 事件写入），
+  // 随下次发送透传，追问/修改轮由后端继承该 skill。
+  lastSkillId: string | null;
+
+  // 执行归属与阶段（多会话并发，2026-08-26）：
+  // 多个页签可同时各跑一个 run；runTabMap/tabRunIds 双向归属，
+  // busyTabIds 决定哪些页签显示思考态；阶段/产物/改动文件全部按 run 隔离。
+  busyTabIds: string[];
+  runTabMap: Record<string, string>;
+  tabRunIds: Record<string, string>;
+  runPhaseByRun: Record<string, { phase: 'model' | 'tool'; detail: string }>;
+  changedFilesByRun: Record<string, string[]>;
+  artifactsByRun: Record<string, string[]>;
+  runStartTsByRun: Record<string, number>;
 
   // tab 操作
   newTab: (title?: string, mode?: WorkMode) => void;
@@ -96,16 +112,47 @@ interface ChatState {
   /** 追加 Codex/Claude 风格执行 step —— 同 runId+category 自动合并 running → ok */
   appendExecution: (m: ChatMessage) => void;
   update: (id: string, patch: Partial<ChatMessage>) => void;
+  /** 审批决策提交成功后：剥离 pendingApproval + 改写为结果文案（2026-08-25，
+   *  修「提交中」永久卡死：exactOptionalPropertyTypes 下不能显式赋 undefined，
+   *  专用 action 用解构剥字段） */
+  resolvePendingApproval: (messageId: string, summary: string) => void;
+  /** 任务进度待办（2026-08-25，BUGFIX #169）：按固定 id 原地更新 kind='todo' 消息，
+   *  同一任务始终一张卡（模型调 update_todos 驱动，实时刷新）。
+   *  tabId 由调用方按 run 归属传入 —— 绝不写激活页签（并发会话不串台） */
+  upsertTodo: (tabId: string, messageId: string, itemsJson: string) => void;
   setBusy: (b: boolean) => void;
   setRunId: (id: string | null) => void;
   setFeatureContext: (ctx: FeatureContextPayload | null) => void;
   setOpsNavContext: (ctx: FeatureContextPayload | null) => void;
   setAlignmentFeatures: (fs: FeatureContextPayload[] | null) => void;
-  setSelectedSkill: (s: { skill_id: string; skill_name: string; matched_keywords: string[] } | null) => void;
 
-  // 2026-08-19 改动文件累积（去重）+ 清空
-  addChangedFile: (path: string) => void;
-  clearChangedFiles: () => void;
+  // 2026-08-26 任务产物累积（按 run 隔离）+ skill 粘性记录
+  addTaskArtifact: (runId: string, path: string) => void;
+  setLastSkillId: (id: string | null) => void;
+
+  // 2026-08-26 多会话并发：run 生命周期与按页签路由
+  startRun: (runId: string, tabId: string) => void;
+  endRun: (runId: string) => void;
+  isRunKnown: (runId: string | undefined) => boolean;
+  runForTab: (tabId: string) => string | undefined;
+  attributeRun: (eventRunId?: string) => string;
+  setRunPhaseForRun: (runId: string, phase: 'model' | 'tool', detail?: string) => void;
+  addChangedFile: (runId: string, path: string) => void;
+  appendToTab: (tabId: string, m: ChatMessage) => void;
+  appendExecutionToTab: (tabId: string, m: ChatMessage) => void;
+  // ---- 执行过程可视化（阶段三）：shell 流式输出缓冲 + 工具进度文案 ----
+  /** call_id → shell 流式输出累积（shell_chunk 事件逐批归并） */
+  shellOutputByCall: Record<string, string>;
+  /** call_id → 结束帧退出码（到达即关闭流式态；未到 = 仍在跑） */
+  shellExitByCall: Record<string, number>;
+  /** call_id → tool_progress 最新阶段文案（工具卡副标题实时刷新） */
+  toolProgressByCall: Record<string, string>;
+  /** call_id → 写前预览信息（path + unified diff，审批卡侧 FullDiffModal 用） */
+  writePreviewByCall: Record<string, { path: string; diff: string }>;
+  appendShellChunk: (callId: string, chunk: string) => void;
+  closeShellStream: (callId: string, exitCode: number) => void;
+  setToolProgress: (callId: string, message: string) => void;
+  setWritePreview: (callId: string, path: string, diff: string) => void;
 
   // Phase 4 V0
   setInferenceMode: (mode: 'normal' | 'performance') => void;
@@ -156,7 +203,9 @@ function sanitizeRestored(tabs: ChatTab[]): ChatTab[] {
   return tabs.map((t) => ({
     ...t,
     messages: t.messages.map((m) =>
-      m.kind === 'execution' && m.status === 'running' ? { ...m, status: 'ok' as const } : m,
+      (m.kind === 'execution' || m.kind === 'search') && m.status === 'running'
+        ? { ...m, status: 'ok' as const }
+        : m,
     ),
   }));
 }
@@ -173,12 +222,25 @@ export const useChatStore = create<ChatState>()(
     selectedFeatureContext: null,
     opsNavContext: null,
     alignmentFeatures: null,
-    selectedSkill: null,
     inferenceMode: 'normal',  // Phase 4 V0: 默认正常模式（端侧优先）
     autonomy: 'interactive',  // Phase 18: 默认交互模式（安全默认值）
-    changedFiles: [],          // 2026-08-19: 本轮改动文件累积（运行态）
+    changedFiles: [],          // 已废弃（2026-08-26 并发改造）：改用 changedFilesByRun；保留字段仅为兼容旧引用，恒为空
+    taskArtifacts: [],         // 已废弃（2026-08-26 并发改造）：改用 artifactsByRun；保留字段仅为兼容旧引用，恒为空
+    lastSkillId: null,         // 2026-08-26: skill 粘性（最近一次命中的 skill）
+    busyTabIds: [],            // 2026-08-26 并发：正在执行的页签集合（可多个）
+    runTabMap: {},             // runId → tabId（活跃 run）
+    tabRunIds: {},             // tabId → runId
+    runPhaseByRun: {},         // runId → 执行阶段（等模型返回 / 工具调用中）
+    changedFilesByRun: {},     // runId → 本轮改动文件累积
+    artifactsByRun: {},        // runId → 本轮交付产物累积
+    runStartTsByRun: {},       // runId → 开始时间戳（整轮耗时统计）
     runStartTs: null,
     lastRunMs: null,
+    // 执行过程可视化（阶段三）：运行态缓冲，不进持久化（partialize 白名单外）
+    shellOutputByCall: {},
+    shellExitByCall: {},
+    toolProgressByCall: {},
+    writePreviewByCall: {},
 
     newTab: (title, mode) => {
       const t: ChatTab = { id: newId(), title: title ?? '新会话', messages: [], mode: mode ?? 'full' };
@@ -294,18 +356,95 @@ export const useChatStore = create<ChatState>()(
 
     update: (id, patch) =>
       set((s) => ({
+        // 多会话并发（2026-08-26）：消息 id 全局唯一，跨页签查找更新，
+        // 不再限定激活页签（另一会话的终答更新不能丢）
+        tabs: s.tabs.map((t) => ({
+          ...t,
+          messages: t.messages.map((m) => (m.id === id ? { ...m, ...patch } : m)),
+        })),
+      })),
+
+    // 2026-08-26 多会话并发：指定页签追加（事件按 runId→页签路由，不串台）
+    appendToTab: (tabId, m) =>
+      set((s) => ({
+        tabs: s.tabs.map((t) => (t.id === tabId ? { ...t, messages: [...t.messages, m] } : t)),
+      })),
+
+    appendExecutionToTab: (tabId, m) =>
+      set((s) => {
+        const tab = s.tabs.find((t) => t.id === tabId);
+        if (!tab) return s;
+        const list = [...tab.messages];
+        // 与 appendExecution 同款：同 category 最近一条 running 合并更新，否则追加
+        if (m.status && m.status !== 'running') {
+          for (let i = list.length - 1; i >= 0; i--) {
+            const prev = list[i];
+            if (
+              prev.kind === 'execution' &&
+              prev.category === m.category &&
+              prev.status === 'running'
+            ) {
+              list[i] = {
+                ...prev,
+                status: m.status,
+                content: m.content,
+                ...(m.latencyMs != null ? { latencyMs: m.latencyMs } : {}),
+              };
+              return { tabs: s.tabs.map((t) => (t.id === tab.id ? { ...t, messages: list } : t)) };
+            }
+          }
+        }
+        const clean: ChatMessage = {
+          id: m.id,
+          role: m.role,
+          content: m.content,
+          ...(m.code != null ? { code: m.code } : {}),
+          ...(m.codeLang != null ? { codeLang: m.codeLang } : {}),
+          ...(m.pendingApproval != null ? { pendingApproval: m.pendingApproval } : {}),
+          ...(m.kind != null ? { kind: m.kind } : {}),
+          ...(m.category != null ? { category: m.category } : {}),
+          ...(m.latencyMs != null ? { latencyMs: m.latencyMs } : {}),
+          ...(m.status != null ? { status: m.status } : {}),
+          ...(m.runId != null ? { runId: m.runId } : {}),
+        };
+        list.push(clean);
+        return { tabs: s.tabs.map((t) => (t.id === tab.id ? { ...t, messages: list } : t)) };
+      }),
+
+    resolvePendingApproval: (messageId, summary) =>
+      set((s) => ({
         tabs: s.tabs.map((t) => {
           if (t.id !== s.activeTabId) return t;
           return {
             ...t,
-            messages: t.messages.map((m) => (m.id === id ? { ...m, ...patch } : m)),
+            messages: t.messages.map((m): ChatMessage => {
+              if (m.id !== messageId) return m;
+              const { pendingApproval: _omit, ...rest } = m;
+              return { ...rest, content: summary };
+            }),
+          };
+        }),
+      })),
+
+    upsertTodo: (tabId, messageId, itemsJson) =>
+      set((s) => ({
+        tabs: s.tabs.map((t) => {
+          if (t.id !== tabId) return t;
+          const exists = t.messages.some((m) => m.id === messageId);
+          return {
+            ...t,
+            messages: exists
+              ? t.messages.map((m) => (m.id === messageId ? { ...m, content: itemsJson } : m))
+              : [
+                  ...t.messages,
+                  { id: messageId, role: 'system' as const, kind: 'todo' as const, content: itemsJson },
+                ],
           };
         }),
       })),
 
     setBusy: (b) => set({ busy: b }),
     setRunId: (id) => set({ runId: id }),
-    setSelectedSkill: (s) => set({ selectedSkill: s }),
     setFeatureContext: (ctx) => set({ selectedFeatureContext: ctx }),
     setOpsNavContext: (ctx) => set({ opsNavContext: ctx }),
     setAlignmentFeatures: (fs) => set({ alignmentFeatures: fs }),
@@ -320,12 +459,122 @@ export const useChatStore = create<ChatState>()(
     // Phase 18
     setAutonomy: (a) => set({ autonomy: a }),
 
-    // 2026-08-19 改动文件累积（同路径去重）+ 清空
-    addChangedFile: (path) =>
-      set((s) =>
-        s.changedFiles.includes(path) ? s : { changedFiles: [...s.changedFiles, path] },
-      ),
-    clearChangedFiles: () => set({ changedFiles: [] }),
+    // 2026-08-26 多会话并发：run 生命周期（发送时 startRun，done/error 时 endRun）
+    startRun: (runId, tabId) =>
+      set((s) => ({
+        runId,
+        busy: true,
+        runTabMap: { ...s.runTabMap, [runId]: tabId },
+        tabRunIds: { ...s.tabRunIds, [tabId]: runId },
+        busyTabIds: s.busyTabIds.includes(tabId) ? s.busyTabIds : [...s.busyTabIds, tabId],
+        runPhaseByRun: { ...s.runPhaseByRun, [runId]: { phase: 'model', detail: '' } },
+        changedFilesByRun: { ...s.changedFilesByRun, [runId]: [] },
+        artifactsByRun: { ...s.artifactsByRun, [runId]: [] },
+        runStartTsByRun: { ...s.runStartTsByRun, [runId]: Date.now() },
+      })),
+
+    endRun: (runId) =>
+      set((s) => {
+        const tabId = s.runTabMap[runId];
+        const runTabMap = { ...s.runTabMap };
+        const tabRunIds = { ...s.tabRunIds };
+        const runPhaseByRun = { ...s.runPhaseByRun };
+        const changedFilesByRun = { ...s.changedFilesByRun };
+        const artifactsByRun = { ...s.artifactsByRun };
+        const runStartTsByRun = { ...s.runStartTsByRun };
+        delete runTabMap[runId];
+        delete runPhaseByRun[runId];
+        delete changedFilesByRun[runId];
+        delete artifactsByRun[runId];
+        delete runStartTsByRun[runId];
+        if (tabId && tabRunIds[tabId] === runId) delete tabRunIds[tabId];
+        // 整轮耗时：最后一个结束的 run 写全局展示字段（兼容旧展示逻辑）
+        const startedAt = s.runStartTsByRun[runId];
+        const busyTabIds = tabId ? s.busyTabIds.filter((t) => t !== tabId) : s.busyTabIds;
+        // 残留 running 强制收尾（根治 BUGFIX #164）：一轮已经结束，本轮页签里
+        // 任何仍在转圈的执行/搜索卡片都不可能再收到结果事件了 —— 强制翻成 ok。
+        // 这是兜底层：即使未来配对逻辑再出问题，也不会留下永久转圈的卡片。
+        const tabs = tabId
+          ? s.tabs.map((t) =>
+              t.id === tabId
+                ? {
+                    ...t,
+                    messages: t.messages.map((m) =>
+                      (m.kind === 'execution' || m.kind === 'search') && m.status === 'running'
+                        ? { ...m, status: 'ok' as const }
+                        : m,
+                    ),
+                  }
+                : t,
+            )
+          : s.tabs;
+        return {
+          tabs,
+          runTabMap,
+          tabRunIds,
+          runPhaseByRun,
+          changedFilesByRun,
+          artifactsByRun,
+          runStartTsByRun,
+          busyTabIds,
+          busy: busyTabIds.length > 0,
+          runId: s.runId === runId ? null : s.runId,
+          ...(startedAt != null ? { lastRunMs: Date.now() - startedAt, runStartTs: null } : {}),
+        };
+      }),
+
+    isRunKnown: (runId) => Boolean(runId && get().runTabMap[runId] != null),
+    runForTab: (tabId) => get().tabRunIds[tabId],
+
+    /** 事件归属 run：带 runId 直接用；否则只有一个活跃 run 时归它，再否则归当前页签的 run */
+    attributeRun: (eventRunId) => {
+      const s = get();
+      if (eventRunId) return eventRunId;
+      const runs = Object.keys(s.runTabMap);
+      if (runs.length === 1) return runs[0];
+      return s.tabRunIds[s.activeTabId] ?? '';
+    },
+
+    setRunPhaseForRun: (runId, phase, detail = '') =>
+      set((s) => ({ runPhaseByRun: { ...s.runPhaseByRun, [runId]: { phase, detail } } })),
+
+    addChangedFile: (runId, path) =>
+      set((s) => {
+        const list = s.changedFilesByRun[runId] ?? [];
+        if (list.includes(path)) return s;
+        return { changedFilesByRun: { ...s.changedFilesByRun, [runId]: [...list, path] } };
+      }),
+
+    // ---- 执行过程可视化（阶段三）：按 call_id 归并细粒度事件 ----
+    // 单条缓冲上限 256KB：防长命令输出把内存 / 重渲染压爆（超出截尾保留最新）
+    appendShellChunk: (callId, chunk) =>
+      set((s) => {
+        if (!callId || !chunk) return s;
+        const next = (s.shellOutputByCall[callId] ?? '') + chunk;
+        const capped = next.length > 262144 ? next.slice(-262144) : next;
+        return { shellOutputByCall: { ...s.shellOutputByCall, [callId]: capped } };
+      }),
+    closeShellStream: (callId, exitCode) =>
+      set((s) => ({ shellExitByCall: { ...s.shellExitByCall, [callId]: exitCode } })),
+    setToolProgress: (callId, message) =>
+      set((s) => {
+        if (!callId) return s;
+        return { toolProgressByCall: { ...s.toolProgressByCall, [callId]: message } };
+      }),
+    setWritePreview: (callId, path, diff) =>
+      set((s) => {
+        if (!callId) return s;
+        return { writePreviewByCall: { ...s.writePreviewByCall, [callId]: { path, diff } } };
+      }),
+
+    // 2026-08-26 任务产物累积（按 run 去重）+ skill 粘性记录
+    addTaskArtifact: (runId, path) =>
+      set((s) => {
+        const list = s.artifactsByRun[runId] ?? [];
+        if (list.includes(path)) return s;
+        return { artifactsByRun: { ...s.artifactsByRun, [runId]: [...list, path] } };
+      }),
+    setLastSkillId: (id) => set({ lastSkillId: id }),
 
     // 2026-08-07
     setRunStartTs: (ts) => set({ runStartTs: ts }),

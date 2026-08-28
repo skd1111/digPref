@@ -89,10 +89,18 @@ def builtin_find_py(
         return ToolResult.from_exception(exc, risk_level="read")
 
 
-def builtin_glob_py(*, pattern: str, base_dir: str = ".") -> ToolResult:
-    """glob Python 兜底：glob 模式匹配（支持 ** 递归）。"""
+def builtin_glob_py(
+    *, pattern: str, base_dir: str = ".", root: str | None = None, **_ignored
+) -> ToolResult:
+    """glob Python 兜底：glob 模式匹配（支持 ** 递归）。
+
+    ``base_dir`` / ``root`` 互为别名（BUGFIX #166）：schema 对模型声明 base_dir，
+    Rust 端结构体字段叫 root。此前两边各认一个名字，模型无论传哪个都有一侧报错。
+    ``**_ignored`` 吞掉 max_results / allowed_roots 等 Rust 专用参数，
+    避免 dispatcher 直接 ``**args`` 展开时抛 TypeError。
+    """
     try:
-        base = _validate(base_dir, must_exist=True)
+        base = _validate(root or base_dir or ".", must_exist=True)
         joined = str(base / pattern) if not os.path.isabs(pattern) else pattern
         hits = sorted(_glob.glob(joined, recursive=True))
         hits = hits[:1000]

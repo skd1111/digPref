@@ -36,7 +36,7 @@ class _FakeBackend:
         self.calls = 0
         self.base_url = "http://fake-backend"
 
-    async def summarise(self, *, intent, user_prompt, plan, results):
+    async def summarise(self, *, intent, user_prompt, plan, results, history=None):
         self.calls += 1
         return (f"答案-{self.calls}", ["src-a"])
 

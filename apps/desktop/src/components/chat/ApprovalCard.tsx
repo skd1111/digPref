@@ -1,9 +1,13 @@
 /**
  * ApprovalCard — HITL write-operation approval gate.
  *
- * Shows the agent's proposed plan (tool call + args + risk level) and
- * offers Approve / Reject buttons. Critical operations (DROP, TRUNCATE,
- * grant/revoke) require a second explicit confirmation.
+ * Shows the agent's proposed operation (tool name + risk level) and offers
+ * Approve / Reject buttons. Critical operations (DROP, TRUNCATE, grant/revoke)
+ * require a second explicit confirmation.
+ *
+ * 卡片不展示原始调用参数（2026-08-25 用户反馈：args JSON 铺屏无决策价值）——
+ * 参数详情已在思维链工具调用条目与后端审计（HITL_APPROVAL / AUTO_MODE_DECISION）
+ * 全程留痕，卡片只留操作概要。
  *
  * UX:
  *   - Risk level drives border + accent color
@@ -12,13 +16,21 @@
  *   - Decision POSTs back through the Rust sse_bridge
  */
 import { useEffect, useState } from 'react';
-import type { ApprovalRequest, ToolRiskLevel } from '@eaide/shared-protocol';
+import type { ApprovalDecision, ApprovalRequest, ToolRiskLevel } from '@eaide/shared-protocol';
 import { invoke } from '@/ipc/invoke';
+import { useChatStore } from '@/store/chatStore';
 
 interface Props {
   approval: ApprovalRequest;
-  onDecided?: (decision: 'approve' | 'reject') => void;
+  onDecided?: (decision: ApprovalDecision) => void;
 }
+
+/** 决策提交成功后的消息文案（卡片同步收起，不再永久卡「提交中」，2026-08-25） */
+const DECISION_SUMMARY: Record<ApprovalDecision, string> = {
+  approve: '✅ 已批准，正在继续执行…',
+  approve_always: '✅ 已批准。此后本会话同类操作将自动执行（全程审计留痕）',
+  reject: '🛑 已拒绝该操作。',
+};
 
 // Visual treatment per risk level
 const RISK_THEME: Record<ToolRiskLevel, {
@@ -61,7 +73,7 @@ export function ApprovalCard({ approval, onDecided }: Props): JSX.Element {
   }, [secondsLeft]);
 
   // ---- Submit decision ----
-  const submit = async (decision: 'approve' | 'reject'): Promise<void> => {
+  const submit = async (decision: ApprovalDecision): Promise<void> => {
     if (busy) return;
     if (theme.doubleConfirm && decision === 'approve' && confirmation.trim() !== approval.id) {
       setError(`请键入审批编号 ${approval.id} 以确认`);
@@ -84,6 +96,8 @@ export function ApprovalCard({ approval, onDecided }: Props): JSX.Element {
         decision,
         operator,
       });
+      // 提交成功 → 卡片改写为结果文案并剥离审批区（否则 busy 永久卡「提交中」）
+      useChatStore.getState().resolvePendingApproval(approval.id, DECISION_SUMMARY[decision]);
       onDecided?.(decision);
     } catch (e) {
       setError(String(e));
@@ -114,10 +128,13 @@ export function ApprovalCard({ approval, onDecided }: Props): JSX.Element {
         </span>
       </header>
 
-      {/* ---- Plan JSON ---- */}
-      <div className="mb-3 overflow-auto rounded bg-bg-code p-2 text-xs">
-        <div className="mb-1 font-semibold text-fg-muted">计划：</div>
-        <pre className="text-fg">{JSON.stringify(approval.plan, null, 2)}</pre>
+      {/* ---- 操作概要：不展示原始 args（参数在思维链/审计留痕） ---- */}
+      <div className="mb-3 rounded bg-bg-code p-2 text-xs">
+        <div className="mb-1 font-semibold text-fg-muted">操作：</div>
+        <div className="text-fg">
+          <code className="font-mono">{approval.plan.server} · {approval.plan.name}</code>
+          <span className="ml-2 text-fg-muted">执行参数详见右侧执行过程与审计记录，此处不展示</span>
+        </div>
       </div>
 
       {/* ---- Phase 18：推荐选项（为空时保持二元审批，向后兼容） ---- */}
@@ -192,6 +209,18 @@ export function ApprovalCard({ approval, onDecided }: Props): JSX.Element {
         >
           {busy ? '提交中…' : 'Approve'}
         </button>
+        {/* 同类免审批（2026-08-25）：仅非双重确认的风险级提供；
+            high/critical 必须逐次人工确认，不提供长期豁免 */}
+        {!theme.doubleConfirm && (
+          <button
+            onClick={() => submit('approve_always')}
+            disabled={busy}
+            title="批准，且本会话内同一工具（同服务·同名）的后续操作自动放行；DROP/TRUNCATE 等硬阻断不受影响"
+            className="flex-1 rounded border border-accent-approval bg-transparent px-3 py-2 text-sm font-semibold text-accent-approval hover:opacity-80 disabled:opacity-50"
+          >
+            {busy ? '提交中…' : '此后都按此执行'}
+          </button>
+        )}
         <button
           onClick={() => submit('reject')}
           disabled={busy}

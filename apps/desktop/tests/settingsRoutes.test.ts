@@ -12,6 +12,7 @@ import { router } from '../src/router';
 /** 与 SettingsView.tsx 的 KNOWN_SEGS 保持同步 */
 const SETTINGS_SEGS = [
   'envs',
+  'mcp',
   'models',
   'gen-limits',
   'dspark',
@@ -24,7 +25,6 @@ const SETTINGS_SEGS = [
   'codenav',
   'toolchain',
   'workspace',
-  'compile',
   'advanced',
 ];
 

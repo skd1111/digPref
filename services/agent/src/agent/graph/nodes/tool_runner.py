@@ -71,7 +71,12 @@ async def tool_runner_node(state: AgentState, mcp: McpClient) -> dict:
             ],
         }
 
-    call_id = f"call_{state.get('current_step_index', 0)}"
+    # 调用标识（根治 BUGFIX #164）：写回 call 字典，让 pending_tool_call 携带它，
+    # SSE 的 tool_call / tool_result 两条事件据此配对（前端翻牌收尾）。
+    # 用步骤索引而非 UUID —— 重试 / HITL 恢复后重跑同一步会得到同一 call_id，
+    # 前端原地更新那张卡，不会再堆出第二张。
+    call_id = call.get("call_id") or f"call_{state.get('current_step_index', 0)}"
+    call["call_id"] = call_id
     timeout_sec = settings.tool_timeout_sec
     last_err: str | None = None
 

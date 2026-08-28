@@ -28,7 +28,10 @@ class ChatMessage(BaseModel):
     # 2026-08-10：search kind = 搜索/检索类工具调用，前端渲染 aicss 风格搜索卡片
     # 2026-08-19：changed_files kind = 任务结束汇总的改动文件清单（content 为路径 JSON 数组，
     #              前端渲染可点击卡片，点击在 Monaco 打开）
+    # 2026-08-26：task_cleanup_confirm kind = 交付后验收清理卡（content 为 {taskId, taskDir} JSON）
     # message/tool_call/tool_result/trace/approval/log/done = events.py 流事件子类使用的 kind
+    # skill_matched（Phase 2D）/ heartbeat（BUGFIX #161 看门狗）同为流事件子类 kind
+    # run_started/tool_progress/shell_chunk/file_write_preview：执行过程可视化细粒度事件
     kind: (
         Literal[
             "normal",
@@ -36,6 +39,8 @@ class ChatMessage(BaseModel):
             "error",
             "search",
             "changed_files",
+            "todo",
+            "task_cleanup_confirm",
             "message",
             "tool_call",
             "tool_result",
@@ -43,6 +48,12 @@ class ChatMessage(BaseModel):
             "approval",
             "log",
             "done",
+            "skill_matched",
+            "heartbeat",
+            "run_started",
+            "tool_progress",
+            "shell_chunk",
+            "file_write_preview",
         ]
         | None
     ) = None
@@ -60,9 +71,19 @@ class AgentRun(BaseModel):
     error: str | None = None
 
 
+class TodoItem(BaseModel):
+    """待办项（2026-08-25）：模型把多步任务拆成待办并实时更新状态。"""
+
+    content: str
+    status: Literal["pending", "in_progress", "done"]
+
+
 class TraceStep(BaseModel):
     id: str
     node: str
     status: Literal["ok", "fail", "running"]
     duration_ms: int = Field(alias="durationMs")
     summary: str | None = None
+    # 任务进度待办列表（2026-08-25）：update_todos 伪工具经 trace 通道下发，
+    # 前端按固定 id 原地更新渲染进度卡片
+    todos: list[TodoItem] | None = None

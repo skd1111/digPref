@@ -11,7 +11,12 @@ import httpx
 from agent.dual.prompt_loader import FINAL_ANSWER_STYLE
 from agent.llm.circuit_breaker import CircuitBreakerRegistry
 from agent.llm.json_discipline import extract_json, parse_with_retry
-from agent.llm.prompts import current_time_text, load_prompt
+from agent.llm.prompts import (
+    current_time_text,
+    format_history_brief,
+    load_prompt,
+    normalize_message,
+)
 from agent.llm.token_usage import record_ollama_usage
 from agent.llm.types import Intent
 
@@ -232,12 +237,11 @@ class OllamaClient:
 
         msgs: list[dict] = [{"role": "system", "content": load_prompt("intent_router")}]
         for h in (history or [])[-4:]:  # 最近 2 轮上下文
-            role = getattr(h, "role", None) or (h.get("role") if isinstance(h, dict) else None)
-            content = getattr(h, "content", None) or (
-                h.get("content") if isinstance(h, dict) else None
-            )
-            if role in ("user", "assistant") and content:
-                msgs.append({"role": role, "content": str(content)})
+            parsed = normalize_message(h)
+            if parsed is None:
+                continue
+            role, content = parsed
+            msgs.append({"role": role, "content": content})
         user_content = text
         if page_context.strip():
             user_content = f"[页面上下文：{page_context.strip()}]\n\n{text}"
@@ -291,10 +295,11 @@ class OllamaClient:
         )
         msgs = [{"role": "system", "content": sys_prompt}]
         for h in history[-6:]:  # last 3 turns
-            if hasattr(h, "role") and hasattr(h, "content"):
-                msgs.append({"role": h.role, "content": h.content})
-            elif isinstance(h, dict):
-                msgs.append({"role": h.get("role", "user"), "content": h.get("content", "")})
+            parsed = normalize_message(h)
+            if parsed is None:
+                continue
+            h_role, h_content = parsed
+            msgs.append({"role": h_role, "content": h_content})
         msgs.append({"role": "user", "content": user_prompt})
 
         async def _call(hint: str, last: str) -> str:
@@ -392,21 +397,32 @@ class OllamaClient:
         user_prompt: str,
         plan: list[dict],
         results: list[dict],
+        history: list | None = None,
     ) -> tuple[str, list[str]]:
         sys_prompt = _summarise_system_prompt()
         results_brief = json.dumps(results, ensure_ascii=False, indent=2, default=str)
         plan_brief = json.dumps(plan, ensure_ascii=False, indent=2, default=str)
+        # 会话历史简报（BUGFIX #135）：终答此前只看见当轮 user_prompt，
+        # 跨轮追问模型会反问「没有明确任务指令」；拼入最近几轮原文恢复连贯。
+        history_brief = format_history_brief(history)
 
         async def _call(hint: str, last: str) -> str:
             user_content = (
                 f"Intent: {intent}\n"
                 f"User question: {user_prompt}\n\n"
-                # 当前时间注入（BUGFIX #112）：本地模型对「今天」无可靠感知，
-                # 不注入会凭训练知识编造日期；summarise.md §5.1 以此为唯一基准。
-                f"Current time: {current_time_text()}\n\n"
-                f"Plan executed:\n{plan_brief}\n\n"
-                f"Tool results (may be truncated):\n{results_brief}\n\n"
-                "Produce the final answer."
+                + (
+                    f"Recent conversation (当前问题可能建立在这些对话之上，保持上下文连贯):\n{history_brief}\n\n"
+                    if history_brief
+                    else ""
+                )
+                + (
+                    # 当前时间注入（BUGFIX #112）：本地模型对「今天」无可靠感知，
+                    # 不注入会凭训练知识编造日期；summarise.md §5.1 以此为唯一基准。
+                    f"Current time: {current_time_text()}\n\n"
+                    f"Plan executed:\n{plan_brief}\n\n"
+                    f"Tool results (may be truncated):\n{results_brief}\n\n"
+                    "Produce the final answer."
+                )
             )
             if hint:
                 user_content += f"\n\n{hint}"

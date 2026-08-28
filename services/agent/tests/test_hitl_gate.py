@@ -93,14 +93,18 @@ def test_pending_decision_keeps_id():
     s = _make_write_state(None)
     out1 = _run(hitl_gate_node(s))
     approval_id = out1["approval_id"]
-    # 模拟 merge：partial state update 合并进 state
+    # 模拟 merge：partial state update 合并进 state（首次暂停置位 awaiting_approval）
     s.update(out1)
-    # 第二次进入：还没决定
+    assert s.get("awaiting_approval") is True
+    # 第二次进入：还没决定 → 稳态等待（BUGFIX #139：不再回写任何字段，
+    # 防思维链每次重入刷一条相同条目；状态合并保留原值，路由不受影响）
     out2 = _run(hitl_gate_node(s))
     s.update(out2)
     # state 里 approval_id 仍应是原值（pending 分支不清空）
     assert s.get("approval_id") == approval_id
-    assert out2["awaiting_approval"] is True
+    # 等待输出不携带任何业务字段；路由依赖的 awaiting_approval 由状态合并保留 True
+    assert "awaiting_approval" not in out2
+    assert s.get("awaiting_approval") is True
     _clear_local_decisions()
 
 
@@ -141,7 +145,8 @@ def test_gate_timeout_guard_backfills_missing_started_at():
 
     before = time.time()
     out2 = _run(hitl_gate_node(s))
-    assert out2["awaiting_approval"] is True
+    # BUGFIX #139：稳态等待只补记时间戳，不再回写 awaiting_approval（状态合并保留）
+    assert "awaiting_approval" not in out2
     assert isinstance(out2.get("approval_started_at"), float)
     assert out2["approval_started_at"] >= before
     _clear_local_decisions()
@@ -162,3 +167,34 @@ def test_start_approval_failure_fails_closed(monkeypatch):
     assert out["awaiting_approval"] is False
     assert any(t.get("reason") == "start_failed" for t in out["trace"])
     _clear_local_decisions()
+
+
+# ---- 等待循环节流（BUGFIX #138，2026-08-25） --------------------------------
+
+
+def test_wait_branch_is_paced(monkeypatch):
+    """等待分支必须带节流：此前无 sleep → 图约 130 次/秒空转，
+    实测一次审批刷出 1300+ 条相同「已发起 HITL 审批请求」思维链。"""
+    import agent.graph.nodes.hitl_gate as gate_mod
+
+    monkeypatch.setattr(gate_mod, "_WAIT_POLL_SEC", 0.05)
+    _clear_local_decisions()
+    s = _make_write_state(None)
+    out1 = _run(hitl_gate_node(s))
+    s.update(out1)
+
+    before = time.perf_counter()
+    out2 = _run(hitl_gate_node(s))  # 尚未决定 → 等待分支（应 sleep 节流）
+    elapsed = time.perf_counter() - before
+
+    # BUGFIX #139：稳态等待不产出业务字段（思维链不再刷屏）
+    assert "awaiting_approval" not in out2
+    assert elapsed >= 0.05, "等待分支无节流 → 图循环空转，思维链被相同审批条目刷屏"
+    _clear_local_decisions()
+
+
+def test_wait_poll_interval_default_not_tight():
+    """默认节流间隔不得退回空转量级（与 interrupt 后台轮询 0.25s 同档）。"""
+    from agent.graph.nodes.hitl_gate import _WAIT_POLL_SEC
+
+    assert _WAIT_POLL_SEC >= 0.1

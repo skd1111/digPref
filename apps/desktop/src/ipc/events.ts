@@ -31,6 +31,8 @@ export const EVT = {
   AGENT_DONE: "agent://done",
   /** 流异常终止 */
   AGENT_ERROR: "agent://error",
+  /** 流保活心跳（BUGFIX #161）：前端看门狗据此感知流存活，静默超阈解锁 */
+  AGENT_HEARTBEAT: "agent://heartbeat",
   /** MCP 服务器状态变更 */
   MCP_STATUS: "mcp://status",
 
@@ -182,4 +184,14 @@ export const EVT = {
   AGENT_REPAIR_ATTEMPT: "agent://repair_attempt",
   /** 自动模式决策（含 reason + option + riskLevel，可跳审计详情） */
   AGENT_AUTO_DECISION: "agent://auto_decision",
+
+  // 执行过程可视化（Claude Code 式） —— SSE 三处同步（CLAUDE.md §4）
+  /** run 显式开始（流建立后第一帧） */
+  AGENT_RUN_STARTED: "agent://run_started",
+  /** 工具执行中进度（含 call_id + message + percent） */
+  AGENT_TOOL_PROGRESS: "agent://tool_progress",
+  /** shell 命令流式输出片段（含 call_id + stream + chunk，结束帧带 exit_code） */
+  AGENT_SHELL_CHUNK: "agent://shell_chunk",
+  /** 写前 Diff 预览（含 call_id + path + unified diff，前端渲染+审批） */
+  AGENT_FILE_WRITE_PREVIEW: "agent://file_write_preview",
 } as const;

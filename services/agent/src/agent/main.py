@@ -16,6 +16,11 @@ from agent.driver_bootstrap import load_drivers
 
 load_drivers()
 
+# PPT Master 捆绑运行时（嵌入式 Python + 离线依赖解压）—— best-effort 不阻断启动
+from agent.ppt_master_bootstrap import ensure_ppt_master_runtime
+
+ensure_ppt_master_runtime()
+
 # LLM active 后端统一配置 —— 必须在 agent.config 加载前应用
 # （router.db llm_kv 为唯一长期事实源；遗留 llm-config.json 启动时迁移）
 from agent.llm.active_config import apply_active
@@ -151,6 +156,25 @@ class _LazyMcp:
             self._client = None
 
 
+async def reload_mcp_clients() -> list[str]:
+    """重读 mcp.yaml 并重建 MCP 客户端（设置页「MCP」热重载入口）。
+
+    关闭既有连接后整体重建；文件缺失 / 空表 → mcp=None（与启动时语义一致）。
+    Runtime.mcp 是动态引用（tool catalog / chat 每轮取），替换后即刻生效。
+    """
+    runtime = get_runtime()
+    old = runtime.mcp
+    if isinstance(old, _LazyMcp):
+        await old.close()
+    runtime.mcp = _build_mcp()
+    servers: list[str] = []
+    registry = getattr(runtime.mcp, "_registry", None)
+    if registry is not None and hasattr(registry, "servers"):
+        servers = list(registry.servers.keys())
+    log.info("MCP clients reloaded: %s", servers)
+    return servers
+
+
 # ---- Lifespan --------------------------------------------------------------
 
 
@@ -173,6 +197,19 @@ async def lifespan(app: FastAPI):
         clear_tauri_runtime()
     except Exception:
         pass
+    # 执行过程可视化（阶段二）：独立部署形态（无桌面壳注入）拉起
+    # eaide-executor 子进程并注入 —— 9 个 Rust 工具统一走 Rust 沙箱实现；
+    # 二进制缺失 / 启动失败时返 None，保持「Python 原生兜底」既有降级。
+    executor_client = None
+    try:
+        from agent.builtin._tauri_runtime import set_tauri_runtime
+        from agent.builtin.jsonrpc_stdio import try_start_executor_client
+
+        executor_client = await try_start_executor_client()
+        if executor_client is not None:
+            set_tauri_runtime(executor_client)
+    except Exception:
+        log.exception("eaide-executor injection failed; keep python-native fallback")
     # Best-effort: discover which MCP servers are configured (only works for
     # the lazy wrapper, not for test-injected mocks — silently skip).
     servers: list[str] = []
@@ -195,6 +232,15 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        # 执行过程可视化（阶段二）：关闭 eaide-executor 子进程（幂等）
+        if executor_client is not None:
+            try:
+                from agent.builtin._tauri_runtime import clear_tauri_runtime
+
+                clear_tauri_runtime()
+                await executor_client.stop()
+            except Exception:
+                log.exception("eaide-executor shutdown failed")
         # Phase 7 补齐：停止定时报表调度器（幂等）
         if data_scheduler is not None:
             try:
@@ -224,6 +270,10 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(ws.router)
     app.include_router(envconfig_api.router)
+    # MCP 服务器配置管理（设置页「MCP」面板：读 / 写 / 连通性测试 / 热重载）
+    from agent.api import mcp_config as mcp_config_api
+
+    app.include_router(mcp_config_api.router)
     # Phase 18: 自动模式授权审计（会话级 autonomy 开启确认）
     from agent.api import autonomy as autonomy_api
 
@@ -312,6 +362,11 @@ def create_app() -> FastAPI:
     from agent.preview import preview_api_router
 
     app.include_router(preview_api_router)
+
+    # V9 Office 预览（2026-08-25：OfficeCLI 渲染 docx/xlsx/pptx → HTML/PNG）
+    from agent.office_preview import office_preview_router
+
+    app.include_router(office_preview_router)
 
     # Phase 2B V0: SSH PTY PoC（connect / disconnect / exec / sftp / sessions / stats）
     from agent.ssh import ssh_api_router

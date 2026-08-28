@@ -116,10 +116,14 @@ jobs:
       # CI 不构建前端/不携带大体积资源，放占位文件
       - name: Tauri build placeholders
         run: |
-          mkdir -p apps/desktop/dist apps/desktop/src-tauri/gen/schemas apps/desktop/src-tauri/resources config/driver
+          mkdir -p apps/desktop/dist apps/desktop/src-tauri/gen/schemas apps/desktop/src-tauri/resources config/driver vendor/officecli vendor/executor vendor/ppt-master vendor/python
           echo '<!doctype html><html><body>CI placeholder</body></html>' > apps/desktop/dist/index.html
           echo placeholder > apps/desktop/src-tauri/resources/.ci-keep
           echo placeholder > config/driver/.ci-keep
+          echo placeholder > vendor/officecli/.ci-keep
+          echo placeholder > vendor/executor/.ci-keep
+          echo placeholder > vendor/ppt-master/.ci-keep
+          echo placeholder > vendor/python/.ci-keep
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: "apps/desktop/src-tauri -> target" }
       - name: clippy
@@ -153,10 +157,14 @@ jobs:
             libssl-dev libxdo-dev file
       - name: Tauri build placeholders
         run: |
-          mkdir -p apps/desktop/dist apps/desktop/src-tauri/gen/schemas apps/desktop/src-tauri/resources config/driver
+          mkdir -p apps/desktop/dist apps/desktop/src-tauri/gen/schemas apps/desktop/src-tauri/resources config/driver vendor/officecli vendor/executor vendor/ppt-master vendor/python
           echo '<!doctype html><html><body>CI placeholder</body></html>' > apps/desktop/dist/index.html
           echo placeholder > apps/desktop/src-tauri/resources/.ci-keep
           echo placeholder > config/driver/.ci-keep
+          echo placeholder > vendor/officecli/.ci-keep
+          echo placeholder > vendor/executor/.ci-keep
+          echo placeholder > vendor/ppt-master/.ci-keep
+          echo placeholder > vendor/python/.ci-keep
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: "apps/desktop/src-tauri -> target" }
       - name: cargo test

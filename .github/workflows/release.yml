@@ -93,7 +93,7 @@ jobs:
         if: runner.os == 'macOS'
         run: chmod +x apps/desktop/src-tauri/resources/${{ matrix.agent_file }}
 
-      # tauri bundle.resources 通配（resources/* 与 config/driver/*）检出里可能无文件
+      # tauri bundle.resources 通配（resources/* 与 config/driver/* 与 vendor/officecli/*）检出里可能无文件
       # 导致打包失败；Agent 已就位时 resources 不再需要占位，config/driver 仍补占位
       - name: Resource placeholders
         shell: bash
@@ -101,6 +101,44 @@ jobs:
           mkdir -p config/driver
           if ! ls config/driver/* >/dev/null 2>&1; then
             echo "placeholder (python driver wheels are packaged separately)" > config/driver/README.txt
+          fi
+
+      # V9 OfficeCLI 二进制：尽量拉真实二进制（随安装包内置），失败退占位防 resources 通配打包失败；
+      # 占位包运行时返 officecli_not_installed 友好错误，不影响其他功能（macOS 目标无 win 二进制，同样退占位）
+      - name: Fetch OfficeCLI binary (best-effort)
+        shell: bash
+        run: |
+          mkdir -p vendor/officecli
+          pwsh -File infra/scripts/fetch-officecli.ps1 || echo "[release] officecli fetch failed, fallback to placeholder"
+          if ! ls vendor/officecli/officecli-* >/dev/null 2>&1; then
+            echo "placeholder (officecli binary fetched separately via infra/scripts/fetch-officecli.ps1)" > vendor/officecli/README.txt
+          fi
+
+      # eaide-executor（Rust 本地执行器独立二进制）：best-effort 构建并拷入 vendor/executor，
+      # 失败退占位防 resources 通配打包失败；占位包运行时 Agent 保持 Python 原生兜底。
+      - name: Build eaide-executor (best-effort)
+        shell: bash
+        run: |
+          mkdir -p vendor/executor
+          (cd apps/desktop/src-tauri && cargo build --release --bin eaide-executor) || echo "[release] eaide-executor build failed, fallback to placeholder"
+          if ls apps/desktop/src-tauri/target/release/eaide-executor* >/dev/null 2>&1; then
+            cp apps/desktop/src-tauri/target/release/eaide-executor* vendor/executor/
+          else
+            echo "placeholder (eaide-executor built separately via cargo build --bin eaide-executor)" > vendor/executor/README.txt
+          fi
+
+      # V9.7 PPT Master 运行时（技能包 + 嵌入式 Python + 离线 wheel）：best-effort 拉取；
+      # 失败退占位，运行时种子 prompt 引导友好提示（仅 Windows 目标真实生效，macOS 退占位）
+      - name: Fetch PPT Master runtime (best-effort)
+        shell: bash
+        run: |
+          mkdir -p vendor/ppt-master vendor/python
+          pwsh -File infra/scripts/fetch-ppt-master.ps1 || echo "[release] ppt-master runtime fetch failed, fallback to placeholder"
+          if ! ls vendor/ppt-master/SKILL.md >/dev/null 2>&1; then
+            echo "placeholder (ppt-master skill fetched separately via infra/scripts/fetch-ppt-master.ps1)" > vendor/ppt-master/README.txt
+          fi
+          if ! ls vendor/python/python* >/dev/null 2>&1; then
+            echo "placeholder (embedded python fetched separately via infra/scripts/fetch-ppt-master.ps1)" > vendor/python/README.txt
           fi
 
       - run: pnpm install --frozen-lockfile

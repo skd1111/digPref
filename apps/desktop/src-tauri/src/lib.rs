@@ -22,6 +22,10 @@ mod logviewer;
 // V1 仅声明 mod + 9 占位工具名（dispatcher 在 Python 侧识别 RUST_TOOL_NAMES → 返 not_implemented）
 // V1.5 接力真实 Rust 实现 + Tauri Command 注册
 mod builtin;
+
+/// 执行过程可视化（阶段二）：Rust 本地执行器的 JSON-RPC stdio 壳。
+/// pub 供独立二进制 `src/bin/eaide_executor.rs`（eaide-executor）复用。
+pub mod executor_rpc;
 // Phase 15 V0 (2026-08-03): 前端实时预览引擎 —— 预览窗口管理
 mod preview;
 
@@ -156,6 +160,9 @@ pub fn run() {
             commands::agent::agent_toolchain_save,
             commands::agent::agent_workspace_get,
             commands::agent::agent_workspace_save,
+            // 任务级工作目录（2026-08-26）：文件清单 + 验收后清理中间文件
+            commands::agent::task_files_get,
+            commands::agent::task_cleanup,
             // Token 用量（状态栏实时速率 + 当日总量）
             commands::agent::token_usage_get,
             commands::credentials::credential_get,
@@ -177,10 +184,15 @@ pub fn run() {
             commands::envconfig::envconfig_delete,
             commands::envconfig::envconfig_export,
             commands::envconfig::envconfig_import,
+            commands::mcp_config::mcp_config_get,
+            commands::mcp_config::mcp_config_save,
+            commands::mcp_config::mcp_config_test,
+            commands::mcp_config::mcp_config_reload,
             commands::shell::open_devtools,
             commands::shell::read_text_file,
             commands::shell::list_dir_entries,
             commands::shell::reveal_in_explorer,
+            commands::shell::open_with_default,
             // 文件树右键编译（2026-08-19）
             commands::compile::compile_files,
             commands::compile::compile_config_get,
@@ -394,6 +406,9 @@ pub fn run() {
             commands::preview::preview_info,
             commands::preview::preview_reload,
             commands::preview::preview_install,
+            // V9 Office 预览（OfficeCLI 渲染 docx/xlsx/pptx → HTML/PNG）
+            commands::office::office_preview_render,
+            commands::office::office_preview_stop,
         ])
         .run(tauri::generate_context!());
 

@@ -27,6 +27,11 @@ EVT_BUILTIN_TOOL_STARTED = "builtin_tool_started"
 EVT_BUILTIN_TOOL_DONE = "builtin_tool_done"
 EVT_BUILTIN_TOOL_DENIED = "builtin_tool_denied"
 
+# 执行过程可视化（Claude Code 式）细粒度事件（与 graph/stream.py::_CHANNEL_BY_KIND 一致）
+EVT_TOOL_PROGRESS = "tool_progress"
+EVT_SHELL_CHUNK = "shell_chunk"
+EVT_FILE_WRITE_PREVIEW = "file_write_preview"
+
 
 async def emit_builtin_event(kind: str, payload: dict) -> None:
     """Emit 一个 builtin 事件到进程内队列。
@@ -91,6 +96,7 @@ async def emit_tool_started(
     risk_level: str,
     needs_hitl: bool,
     call_id: str,
+    run_id: str | None = None,
 ) -> None:
     """Emit builtin_tool_started 事件。
 
@@ -100,6 +106,7 @@ async def emit_tool_started(
         risk_level: 风险等级（read / low / medium / high / critical）。
         needs_hitl: 是否触发 HITL。
         call_id: 调度批次 ID（UUID4 hex）。
+        run_id: 所属 run（多会话并发时前端按此路由到对应页签）。
     """
     await emit_builtin_event(
         EVT_BUILTIN_TOOL_STARTED,
@@ -110,6 +117,7 @@ async def emit_tool_started(
             "risk_level": risk_level,
             "needs_hitl": needs_hitl,
             "call_id": call_id,
+            **({"runId": run_id} if run_id else {}),
         },
     )
 
@@ -121,6 +129,7 @@ def emit_tool_started_sync(
     risk_level: str,
     needs_hitl: bool,
     call_id: str,
+    run_id: str | None = None,
 ) -> None:
     """同步版 emit_tool_started（dispatcher 在 to_thread 内调用）。"""
     emit_builtin_event_sync(
@@ -132,6 +141,7 @@ def emit_tool_started_sync(
             "risk_level": risk_level,
             "needs_hitl": needs_hitl,
             "call_id": call_id,
+            **({"runId": run_id} if run_id else {}),
         },
     )
 
@@ -146,6 +156,7 @@ async def emit_tool_done(
     risk_level: str,
     content_size: int,
     result_meta: dict | None = None,
+    run_id: str | None = None,
 ) -> None:
     """Emit builtin_tool_done 事件。"""
     await emit_builtin_event(
@@ -160,6 +171,7 @@ async def emit_tool_done(
             "risk_level": risk_level,
             "content_size": content_size,
             "result_meta": result_meta or {},
+            **({"runId": run_id} if run_id else {}),
         },
     )
 
@@ -174,6 +186,7 @@ def emit_tool_done_sync(
     risk_level: str,
     content_size: int,
     result_meta: dict | None = None,
+    run_id: str | None = None,
 ) -> None:
     """同步版 emit_tool_done。"""
     emit_builtin_event_sync(
@@ -188,6 +201,7 @@ def emit_tool_done_sync(
             "risk_level": risk_level,
             "content_size": content_size,
             "result_meta": result_meta or {},
+            **({"runId": run_id} if run_id else {}),
         },
     )
 
@@ -208,5 +222,146 @@ async def emit_tool_denied(
             "call_id": call_id,
             "approval_id": approval_id,
             "reason": reason,
+        },
+    )
+
+
+# ---- 执行过程可视化（Claude Code 式）细粒度事件工厂 -------------------------
+#
+# 三类事件与 tool_call/tool_result 共享 call_id（BUGFIX #164 配对键），
+# 前端按 call_id 归并到对应工具卡：
+#   - tool_progress：长耗时工具的阶段文案（搜索/编译/批处理）
+#   - shell_chunk：shell 执行期间的流式输出片段，结束帧带 exit_code
+#   - file_write_preview：写类工具落盘前的 unified diff 预览（配审批）
+
+
+async def emit_tool_progress(
+    *,
+    call_id: str,
+    message: str,
+    tool_name: str | None = None,
+    percent: float | None = None,
+    run_id: str | None = None,
+) -> None:
+    """Emit tool_progress 事件。"""
+    await emit_builtin_event(
+        EVT_TOOL_PROGRESS,
+        {
+            "kind": EVT_TOOL_PROGRESS,
+            "call_id": call_id,
+            "tool_name": tool_name,
+            "message": message,
+            "percent": percent,
+            **({"runId": run_id} if run_id else {}),
+        },
+    )
+
+
+def emit_tool_progress_sync(
+    *,
+    call_id: str,
+    message: str,
+    tool_name: str | None = None,
+    percent: float | None = None,
+    run_id: str | None = None,
+) -> None:
+    """同步版 emit_tool_progress（to_thread 内调用）。"""
+    emit_builtin_event_sync(
+        EVT_TOOL_PROGRESS,
+        {
+            "kind": EVT_TOOL_PROGRESS,
+            "call_id": call_id,
+            "tool_name": tool_name,
+            "message": message,
+            "percent": percent,
+            **({"runId": run_id} if run_id else {}),
+        },
+    )
+
+
+async def emit_shell_chunk(
+    *,
+    call_id: str,
+    chunk: str,
+    stream: str = "stdout",
+    exit_code: int | None = None,
+    run_id: str | None = None,
+) -> None:
+    """Emit shell_chunk 事件（stream=stdout/stderr；结束帧带 exit_code）。"""
+    await emit_builtin_event(
+        EVT_SHELL_CHUNK,
+        {
+            "kind": EVT_SHELL_CHUNK,
+            "call_id": call_id,
+            "stream": stream,
+            "chunk": chunk,
+            "exit_code": exit_code,
+            **({"runId": run_id} if run_id else {}),
+        },
+    )
+
+
+def emit_shell_chunk_sync(
+    *,
+    call_id: str,
+    chunk: str,
+    stream: str = "stdout",
+    exit_code: int | None = None,
+    run_id: str | None = None,
+) -> None:
+    """同步版 emit_shell_chunk（to_thread 内调用）。"""
+    emit_builtin_event_sync(
+        EVT_SHELL_CHUNK,
+        {
+            "kind": EVT_SHELL_CHUNK,
+            "call_id": call_id,
+            "stream": stream,
+            "chunk": chunk,
+            "exit_code": exit_code,
+            **({"runId": run_id} if run_id else {}),
+        },
+    )
+
+
+async def emit_file_write_preview(
+    *,
+    call_id: str,
+    path: str,
+    diff: str,
+    risk_level: str | None = None,
+    run_id: str | None = None,
+) -> None:
+    """Emit file_write_preview 事件（写前 unified diff 预览）。"""
+    await emit_builtin_event(
+        EVT_FILE_WRITE_PREVIEW,
+        {
+            "kind": EVT_FILE_WRITE_PREVIEW,
+            "call_id": call_id,
+            "path": path,
+            "diff": diff,
+            "risk_level": risk_level,
+            **({"runId": run_id} if run_id else {}),
+        },
+    )
+
+
+def emit_file_write_preview_sync(
+    *,
+    call_id: str,
+    path: str,
+    diff: str,
+    risk_level: str | None = None,
+    run_id: str | None = None,
+) -> None:
+    """同步版 emit_file_write_preview。"""
+    emit_builtin_event_sync(
+        EVT_FILE_WRITE_PREVIEW,
+        {
+            "kind": EVT_FILE_WRITE_PREVIEW,
+            "call_id": call_id,
+            "path": path,
+            "diff": diff,
+            "risk_level": risk_level,
+            **({"runId": run_id} if run_id else {}),
         },
     )

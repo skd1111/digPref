@@ -27,6 +27,8 @@ def _data_pairs():
         ('services/agent/src/agent/ops/schema.sql', 'agent/ops'),
         ('services/agent/src/agent/datadict/schema.sql', 'agent/datadict'),
         ('services/agent/src/agent/config/llm/speculative.yaml', 'config/llm'),
+        # V9.5 内置 Office 生成规范种子 Skill（首次启动播种到数据根 skills/）
+        ('services/agent/src/agent/skills/seeds', 'agent/skills/seeds'),
         # 文档审核知识库（风险高亮依据 / 案例库引用；运行时 cwd 缺失时回退 _MEIPASS）
         ('knowledge-base', 'knowledge-base'),
         # NL2SQL 业务字典种子 YAML（运营术语→编码映射；运行时 cwd 优先，缺失回退 _MEIPASS）
@@ -34,6 +36,16 @@ def _data_pairs():
         # 内网数据库驱动 wheel（未入 git；CI / macOS 构建缺失时跳过，
         # 对应 DB 驱动走 PyPI 安装的 asyncpg/aiomysql 等）
         ('config/driver', 'config/driver'),
+        # V9 OfficeCLI 二进制（未入 git，fetch-officecli.ps1 拉取；缺失时跳过，
+        # office 工具族运行时报 officecli_not_installed 友好错误）
+        ('vendor/officecli', 'vendor/officecli'),
+        # eaide-executor（Rust 本地执行器独立二进制，未入 git；由 build-all.bat /
+        # release 构建产出后拷入；缺失时跳过，Agent 保持 Python 原生兜底）
+        ('vendor/executor', 'vendor/executor'),
+        # 注：V9.7 PPT Master 技能包（~76MB）与嵌入式 Python（~12MB）不进 datas（
+        # 避免 onefile exe 膨胀 + 每次启动解压），改由 tauri.conf.json bundle.resources
+        # 随安装包落到安装目录（生产模式 Agent cwd = 安装目录，第一级回退即命中）；
+        # 开发态走仓库根。缺失时种子 prompt 引导友好提示，不阻断启动。
     ]
     return [(src, dst) for src, dst in pairs if os.path.exists(src)]
 

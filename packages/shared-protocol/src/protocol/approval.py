@@ -9,7 +9,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from protocol.tools import ToolCall, ToolRiskLevel
 
-ApprovalDecision = Literal["approve", "reject"]
+# approve_always（2026-08-25）：批准且本会话内同工具（同 server·name）
+# 后续操作自动放行；硬阻断（DROP/TRUNCATE）任何决策都不可豁免。
+ApprovalDecision = Literal["approve", "reject", "approve_always"]
 
 
 class ApprovalOption(BaseModel):

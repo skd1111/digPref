@@ -42,6 +42,8 @@ pub mod channel {
     pub const LOG:      &str = "agent://log";
     pub const DONE:     &str = "agent://done";
     pub const ERROR:    &str = "agent://error";
+    // 流保活心跳（BUGFIX #161）：后端每 15s 无图块时下发，转发给前端看门狗感知流存活
+    pub const HEARTBEAT: &str = "agent://heartbeat";
     pub const SKILL_MATCHED: &str = "agent://skill_matched";   // Phase 2D V0
     // Phase 2C V0 LLM 路由
     pub const LLM_ROUTE_DECIDED: &str = "agent://llm_route_decided";
@@ -135,6 +137,15 @@ pub mod channel {
     pub const MODE_ROUTED: &str = "agent://mode_routed";
     pub const REPAIR_ATTEMPT: &str = "agent://repair_attempt";
     pub const AUTO_DECISION: &str = "agent://auto_decision";
+
+    // 执行过程可视化（Claude Code 式） —— SSE 三处同步（CLAUDE.md §4）
+    // run_started：流建立第一帧；tool_progress：工具阶段文案；
+    // shell_chunk：shell 流式输出；file_write_preview：写前 unified diff 预览。
+    // （只转发，Rust 侧不解析业务语义）
+    pub const RUN_STARTED: &str = "agent://run_started";
+    pub const TOOL_PROGRESS: &str = "agent://tool_progress";
+    pub const SHELL_CHUNK: &str = "agent://shell_chunk";
+    pub const FILE_WRITE_PREVIEW: &str = "agent://file_write_preview";
 }
 
 
@@ -195,6 +206,7 @@ impl SseBridge {
     ///
     /// Phase 18：work_mode / autonomy 可选透传进 chat 请求体（Rust 不解析语义）。
     /// history：会话上下文（当前 tab 最近几轮对话），透传进请求体。
+    /// last_skill_id / task_id / task_title（2026-08-26）：skill 粘性与任务级工作目录，同样只透传。
     // 本函数是透传缝（参数原样进 chat 请求体，不解析语义），聚成结构体反而
     // 增加上下游改动面 → 豁免 too_many_arguments
     #[allow(clippy::too_many_arguments)]
@@ -209,6 +221,9 @@ impl SseBridge {
         page_context: Option<Value>,
         model_override: Option<String>,
         history_summary: Option<String>,
+        last_skill_id: Option<String>,
+        task_id: Option<String>,
+        task_title: Option<String>,
     ) -> AppResult<RunHandle> {
         crate::agent_manager::app_log(&format!("[sse_bridge] start_run 进入 run_id={}, prompt.len={}", run_id, prompt.len()));
         // Cancel any pre-existing run with the same id
@@ -269,6 +284,24 @@ impl SseBridge {
                 if let Some(hs) = history_summary {
                     if !hs.trim().is_empty() {
                         body["historySummary"] = Value::String(hs);
+                    }
+                }
+                // Skill 粘性（2026-08-26）：上一轮命中的 skill，本轮追问/修改时继承
+                if let Some(sid) = last_skill_id {
+                    if !sid.trim().is_empty() {
+                        body["lastSkillId"] = Value::String(sid);
+                    }
+                }
+                // 任务级工作目录（2026-08-26）：一个聊天页签 = 一个任务文件夹，
+                // 后端据此解析产出文件落盘目录并在 done 事件里回传 taskId/taskDir
+                if let Some(tid) = task_id {
+                    if !tid.trim().is_empty() {
+                        body["taskId"] = Value::String(tid);
+                        if let Some(tt) = task_title {
+                            if !tt.trim().is_empty() {
+                                body["taskTitle"] = Value::String(tt);
+                            }
+                        }
                     }
                 }
                 body
@@ -424,6 +457,7 @@ fn map_event_to_channel(event_name: &str) -> &'static str {
         "approval"    => channel::APPROVAL,
         "done"        => channel::DONE,
         "error"       => channel::ERROR,
+        "heartbeat"   => channel::HEARTBEAT,   // BUGFIX #161 看门狗心跳
         "skill_matched" => channel::SKILL_MATCHED,   // Phase 2D V0
         "llm_route_decided" => channel::LLM_ROUTE_DECIDED,   // Phase 2C V0
         "llm_degraded"      => channel::LLM_DEGRADED,
@@ -482,6 +516,11 @@ fn map_event_to_channel(event_name: &str) -> &'static str {
         "mode_routed"    => channel::MODE_ROUTED,
         "repair_attempt" => channel::REPAIR_ATTEMPT,
         "auto_decision"  => channel::AUTO_DECISION,
+        // 执行过程可视化（Claude Code 式） SSE 三处同步（CLAUDE.md §4）
+        "run_started"        => channel::RUN_STARTED,
+        "tool_progress"      => channel::TOOL_PROGRESS,
+        "shell_chunk"        => channel::SHELL_CHUNK,
+        "file_write_preview" => channel::FILE_WRITE_PREVIEW,
         _             => channel::LOG,
     }
 }

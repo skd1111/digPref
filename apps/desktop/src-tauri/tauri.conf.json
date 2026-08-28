@@ -36,7 +36,11 @@
     ],
     "resources": {
       "resources/*": "./",
-      "../../../config/driver/*": "./config/driver/"
+      "../../../config/driver/*": "./config/driver/",
+      "../../../vendor/officecli/*": "./vendor/officecli/",
+      "../../../vendor/executor/*": "./vendor/executor/",
+      "../../../vendor/ppt-master/": "./vendor/ppt-master/",
+      "../../../vendor/python/": "./vendor/python/"
     },
     "category": "DeveloperTool",
     "shortDescription": "Enterprise AI IDE",

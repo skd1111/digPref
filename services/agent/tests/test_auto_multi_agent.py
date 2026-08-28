@@ -114,7 +114,7 @@ class _DeciderLLM:
             raise RuntimeError("decompose boom")
         return self.decision
 
-    async def summarise(self, *, intent, user_prompt, plan, results):
+    async def summarise(self, *, intent, user_prompt, plan, results, history=None):
         self.summarise_calls += 1
         return "综合后的最终答案。", ["sub"]
 

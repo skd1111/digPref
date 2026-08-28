@@ -164,9 +164,108 @@ fn find_on_path(exe_base: &str) -> Option<PathBuf> {
     None
 }
 
-/// 配置目录 → PATH，两级解析。
+// ---------- 常见安装目录探测（与 Agent 侧 toolchain.py 的 COMMON_PROBES 对齐）----------
+//
+// 未配置且 PATH 也没有时，按常见安装位置做第三级探测；全部落空才报「未找到」。
+// Fixed：目录里的可执行文件位置固定；Prefix：子目录带版本号（如 Python312 / jdk-17），
+// 需扫描父目录下前缀匹配的子目录。
+#[cfg(target_os = "windows")]
+enum ProbeLoc {
+    Fixed(PathBuf),
+    Prefix(PathBuf, &'static str),
+}
+
+#[cfg(target_os = "windows")]
+fn common_probe_dirs(exe_base: &str) -> Vec<ProbeLoc> {
+    let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    match exe_base {
+        "javac" | "java" => vec![
+            ProbeLoc::Prefix(PathBuf::from(r"C:\Program Files\Java"), ""),
+            ProbeLoc::Prefix(PathBuf::from(r"C:\Program Files\Eclipse Adoptium"), ""),
+        ],
+        "python" => {
+            let mut v = vec![ProbeLoc::Prefix(PathBuf::from(r"C:\"), "Python3")];
+            if let Some(l) = local {
+                v.push(ProbeLoc::Prefix(l.join("Programs").join("Python"), "Python3"));
+            }
+            v.push(ProbeLoc::Prefix(PathBuf::from(r"C:\Program Files"), "Python3"));
+            v
+        }
+        "gcc" | "g++" => vec![
+            ProbeLoc::Fixed(PathBuf::from(r"C:\msys64\ucrt64\bin")),
+            ProbeLoc::Fixed(PathBuf::from(r"C:\msys64\mingw64\bin")),
+            ProbeLoc::Fixed(PathBuf::from(r"C:\mingw64\bin")),
+            ProbeLoc::Prefix(PathBuf::from(r"C:\"), "TDM-GCC"),
+        ],
+        _ => vec![],
+    }
+}
+
+/// 在目录里找可执行文件；versioned=true 时先扫前缀匹配的子目录（如 Python312/bin）。
+#[cfg(target_os = "windows")]
+fn find_exe_in_dir(dir: &Path, exe_base: &str, prefix: Option<&str>) -> Option<PathBuf> {
+    let target = with_exe(exe_base);
+    if let Some(pfx) = prefix {
+        // 版本化目录：直接找 <dir>/<exe> 失败后，扫子目录 <pfx>* 下的 <exe>
+        if dir.join(&target).is_file() {
+            return Some(dir.join(&target));
+        }
+        let sub_bin = dir.join("bin").join(&target);
+        if sub_bin.is_file() {
+            return Some(sub_bin);
+        }
+        let Ok(rd) = std::fs::read_dir(dir) else { return None };
+        let mut subs: Vec<PathBuf> = rd
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.is_dir()
+                    && p.file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n.starts_with(pfx))
+                        .unwrap_or(false)
+            })
+            .collect();
+        subs.sort();
+        for sub in subs.iter().rev() {
+            // 取最高版本（字典序倒序；jdk-17 风格与 Python312 风格都适用）
+            for cand in [sub.join(&target), sub.join("bin").join(&target)] {
+                if cand.is_file() {
+                    return Some(cand);
+                }
+            }
+        }
+        return None;
+    }
+    let cand = dir.join(&target);
+    cand.is_file().then_some(cand)
+}
+
+#[cfg(target_os = "windows")]
+fn probe_common_dirs(exe_base: &str) -> Option<PathBuf> {
+    for loc in common_probe_dirs(exe_base) {
+        let found = match loc {
+            ProbeLoc::Fixed(dir) => find_exe_in_dir(&dir, exe_base, None),
+            ProbeLoc::Prefix(parent, pfx) => find_exe_in_dir(&parent, exe_base, Some(pfx)),
+        };
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "windows"))]
+fn probe_common_dirs(_exe_base: &str) -> Option<PathBuf> {
+    // 非 Windows：PATH 之外暂无预置候选（Linux/macOS 包管理器一般都在 PATH）
+    None
+}
+
+/// 配置目录 → PATH → 常见安装目录，三级解析（与 Agent 侧 toolchain 解析顺序一致）。
 fn resolve_compiler(configured: &str, exe_base: &str) -> Option<PathBuf> {
-    resolve_from_config(configured, exe_base).or_else(|| find_on_path(exe_base))
+    resolve_from_config(configured, exe_base)
+        .or_else(|| find_on_path(exe_base))
+        .or_else(|| probe_common_dirs(exe_base))
 }
 
 // ---------- 源文件收集 ----------
@@ -506,7 +605,7 @@ pub async fn compile_files(
             }
             None => {
                 report.failed_count += java_files.len();
-                let msg = "未找到 javac：请在 设置 → 编译配置 手动选择 JDK 的 bin 目录（或确认 PATH 含 javac）".to_string();
+                let msg = "未找到 javac：请在 设置 → 工具链与编译 手动选择 JDK 的 bin 目录（或确认 PATH 含 javac）".to_string();
                 for f in &java_files {
                     report.entries.push(CompileEntry {
                         path: f.display().to_string(), ok: false, message: msg.clone(),
@@ -560,7 +659,7 @@ pub async fn compile_files(
             }
             None => {
                 report.failed_count += py_files.len();
-                let msg = "未找到 python：请在 设置 → 编译配置 手动选择 Python 目录（或确认 PATH 含 python）".to_string();
+                let msg = "未找到 python：请在 设置 → 工具链与编译 手动选择 Python 目录（或确认 PATH 含 python）".to_string();
                 for f in &py_files {
                     report.entries.push(CompileEntry {
                         path: f.display().to_string(), ok: false, message: msg.clone(),
@@ -610,7 +709,7 @@ pub async fn compile_files(
                     report.failed_count += 1;
                     report.entries.push(CompileEntry {
                         path: f.display().to_string(), ok: false,
-                        message: format!("未找到 {base}：请在 设置 → 编译配置 手动选择编译器目录"),
+                        message: format!("未找到 {base}：请在 设置 → 工具链与编译 手动选择编译器目录"),
                     });
                 }
             }
@@ -665,6 +764,29 @@ mod tests {
         // 空 / 不存在 → None
         assert_eq!(resolve_from_config("", "javac"), None);
         assert_eq!(resolve_from_config(r"Z:\not-exist-dir", "javac"), None);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn find_exe_in_versioned_subdirs() {
+        let dir = tmp_dir("probe");
+        // 模拟 C:\Python312\python.exe 风格：父目录 + 版本化子目录直放可执行文件
+        let sub = dir.join("Python312");
+        std::fs::create_dir_all(&sub).unwrap();
+        let exe = sub.join("python.exe");
+        std::fs::write(&exe, b"").unwrap();
+        assert_eq!(find_exe_in_dir(&dir, "python", Some("Python3")), Some(exe));
+
+        // 模拟 JDK 风格：子目录\bin\javac.exe
+        let jdk_bin = dir.join("jdk-17").join("bin");
+        std::fs::create_dir_all(&jdk_bin).unwrap();
+        let javac = jdk_bin.join("javac.exe");
+        std::fs::write(&javac, b"").unwrap();
+        assert_eq!(find_exe_in_dir(&dir, "javac", Some("")), Some(javac));
+
+        // 前缀不匹配 → None；空目录也安全返回 None
+        assert_eq!(find_exe_in_dir(&dir, "gcc", Some("msys")), None);
+        assert_eq!(find_exe_in_dir(&dir.join("ghost"), "python", Some("Python3")), None);
     }
 
     #[test]

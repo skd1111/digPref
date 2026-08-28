@@ -26,13 +26,15 @@ from typing import Any
 
 from agent.builtin.models import ToolResult, is_rust_tool
 from agent.builtin.registry import get_default_registry
+from agent.llm.prompts import normalize_message
 
 # 兼容 V0 import（外部代码 `from agent.builtin.dispatcher import dispatcher` 不变）
 __all__ = ["ToolDispatcher", "dispatcher", "reset_default_dispatcher"]
 
-# 底层规则（用户要求 2026-08-17）：创建类工具的输出路径默认落当前工作空间，
-# 按类型自动分类建目录；用户显式指定绝对路径时尊重用户。写类工具的目标
+# 底层规则（用户要求 2026-08-17 / 2026-08-26）：创建类工具的输出路径默认落当前任务目录，
+# 按类型自动分类建目录；用户显式指定绝对路径（出现在对话原文）时尊重用户。
 # 路径键名（write_file/edit_file=path；pdf_split 的 output_dir 是目录同理）。
+# 注：office_edit 是对已有文件的元素级修改（路径必须指向真实存在的文件），不参与改写。
 _CREATE_TOOL_PATH_KEYS: dict[str, tuple[str, ...]] = {
     "write_file": ("path",),
     "edit_file": ("path",),
@@ -40,26 +42,54 @@ _CREATE_TOOL_PATH_KEYS: dict[str, tuple[str, ...]] = {
     "excel_export": ("path",),
     "pdf_merge": ("output",),
     "pdf_split": ("output_dir",),
+    "office_create": ("path",),
 }
 
 
-def _apply_workspace_rule(name: str, args: dict) -> dict:
-    """创建类工具输出路径 → 当前工作空间（分类建目录）。
+def _user_context_texts(state: dict | None) -> tuple[str, ...]:
+    """从 state 提取用户对话原文（user_prompt + history 的 user 消息），
+    用于判定绝对路径是否用户显式指定。"""
+    if not isinstance(state, dict):
+        return ()
+    texts: list[str] = []
+    up = state.get("user_prompt")
+    if isinstance(up, str) and up:
+        texts.append(up)
+    for m in state.get("messages") or []:
+        parsed = normalize_message(m)
+        if parsed is None:
+            continue
+        role, content = parsed
+        if role == "user":
+            texts.append(content)
+    return tuple(texts)
+
+
+def _apply_workspace_rule(name: str, args: dict, state: dict | None = None) -> dict:
+    """创建类工具输出路径 → 当前任务目录/工作空间（分类建目录）。
 
     在 dispatch 入口统一改写 args，Rust 桥 / Python 执行 / 兜底三条链路
     一并生效，且 SSE / 审计 / 思维链记录的都是改写后的真实落盘路径。
+    任务级工作目录（2026-08-26）：有 task_id 时落任务目录；模型自造的绝对路径
+    （不在用户对话原文中）一并重定向，防产物散落用户目录。
     """
     keys = _CREATE_TOOL_PATH_KEYS.get(name)
     if not keys:
         return args
     try:
-        from agent.paths import resolve_output_path
+        from agent.paths import resolve_output_path, task_dir
 
+        tid = state.get("task_id") if isinstance(state, dict) else None
+        ttitle = state.get("task_title") if isinstance(state, dict) else None
+        root = task_dir(tid, ttitle)
+        texts = _user_context_texts(state)
         rewritten = dict(args)
         for key in keys:
             raw = rewritten.get(key)
             if isinstance(raw, str) and raw.strip():
-                rewritten[key] = str(resolve_output_path(raw.strip()))
+                rewritten[key] = str(
+                    resolve_output_path(raw.strip(), task_root=root, context_texts=texts)
+                )
         return rewritten
     except Exception:
         # 工作空间解析失败不阻断工具执行（回退原路径，沙箱校验仍会兜底）
@@ -142,13 +172,19 @@ class ToolDispatcher:
 
         name = call.get("name") or ""
         args = call.get("args") or {}
-        # 底层规则：创建类文件默认落当前工作空间（用户指定绝对路径除外）
-        args = _apply_workspace_rule(name, args)
+        # 底层规则：创建类文件默认落当前任务目录（用户指定绝对路径除外）
+        args = _apply_workspace_rule(name, args, state)
         run_id = state.get("run_id") if isinstance(state, dict) else None
         operator = state.get("operator") if isinstance(state, dict) else None
+        task_id = state.get("task_id") if isinstance(state, dict) else None
 
         # 调用标识（一次调度 = 一个 UUID；HITL resume 用同一 call_id 关联）
+        # 根治 BUGFIX #164：必须**写回 call 字典**。此前只在局部变量里用，
+        # pending_tool_call 不带 call_id → SSE 的 tool_call / tool_result 两条
+        # 事件没有共享标识，前端无法配对（卡片永久转圈）；HITL 审批后重跑
+        # 同一调用也会拿到新 UUID，前端多出一张卡。
         call_id = call.get("call_id") or uuid.uuid4().hex
+        call["call_id"] = call_id
 
         # ---- 1. 工具存在性（含 Rust 占位）----
         # 先识别 Rust 工具（占位 — dispatcher 不需要 registry 收录也能跑通路径）
@@ -175,12 +211,18 @@ class ToolDispatcher:
             risk_level=risk_level,
             needs_hitl=needs_hitl,
             call_id=call_id,
+            run_id=run_id,
         )
 
         # ---- 2.5 HITL 前置闸门：未审批的写 / 高危调用不执行，等 hitl_gate_node ----
         # 真实 HITL interrupt（V2）：返回 awaiting_approval=True 且不 advance，
         # 审批通过后 tool_runner 重新进入本 dispatch（approval_decision=approve）。
         if needs_hitl and not approved:
+            # 执行过程可视化（阶段四）：暂停审批前先下发写前 unified diff，
+            # 让用户在审批卡侧看清「将改什么」（FullDiffModal 红绿对比）；
+            # best-effort，失败不阻断审批闸门（HITL 红线不回退）。
+            if name in ("write_file", "edit_file"):
+                await _emit_write_preview(name=name, args=args, call_id=call_id, run_id=run_id)
             return {
                 "pending_tool_call": call,
                 "tool_result": None,
@@ -208,7 +250,22 @@ class ToolDispatcher:
 
             trace_before = read_text_best_effort(str(args.get("path") or "")) or ""
 
-        if is_rust:
+        # 执行过程可视化（阶段三）：绑定当前执行上下文（call_id / run_id），
+        # 工具实现（如 shell 流式输出）据此给细粒度事件盖章，与 tool_call /
+        # tool_result 同源配对；执行完毕无论成败都还原，防串台。
+        from agent.builtin.exec_context import bind_exec_scope, reset_exec_scope
+
+        _exec_scope_token = bind_exec_scope(call_id, run_id)
+        if is_rust and name == "shell":
+            # 执行过程可视化（阶段三）：shell 走 Python 异步流式路径（边跑边发
+            # shell_chunk），安全语义与 Rust 端严格镜像（白名单 / 危险操作符 /
+            # 超时强杀，BUGFIX #165）；其余 8 个 Rust 工具仍走 bridge/executor。
+            try:
+                result = await self._exec_python_fallback(name, args)
+            except Exception as exc:
+                result = ToolResult.from_exception(exc, risk_level=risk_level)
+                result.error = f"exec_failed: {type(exc).__name__}: {exc}"
+        elif is_rust:
             from agent.builtin.tauri_bridge import (
                 has_python_fallback,
                 invoke_rust_tool_sync,
@@ -261,6 +318,7 @@ class ToolDispatcher:
             except Exception as exc:
                 result = ToolResult.from_exception(exc, risk_level=risk_level)
                 result.error = f"exec_failed: {type(exc).__name__}: {exc}"
+        reset_exec_scope(_exec_scope_token)
 
         elapsed_ms = int((time.monotonic() - started_ts) * 1000)
 
@@ -277,7 +335,20 @@ class ToolDispatcher:
             risk_level=risk_level,
             content_size=content_size,
             result_meta=result.meta,
+            run_id=run_id,
         )
+
+        # ---- 4.5 任务台账（2026-08-26）：创建类工具成功落盘 → 记为交付产物 ----
+        if result.ok and task_id:
+            for key in _CREATE_TOOL_PATH_KEYS.get(name, ()):
+                raw = args.get(key)
+                if isinstance(raw, str) and raw.strip():
+                    try:
+                        from agent.paths import ledger_record
+
+                        ledger_record(task_id, raw.strip(), "artifact")
+                    except Exception:
+                        pass  # best-effort
 
         # ---- 5. 审计（双写 audit() + tool_calls 表）----
         await _audit_builtin_call(
@@ -301,6 +372,10 @@ class ToolDispatcher:
 
         # ---- 6. 组装 AgentState 增量 ----
         trace_status = "ok" if result.ok else "fail"
+        # 配对字段回填（根治 BUGFIX #164）：工具实现只关心业务结果，
+        # name / call_id 由 dispatcher 统一盖章，保证 SSE 一定带得上。
+        result.name = result.name or name
+        result.call_id = result.call_id or call_id
         return {
             "pending_tool_call": call,
             "tool_result": result.to_dict(),
@@ -579,6 +654,7 @@ async def _emit_started(
     risk_level: str,
     needs_hitl: bool,
     call_id: str,
+    run_id: str | None = None,
 ) -> None:
     """SSE emit: builtin_tool_started."""
     try:
@@ -590,6 +666,7 @@ async def _emit_started(
             risk_level=risk_level,
             needs_hitl=needs_hitl,
             call_id=call_id,
+            run_id=run_id,
         )
     except Exception:
         pass  # best-effort
@@ -605,6 +682,7 @@ async def _emit_done(
     risk_level: str,
     content_size: int,
     result_meta: dict,
+    run_id: str | None = None,
 ) -> None:
     """SSE emit: builtin_tool_done."""
     try:
@@ -619,6 +697,7 @@ async def _emit_done(
             risk_level=risk_level,
             content_size=content_size,
             result_meta=result_meta,
+            run_id=run_id,
         )
     except Exception:
         pass  # best-effort
@@ -633,6 +712,71 @@ def _trace_entry(node: str, status: str, **extra: Any) -> dict:
     }
     entry.update(extra)
     return entry
+
+
+# ---- 写前 Diff 预览（执行过程可视化 · 阶段四）--------------------------------
+
+# 预览 diff 体积上限（超大改动只截前段，审批仍可继续）
+_PREVIEW_DIFF_MAX_CHARS = 65536
+
+
+def _preview_unified_diff(name: str, args: dict, path: str) -> str:
+    """计算写前 unified diff（只读，不落盘；读原文件失败按新建文件处理）。"""
+    import difflib
+    from pathlib import Path
+
+    def _read_original() -> str:
+        try:
+            return Path(path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+
+    original = _read_original()
+    if name == "write_file":
+        new_content = str(args.get("content") or "")
+    else:  # edit_file：镜像工具语义（非 replace_all 多匹配会被工具拒绝 → 不出预览）
+        search_text = str(args.get("search_text") or "")
+        replace_text = str(args.get("replace_text") or "")
+        if not search_text or search_text not in original:
+            return ""
+        if not bool(args.get("replace_all", False)) and original.count(search_text) > 1:
+            return ""
+        new_content = original.replace(search_text, replace_text)
+    lines = difflib.unified_diff(
+        original.splitlines(keepends=True),
+        new_content.splitlines(keepends=True),
+        fromfile=f"a/{Path(path).name or path}",
+        tofile=f"b/{Path(path).name or path}",
+        n=3,
+    )
+    diff = "".join(lines)
+    return diff[:_PREVIEW_DIFF_MAX_CHARS]
+
+
+async def _emit_write_preview(
+    *,
+    name: str,
+    args: dict,
+    call_id: str,
+    run_id: str | None = None,
+) -> None:
+    """SSE emit: file_write_preview（写类工具落盘前的 unified diff 预览）。"""
+    try:
+        from agent.builtin.events import emit_file_write_preview
+
+        path = str(args.get("path") or "")
+        diff = _preview_unified_diff(name, args, path)
+        if not diff and name == "edit_file":
+            return  # 无法构造有意义预览（无匹配 / 多匹配）→ 不发，审批照旧
+        await emit_file_write_preview(
+            call_id=call_id,
+            path=path,
+            diff=diff,
+            risk_level="medium",
+            run_id=run_id,
+        )
+    except Exception:
+        pass  # best-effort：预览失败不阻断审批闸门
 
 
 # ---- 单例工厂（测试可重置）---------------------------------------------------

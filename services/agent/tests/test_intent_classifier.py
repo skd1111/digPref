@@ -6,6 +6,11 @@ from agent.skills.loader import SkillLoader
 from agent.skills.router import SkillRouter
 
 
+async def _true() -> bool:
+    """_local_backend_alive 的异步 True 替身（测试放行 LLM 层）。"""
+    return True
+
+
 @pytest.fixture
 def router(tmp_path):
     d = tmp_path / "skills"
@@ -104,6 +109,8 @@ async def test_route_async_with_mocked_llm(router, monkeypatch):
         return mock_result
 
     monkeypatch.setattr(router_mod, "classify_with_llm", mock_classify)
+    # 2026-08-26：LLM 层闸门改为真实探活，测试里直接放行让 mock 生效
+    monkeypatch.setattr(router_mod.SkillRouter, "_local_backend_alive", lambda self: _true())
     r = await router.route_async("对账")
     print(f"\nDEBUG call_log={call_log} skill={r.skill_id} conf={r.confidence}")
     assert r.skill_id == "finance_reconcile"
@@ -112,8 +119,8 @@ async def test_route_async_with_mocked_llm(router, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_route_async_no_utility_backend_falls_to_keyword(router, monkeypatch):
-    """无 utility 后端 → 跳过 utility 层 → 关键词回退。"""
-    # 临时改 utility role
+    """LLM 层回退：探活失败/分类无果 → 关键词回退（2026-08-26 闸门改为真实探活）。"""
+    # 临时改 utility role（旧闸门依赖已移除，保留字段改动验证不受影响）
     loader = router._loader
     util = loader.get("db_query_order")
     original_role = util.role

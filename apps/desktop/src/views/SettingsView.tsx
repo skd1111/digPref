@@ -28,13 +28,14 @@ import { RouterDashboard } from '@/components/router/RouterDashboard';
 import { CodeNavSettingsPanel } from '@/components/codenav/CodeNavSettingsPanel';
 import { ToolchainSettingsPanel } from './settings/ToolchainSettingsPanel';
 import { WorkspaceSettingsPanel } from './settings/WorkspaceSettingsPanel';
-import { CompileSettingsPanel } from './settings/CompileSettingsPanel';
+import { McpSettingsPanel } from './settings/McpSettingsPanel';
 import { AdvancedSettingsPanel } from './settings/AdvancedSettingsPanel';
 
-type SectionId = 'envs' | 'models' | 'gen-limits' | 'dspark' | 'secrets' | 'terminal' | 'about' | 'skills' | 'expert-teams' | 'router' | 'codenav' | 'toolchain' | 'workspace' | 'compile' | 'advanced';
+type SectionId = 'envs' | 'models' | 'gen-limits' | 'dspark' | 'secrets' | 'terminal' | 'about' | 'skills' | 'expert-teams' | 'router' | 'codenav' | 'toolchain' | 'workspace' | 'advanced' | 'mcp';
 
 const SECTIONS: { id: SectionId; label: string; icon: string }[] = [
   { id: 'envs', label: 'Environments', icon: '🌍' },
+  { id: 'mcp', label: 'MCP', icon: '🔌' },
   { id: 'workspace', label: '工作空间', icon: '📁' },
   { id: 'models', label: '模型管理', icon: '🧠' },
   { id: 'gen-limits', label: '模型与回复', icon: '💬' },
@@ -46,12 +47,11 @@ const SECTIONS: { id: SectionId; label: string; icon: string }[] = [
   { id: 'expert-teams', label: '专家团', icon: '👥' },
   { id: 'router', label: '路由仪表盘', icon: '🧭' },
   { id: 'codenav', label: '代码导航', icon: '🔍' },
-  { id: 'toolchain', label: '工具链', icon: '🛠' },  // Phase 18
-  { id: 'compile', label: '编译配置', icon: '🔨' },  // 文件树右键编译（2026-08-19）
+  { id: 'toolchain', label: '工具链与编译', icon: '🛠' },  // Phase 18；2026-08-28 并入原「编译配置」
   { id: 'advanced', label: '高级设置', icon: '⚙' },  // 推理模式 + 会话自主性（2026-08-05）
 ];
 
-const KNOWN_SEGS: SectionId[] = ['envs', 'models', 'gen-limits', 'dspark', 'secrets', 'terminal', 'about', 'skills', 'expert-teams', 'router', 'codenav', 'toolchain', 'workspace', 'compile', 'advanced'];
+const KNOWN_SEGS: SectionId[] = ['envs', 'models', 'gen-limits', 'dspark', 'secrets', 'terminal', 'about', 'skills', 'expert-teams', 'router', 'codenav', 'toolchain', 'workspace', 'advanced', 'mcp'];
 
 export function SettingsView(): JSX.Element {
   const location = useLocation();
@@ -151,6 +151,7 @@ export function SettingsView(): JSX.Element {
         {/* 右内容 */}
         <main className="flex-1 overflow-auto p-6">
           {active === 'envs' && <EnvironmentsSettingPanel />}
+          {active === 'mcp' && <McpSettingsPanel />}
           {active === 'models' && <ModelManagementPanel />}
           {active === 'gen-limits' && <GenLimitsPanel />}
           {active === 'dspark' && <DSparkSettingsPanel />}
@@ -163,7 +164,6 @@ export function SettingsView(): JSX.Element {
           {active === 'codenav' && <CodeNavSettingsPanel />}
           {active === 'toolchain' && <ToolchainSettingsPanel />}
           {active === 'workspace' && <WorkspaceSettingsPanel />}
-          {active === 'compile' && <CompileSettingsPanel />}
           {active === 'advanced' && <AdvancedSettingsPanel />}
         </main>
       </div>

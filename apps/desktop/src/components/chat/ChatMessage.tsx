@@ -17,6 +17,7 @@ import { CodeBlock } from './CodeBlock';
 import { ApprovalCard } from './ApprovalCard';
 import { Markdown } from './Markdown';
 import { AiSearchIndicator } from './AiStatus';
+import { TaskCleanupCard } from './TaskCleanupCard';
 
 interface Props {
   message: ChatMessageT;
@@ -69,6 +70,15 @@ export function ChatMessage({ message, maxWidth, streaming }: Props): JSX.Elemen
   // 任务结束汇总的改动文件清单（2026-08-19）：可点击，点击在 Monaco 打开
   if (message.role === 'system' && message.kind === 'changed_files') {
     return <ChangedFilesCard message={message} />;
+  }
+  // 任务进度待办卡（BUGFIX #150）：不再占对话区版面，改由 CenterChatFlow
+  // 悬浮在会话页签下方常驻展示；消息仍留在 store 供横幅读取与历史归档。
+  if (message.role === 'system' && message.kind === 'todo') {
+    return <></>;
+  }
+  // 交付后验收清理卡（2026-08-26）：询问是否清理任务目录内除产物外的文件
+  if (message.role === 'system' && message.kind === 'task_cleanup_confirm') {
+    return <TaskCleanupCard message={message} />;
   }
   return (
     <div className="mb-3">

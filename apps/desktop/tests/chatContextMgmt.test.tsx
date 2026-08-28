@@ -140,6 +140,9 @@ const chatCompressHistory = vi.fn().mockResolvedValue({
 vi.mock('@/ipc/invoke', () => ({
   ipc: {
     routerListBackends: vi.fn().mockResolvedValue({ backends: [] }),
+    routerGetGenLimits: vi
+      .fn()
+      .mockResolvedValue({ ok: true, limits: { max_output_tokens: 4096, default_context_window: 4096 } }),
     chatCompressHistory: (...args: unknown[]) => chatCompressHistory(...args),
     chatAttachFile: vi.fn(),
     cancel: vi.fn(),
@@ -151,7 +154,8 @@ vi.mock('@/ipc/invoke', () => ({
 }));
 
 import { ChatInput } from '@/components/chat/ChatInput';
-import { invoke } from '@/ipc/invoke';
+import { CTX_AUTO_COMPRESS_RATIO } from '@/components/chat/ChatInput';
+import { invoke, ipc } from '@/ipc/invoke';
 import { useCodeNavStore } from '@/store/codeNavStore';
 
 /** 构造 N 轮对话（每轮 user+assistant 各 8 字符 = 各 2 tok） */
@@ -172,6 +176,10 @@ describe('ChatInput 上下文指示器与清理/压缩菜单', () => {
     localStorage.clear();
     chatCompressHistory.mockClear();
     (invoke as unknown as ReturnType<typeof vi.fn>).mockClear();
+    // mockReset 清掉上一用例的 Once 队列/实现，再回默认大窗口（不触发自动压缩）
+    (ipc.routerGetGenLimits as unknown as ReturnType<typeof vi.fn>)
+      .mockReset()
+      .mockResolvedValue({ ok: true, limits: { max_output_tokens: 4096, default_context_window: 4096 } });
   });
 
   afterEach(async () => {
@@ -187,6 +195,14 @@ describe('ChatInput 上下文指示器与清理/压缩菜单', () => {
       busy: false,
       runId: null,
       inferenceMode: s.inferenceMode,
+      // 多会话并发运行态字段同步复位（否则上个用例 startRun 的归属会泄漏）
+      busyTabIds: [],
+      runTabMap: {},
+      tabRunIds: {},
+      runPhaseByRun: {},
+      changedFilesByRun: {},
+      artifactsByRun: {},
+      runStartTsByRun: {},
     }));
   });
 
@@ -275,6 +291,61 @@ describe('ChatInput 上下文指示器与清理/压缩菜单', () => {
     const compressBtn = allButtons(document.body).find((b) => b.textContent?.includes('压缩上下文'));
     expect(compressBtn).toBeTruthy();
     expect(compressBtn!.disabled).toBe(true);
+  });
+
+  it('发送时历史超窗口 90% 自动压缩（手动入口保留）', async () => {
+    // 窗口 30 tok → 90% = 27；7 轮 × 4 tok = 28 tok 越线，且 > 5 轮可压 4 条（2 轮）；
+    // Once 用完即回落 beforeEach 设的 4096 默认，不泄漏到后续用例（挂载时 refresh 拉一次）
+    (ipc.routerGetGenLimits as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ok: true,
+      limits: { max_output_tokens: 4096, default_context_window: 30 },
+    });
+    setMessages(turns(7));
+    await render();
+    const ta = container.querySelector('textarea')!;
+    const setValue = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')!.set!;
+    await act(async () => {
+      setValue.call(ta, '继续聊');
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const sendBtn = allButtons(container).find((b) => b.title === '发送')!;
+    await act(async () => {
+      sendBtn.click();
+    });
+
+    // 压缩只含保留轮之外的旧对话（14 - 10 = 4 条）
+    expect(chatCompressHistory).toHaveBeenCalledTimes(1);
+    const body = chatCompressHistory.mock.calls[0][0] as { messages: Array<{ role: string }> };
+    expect(body.messages.length).toBe(4);
+    // 断点/摘要已应用，且发送确实发出（自动压缩不阻塞发送）
+    const tab = useChatStore.getState().tabs[0];
+    expect(tab.contextSummary).toBe('压缩后的摘要');
+    expect(tab.contextBreakpoint).toBe('a1');
+    expect(invoke).toHaveBeenCalledTimes(1);
+    // 自动压缩日志与手动压缩日志都在流里（手动入口行为不变）
+    expect(tab.messages.some((m) => m.content.includes('已自动压缩'))).toBe(true);
+    expect(tab.messages.some((m) => m.content.includes('上下文已压缩'))).toBe(true);
+  });
+
+  it('发送时历史未达窗口 90% 不自动压缩', async () => {
+    // 默认 mock 窗口 4096 → 阈值 3686；7 轮 = 28 tok 远未越线；阈值公式也验一下（0.9）
+    expect(CTX_AUTO_COMPRESS_RATIO).toBe(0.9);
+    setMessages(turns(7));
+    await render();
+    const ta = container.querySelector('textarea')!;
+    const setValue = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')!.set!;
+    await act(async () => {
+      setValue.call(ta, '继续聊');
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const sendBtn = allButtons(container).find((b) => b.title === '发送')!;
+    await act(async () => {
+      sendBtn.click();
+    });
+
+    expect(chatCompressHistory).not.toHaveBeenCalled();
+    expect(useChatStore.getState().tabs[0].contextSummary).toBeUndefined();
+    expect(invoke).toHaveBeenCalledTimes(1); // 发送照常进行，未被压缩流程阻塞
   });
 
   it('选区代码拼进 prompt 发送，且不写「用户关注以下代码」system 日志（2026-08-19 回归）', async () => {

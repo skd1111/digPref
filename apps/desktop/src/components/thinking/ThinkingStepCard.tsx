@@ -32,7 +32,14 @@ const SECTION_COLOR: Record<string, string> = {
   '【决策】': '#795e26',
 };
 
-export function ThinkingStepCard({ step }: { step: ThinkingStep }): JSX.Element {
+export function ThinkingStepCard({
+  step,
+  flash,
+}: {
+  step: ThinkingStep;
+  /** 执行块跳转命中时闪烁提示（#153） */
+  flash?: boolean;
+}): JSX.Element {
   const [open, setOpen] = useState(true);
   const meta = NODE_META[step.node_name] ?? {
     label: step.node_name,
@@ -43,15 +50,15 @@ export function ThinkingStepCard({ step }: { step: ThinkingStep }): JSX.Element 
   const latency = step.latency_ms != null ? `${step.latency_ms}ms` : '';
 
   return (
-    <li className="relative pl-5">
+    <li id={`think-step-${step.id}`} className="relative pl-5">
       {/* 时间线竖点 */}
       <span
         className="absolute left-0 top-2 h-2.5 w-2.5 rounded-full"
         style={{ backgroundColor: meta.color, boxShadow: `0 0 0 3px ${meta.color}22` }}
       />
       <div
-        className="rounded border"
-        style={{ borderColor: '#e0e0e0', backgroundColor: '#ffffff' }}
+        className={`rounded border${flash ? ' trace-flash' : ''}`}
+        style={{ borderColor: flash ? '#10a37f' : '#e0e0e0', backgroundColor: '#ffffff' }}
       >
         {/* 头部：点击折叠 */}
         <button

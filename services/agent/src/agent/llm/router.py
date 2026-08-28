@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import time
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Literal
 
@@ -52,7 +53,7 @@ from agent.llm.mock import MockLLMClient
 from agent.llm.normalize import build_response_cache_key
 from agent.llm.ollama import OllamaClient, OllamaUnavailableError
 from agent.llm.private_llm import PrivateLLMClient
-from agent.llm.prompts import current_time_text
+from agent.llm.prompts import current_time_text, format_history_brief, normalize_message
 from agent.llm.types import Intent, TaskKind
 from agent.prompts import (
     DYNAMIC_TOOL_ORCHESTRATOR_PROMPT,
@@ -320,37 +321,36 @@ def _parse_orchestration_decision(text: str) -> dict | None:
 
 
 def _conversation_summary(history: list) -> str:
-    """把最近几轮对话压缩成决策器可用的摘要文本。"""
+    """把最近几轮对话压缩成决策器可用的摘要文本。
+
+    根治 BUGFIX #163：此前对 BaseMessage 走 ``getattr(message, "role", "user")``，
+    对象没有 ``.role`` → 每条都退化成默认 ``"user"``，assistant 回复被误标成
+    用户提问，决策器看到的是一段用户自言自语。改走 normalize_message，
+    解析不出的条目**跳过**而不是猜一个 role。
+    """
     lines: list[str] = []
     for message in history[-6:]:
-        if isinstance(message, dict):
-            role = str(message.get("role") or "user")
-            content = str(message.get("content") or "")[:200]
-        else:
-            role = str(getattr(message, "role", "user"))
-            content = str(getattr(message, "content", "") or "")[:200]
-        lines.append(f"{role}: {content}")
+        parsed = normalize_message(message)
+        if parsed is None:
+            continue
+        role, content = parsed
+        lines.append(f"{role}: {content[:200]}")
     return "\n".join(lines)[:1500]
 
 
 def _compact_messages(messages: list) -> list[dict]:
-    """把最近几轮对话压成 [{role, content}]，供动态工具编排器使用。"""
+    """把最近几轮对话压成 [{role, content}]，供动态工具编排器使用。
+
+    根治 BUGFIX #163：同 :func:`_conversation_summary`，不再把 BaseMessage
+    一律误标成 ``"user"``。
+    """
     out: list[dict] = []
     for message in messages[-6:]:
-        if isinstance(message, dict):
-            out.append(
-                {
-                    "role": str(message.get("role") or "user"),
-                    "content": str(message.get("content") or "")[:200],
-                }
-            )
-        else:
-            out.append(
-                {
-                    "role": str(getattr(message, "role", "user")),
-                    "content": str(getattr(message, "content", "") or "")[:200],
-                }
-            )
+        parsed = normalize_message(message)
+        if parsed is None:
+            continue
+        role, content = parsed
+        out.append({"role": role, "content": content[:200]})
     return out
 
 
@@ -520,6 +520,30 @@ def _str_list(value: Any) -> list[str]:
     return [str(v) for v in value if isinstance(v, str) and v.strip()]
 
 
+class _Unset:
+    """run 作用域未设值哨兵类型（区别于显式 None=清除）。"""
+
+
+_UNSET = _Unset()
+
+# 多会话并发（2026-08-26）：模型选择/推理模式的 run 级作用域。
+# chat_stream 在各自的事件生成器任务里设值，同一 asyncio 任务链（含图节点/
+# LLM 调用）自动继承 → 并发跑的两个会话各用各的模型，不再经实例字段互踩。
+_run_chat_model_override: ContextVar[str | _Unset | None] = ContextVar(
+    "eaide_run_chat_model_override", default=_UNSET
+)
+_run_inference_mode: ContextVar[Literal["normal", "performance"] | _Unset] = ContextVar(
+    "eaide_run_inference_mode", default=_UNSET
+)
+
+
+def bind_run_scope(model_override: str | None, inference_mode: str | None) -> None:
+    """把本次 run 的模型选择/推理模式写入当前异步上下文（并发隔离）。"""
+    _run_chat_model_override.set((model_override or "").strip() or None)
+    if inference_mode in ("normal", "performance"):
+        _run_inference_mode.set(inference_mode)
+
+
 # Tasks that *must* run locally first — they may receive sensitive payloads
 # (raw DB rows, SQL errors, secrets accidentally echoed in tool output).
 # 2026-08-05 调整：语义从「强制本地」放宽为「本地优先」——本地 Ollama 不可用
@@ -630,12 +654,31 @@ def _is_mock_mode() -> bool:
 
 
 def _classify_http_error(exc: Exception) -> type[LLMBackendError]:
-    """把 httpx / 解析错误映射到 LLMBackendError 子类。"""
+    """把 httpx / 解析错误映射到 LLMBackendError 子类。
+
+    400 细分（BUGFIX #159）：响应体指向 tool id 配对失败或参数不支持时映射到
+    专属子类 —— 两者处置完全不同（前者修消息构造，后者做参数适配），且都不应
+    计入熔断失败。判定基于异常消息中的服务端响应体正文（_raise_http_with_body 已拼入）。
+    """
     import httpx
 
     if isinstance(exc, httpx.HTTPStatusError):
         if exc.response.status_code == 429:
             return LLMRateLimitError
+        if exc.response.status_code == 400:
+            detail = str(exc).lower()
+            if "tool id" in detail or "tool_call_id" in detail:
+                from agent.llm.fallback import LLMToolIdMismatchError
+
+                return LLMToolIdMismatchError
+            if (
+                "response_format" in detail
+                or "json_schema" in detail
+                or ("max_tokens" in detail or "max_completion_tokens" in detail)
+            ):
+                from agent.llm.fallback import LLMParamUnsupportedError
+
+                return LLMParamUnsupportedError
         if exc.response.status_code >= 500:
             return LLMUnavailableError
     if isinstance(exc, (httpx.ConnectError, httpx.TimeoutException, OllamaUnavailableError)):
@@ -849,6 +892,10 @@ class LMRouter:
 
     @property
     def inference_mode(self) -> Literal["normal", "performance"]:
+        # 并发作用域优先（本 run 的设定），未设值回落实例字段（单跑/旧语义）
+        scoped = _run_inference_mode.get()
+        if not isinstance(scoped, _Unset):
+            return scoped
         return self._inference_mode
 
     def set_inference_mode(self, mode: Literal["normal", "performance"]) -> None:
@@ -866,6 +913,10 @@ class LMRouter:
 
     @property
     def chat_model_override(self) -> str | None:
+        # 并发作用域优先（本 run 选的模型），未设值回落实例字段（单跑/旧语义）
+        scoped = _run_chat_model_override.get()
+        if not isinstance(scoped, _Unset):
+            return scoped
         return self._chat_model_override
 
     def set_chat_model_override(self, name: str | None) -> None:
@@ -888,7 +939,7 @@ class LMRouter:
         local → OllamaClient；private/cloud → PrivateLLMClient（OpenAI 兼容，
         与 _build_private_client / _build_cloud_client 同款构建）。
         """
-        name = self._chat_model_override
+        name = self.chat_model_override
         if not name or self._mock_mode:
             return None
         from agent.llm.storage import list_backends
@@ -1324,7 +1375,10 @@ class LMRouter:
         page_context（2026-08-14）：当前页签/场景的一行描述，非空时拼进
         user 消息，帮模型消除“连接”这类模糊动词的场景歧义。
 
-        降级链：ollama → private → 旧式 classify_intent 包装（绝不抛异常）。
+        降级链（BUGFIX #141 动态降级）：ollama → private → cloud → plain。
+        _LOCAL_ONLY_TASKS 自 2026-08-05 起语义即「本地优先」，本地/内网都不可用
+        时继续降云端，绝不直接掉到关键词启发式（实测：本地 Ollama 未配置时
+        纠偏短句被 mock 启发式误判闲聊，模板直回吞掉用户纠正）。
 
         BUGFIX（2026-08-17）：此前返回 IntentAnalysis 对象，而调用方
         intent_node 用 isinstance(analysis, dict) 判定 → 分析结果被静默丢弃，
@@ -1346,6 +1400,27 @@ class LMRouter:
                 chain.append(
                     ("private", lambda: self.private.analyze_intent(text, history, page_context))
                 )
+
+            # 云端动态降级（BUGFIX #141）：本地 Ollama / 内网都不可用时用模型管理里
+            # 已启用的云端后端做结构化意图分析，而不是直接掉到 plain 关键词启发式。
+            async def _cloud_analyze() -> dict:
+                try:
+                    cloud = await self._build_cloud_client()
+                except Exception as exc:
+                    raise LLMBackendError(f"cloud registry error: {exc}") from exc
+                if cloud is None:
+                    raise LLMBackendError("cloud backend not configured")
+                base_url = str(getattr(cloud, "base_url", "") or "cloud")
+                if _backend_down(base_url):
+                    raise LLMBackendError("cloud backend cooling down")
+                try:
+                    return await cloud.analyze_intent(text, history, page_context)
+                except Exception as exc:
+                    if _connect_failure(exc):
+                        _mark_backend_down(base_url)
+                    raise
+
+            chain.append(("cloud", _cloud_analyze))
 
         async def _plain_fallback() -> dict:
             intent = await self.classify_intent(text)
@@ -1469,8 +1544,12 @@ class LMRouter:
         user_prompt: str,
         plan: list[dict],
         results: list[dict],
+        history: list | None = None,
     ) -> tuple[str, list[str]]:
         """Return (final_answer, sources_referenced).
+
+        history（BUGFIX #135）：会话历史（最近几轮原文）随请求透传到后端终答，
+        跨轮追问不再「说一句忘一句」；同时进 L1 缓存 key（同问不同上下文不同 key）。
 
         V2 增量：当 `self._spark_mode=True` 时调 engine.spark_route（V2.0 placeholder）。
         """
@@ -1489,9 +1568,11 @@ class LMRouter:
                 user_prompt=user_prompt,
                 plan=plan,
                 results=results,
+                history=history,
             )
         # Phase 17 V0: L1 精确缓存 —— 相同请求直接返回，跳过整条降级链。
         # 红线：含写工具的 plan 不查不写（_plan_contains_write）。
+        history_brief = format_history_brief(history)
         cache_key: str | None = None
         if _L1_ENABLED and not _plan_contains_write(plan):
             cache_key = build_response_cache_key(
@@ -1500,6 +1581,7 @@ class LMRouter:
                 user_prompt=user_prompt,
                 plan=plan,
                 results=results,
+                history_brief=history_brief,
             )
             cached = _L1_RESPONSE_CACHE.get(cache_key)
             if cached is not None:
@@ -1534,7 +1616,7 @@ class LMRouter:
             override = None
             errors.append(f"override: registry error {exc}")
         if override is not None:
-            candidates.append((f"override:{self._chat_model_override}", override))
+            candidates.append((f"override:{self.chat_model_override}", override))
         if self.private is not None:
             candidates.append(("private", self.private))
         candidates.append(("ollama", self.ollama))
@@ -1556,6 +1638,7 @@ class LMRouter:
                     user_prompt=user_prompt,
                     plan=plan,
                     results=results,
+                    history=history,
                 )
                 if cache_key is not None:
                     _L1_RESPONSE_CACHE.put(

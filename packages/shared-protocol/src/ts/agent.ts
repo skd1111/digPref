@@ -19,8 +19,12 @@ export interface ChatMessage {
    * search = 搜索/检索类工具调用（2026-08-10），前端渲染 aicss 风格搜索卡片。
    * changed_files = 任务结束汇总的改动文件清单（2026-08-19），content 为路径 JSON 数组，
    *   前端渲染可点击卡片，点击在 Monaco 打开对应文件。
+   * todo = 任务进度待办列表（2026-08-25），content 为 TodoItem[] JSON，
+   *   前端按固定 id 原地更新渲染进度卡片（模型调 update_todos 伪工具驱动）。
+   * task_cleanup_confirm = 交付后验收清理卡（2026-08-26），content 为 {taskId, taskDir} JSON，
+   *   前端渲染〔清理中间文件〕/〔全部保留〕确认卡。
    */
-  kind?: 'execution' | 'normal' | 'error' | 'search' | 'changed_files';
+  kind?: 'execution' | 'normal' | 'error' | 'search' | 'changed_files' | 'todo' | 'task_cleanup_confirm';
   /** execution kind 时附带的分类标签 + 耗时（前端用来着色） */
   category?: string;
   latencyMs?: number;
@@ -57,4 +61,12 @@ export interface TraceStep {
   toolName?: string;
   /** LLM 规划的说明文本 */
   rationale?: string;
+  /** 任务进度待办列表（2026-08-25）：update_todos 伪工具经 trace 通道下发 */
+  todos?: TodoItem[];
+}
+
+/** 待办项（2026-08-25）：模型把多步任务拆成待办并实时更新状态 */
+export interface TodoItem {
+  content: string;
+  status: 'pending' | 'in_progress' | 'done';
 }

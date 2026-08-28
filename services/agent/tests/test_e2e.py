@@ -51,7 +51,7 @@ class _ScriptedLLM:
         self.repair_calls += 1
         return {**original, "args": {"sql": "SELECT 2"}}
 
-    async def summarise(self, *, intent, user_prompt, plan, results):
+    async def summarise(self, *, intent, user_prompt, plan, results, history=None):
         self.summarise_calls += 1
         return "Mock final answer.", ["db"]
 
@@ -113,7 +113,7 @@ class _WritePlanLLM:
         self.repair_calls += 1
         return original
 
-    async def summarise(self, *, intent, user_prompt, plan, results):
+    async def summarise(self, *, intent, user_prompt, plan, results, history=None):
         self.summarise_calls += 1
         return "Mock final.", []
 

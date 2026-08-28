@@ -114,7 +114,7 @@ class _MultiServerLLM:
     async def repair_call(self, *, original, error, history):
         return original
 
-    async def summarise(self, *, intent, user_prompt, plan, results):
+    async def summarise(self, *, intent, user_prompt, plan, results, history=None):
         return f"Summarised {len(results)} results.", ["db", "rest"]
 
 
@@ -141,7 +141,7 @@ class _LongContextLLM:
     async def repair_call(self, *, original, error, history):
         return original
 
-    async def summarise(self, *, intent, user_prompt, plan, results):
+    async def summarise(self, *, intent, user_prompt, plan, results, history=None):
         return "summary", ["db"]
 
 

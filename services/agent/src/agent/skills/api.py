@@ -12,15 +12,21 @@
 
 from __future__ import annotations
 
+import logging
+from typing import Any
+
 import yaml
 from fastapi import APIRouter, Body, File, HTTPException, UploadFile
 from fastapi.responses import Response
 
+from agent.skills import loader as _skills_loader
 from agent.skills.loader import SKILLS_DIR as _DEFAULT_SKILLS_DIR
 from agent.skills.loader import SkillLoader
 from agent.skills.schema import validate_no_dsn, validate_skill_yaml
+from agent.skills.seed import seed_builtin_skills
 from agent.skills.share import export_zip, import_zip
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/skills", tags=["skills"])
 
 # module-level 单例 loader（手动加载模式：save/import 端点更新它）
@@ -41,17 +47,24 @@ def init_loader() -> None:
     测试通过直接替换 api._loader 实现（见 test_skills_api.py）。
     """
     global _loader
-    _loader = SkillLoader()
+    # 显式读模块属性而非默认参数（默认参数在 import 时绑定，测试/重定向不可见）
+    _loader = SkillLoader(_skills_loader.SKILLS_DIR)
+    # V9.5：先播种内置 Office 生成规范种子（幂等、不覆盖用户文件），再扫描加载。
+    # 播种失败不阻断启动（降级为无内置种子，功能不受影响）。
+    try:
+        seed_builtin_skills(_loader._dir)
+    except Exception:
+        logger.exception("seed_builtin_skills failed (ignored)")
     _loader.load_all()
 
 
 @router.get("/list")
-def list_skills() -> dict:
+def list_skills() -> dict[str, Any]:
     return {"skills": [s.to_dict() for s in _loader.list()]}
 
 
 @router.get("/{skill_id}")
-def get_skill(skill_id: str) -> dict:
+def get_skill(skill_id: str) -> dict[str, Any]:
     s = _loader.get(skill_id)
     if not s:
         raise HTTPException(status_code=404, detail=f"skill {skill_id} not found")
@@ -59,7 +72,7 @@ def get_skill(skill_id: str) -> dict:
 
 
 @router.put("/{skill_id}")
-def save_skill(skill_id: str, body: dict = Body(...)) -> dict:
+def save_skill(skill_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     """保存并立即重载。"""
     errors = validate_skill_yaml(body)
     if errors:
@@ -81,7 +94,7 @@ def save_skill(skill_id: str, body: dict = Body(...)) -> dict:
 
 
 @router.delete("/{skill_id}")
-def delete_skill(skill_id: str) -> dict:
+def delete_skill(skill_id: str) -> dict[str, Any]:
     path = _loader._dir / f"{skill_id}.yaml"
     if path.exists():
         path.unlink()
@@ -90,7 +103,7 @@ def delete_skill(skill_id: str) -> dict:
 
 
 @router.post("/import")
-def import_skill(body: dict = Body(...)) -> dict:
+def import_skill(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
     errors = validate_skill_yaml(body)
     if errors:
         raise HTTPException(status_code=400, detail={"validation_errors": errors})
@@ -111,7 +124,7 @@ def import_skill(body: dict = Body(...)) -> dict:
 
 
 @router.get("/export/all")
-def export_all() -> dict:
+def export_all() -> dict[str, Any]:
     return {
         "skills": {s.id: yaml.safe_dump(s.to_dict(), allow_unicode=True) for s in _loader.list()}
     }
@@ -134,7 +147,7 @@ def export_zip_endpoint() -> Response:
 async def import_zip_endpoint(
     file: UploadFile = File(...),
     overwrite: bool = False,
-) -> dict:
+) -> dict[str, Any]:
     """V1: 上传 zip（multipart/form-data）→ 校验 → 写文件 → load_one。
 
     前端用 `<input type="file">` 选 zip 直接上传。
@@ -146,6 +159,6 @@ async def import_zip_endpoint(
 
 
 @router.post("/reload")
-def reload_all() -> dict:
+def reload_all() -> dict[str, Any]:
     _loader.load_all()
     return {"ok": True, "count": len(_loader.list())}

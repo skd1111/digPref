@@ -59,11 +59,19 @@ pub struct FindArgs {
 #[derive(serde::Deserialize)]
 pub struct GlobArgs {
     pub pattern: String,
+    /// 基准目录。别名 `base_dir` —— 工具 schema 对模型声明的是 base_dir，
+    /// 此前只接 root 且无默认值，模型按 schema 传参时拿到空串 →
+    /// validate_path("") 报 "empty path"，glob 永远不可用（BUGFIX #166）。
+    #[serde(default = "default_glob_root", alias = "base_dir")]
     pub root: String,
     #[serde(default)]
     pub max_results: usize,
     #[serde(default)]
     pub allowed_roots: Vec<String>,
+}
+
+fn default_glob_root() -> String {
+    ".".to_string()
 }
 
 
@@ -115,13 +123,26 @@ pub struct MoveArgs {
 /// shell 专属参数
 #[derive(serde::Deserialize)]
 pub struct ShellArgs {
+    #[serde(default)]
     pub command: String,
+    /// 参数数组形式（首选，BUGFIX #166）：直接执行，绕过 shell 引号规则。
+    /// 与 command 二选一，argv 非空时优先。
+    #[serde(default)]
+    pub argv: Vec<String>,
+    /// 工作目录。`cd` 不跨调用生效（每次调用是新进程），切目录必须用它。
+    #[serde(default)]
+    pub cwd: String,
     #[serde(default)]
     pub allowed_prefixes: Vec<String>,
     #[serde(default = "default_timeout_sec")]
     pub timeout_sec: u64,
     #[serde(default)]
     pub require_hitl: bool,
+    /// 非零退出码是否算成功（根治 BUGFIX #165）。默认 false。
+    /// 置 true 用于「非零退出是正常语义」的命令：findstr / grep 无匹配返 1、
+    /// diff 有差异返 1 等 —— 调用方明确知道自己在做什么时才用。
+    #[serde(default)]
+    pub allow_nonzero_exit: bool,
 }
 
 fn default_timeout_sec() -> u64 { 30 }
@@ -200,9 +221,12 @@ pub async fn builtin_move_file(args: MoveArgs) -> AppResult<builtin::ToolResult>
 pub async fn builtin_shell(args: ShellArgs) -> AppResult<builtin::ToolResult> {
     Ok(builtin::builtin_shell(
         &args.command,
+        &args.argv,
+        &args.cwd,
         &args.allowed_prefixes,
         args.timeout_sec,
         args.require_hitl,
+        args.allow_nonzero_exit,
     ))
 }
 

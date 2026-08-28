@@ -140,6 +140,32 @@ impl ToolResult {
         self.needs_hitl = needs_hitl;
         self
     }
+
+    /// 附加可操作建议（根治 BUGFIX #165）。
+    ///
+    /// 拦截 / 失败时只回一句 error 会让模型陷入盲试 —— 实测一次任务里对着
+    /// 同一条失败命令换了 22 种写法，把 24 轮编排预算烧光。hint 给出明确出路。
+    pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
+        self.hint = Some(hint.into());
+        self
+    }
+
+    /// 失败但保留 content（命令跑了但没达成目标 —— 模型需要看 stdout/stderr）。
+    pub fn fail_with_content(
+        error: impl Into<String>,
+        content: serde_json::Value,
+        risk_level: &str,
+    ) -> Self {
+        Self {
+            ok: false,
+            content: Some(content),
+            error: Some(error.into()),
+            hint: None,
+            meta: HashMap::new(),
+            needs_hitl: false,
+            risk_level: risk_level.into(),
+        }
+    }
 }
 
 /// 构造「需要 HITL 审批」的返回结果（工具未执行）。
@@ -396,14 +422,17 @@ pub fn builtin_move_file(
 ///     ToolResult.ok({command, exit_code, stdout, stderr, timed_out})
 pub fn builtin_shell(
     command: &str,
+    argv: &[String],
+    cwd: &str,
     allowed_prefixes: &[String],
     timeout_sec: u64,
     require_hitl: bool,
+    allow_nonzero_exit: bool,
 ) -> ToolResult {
     if evaluate_hitl("shell", require_hitl) {
         return hitl_required(RISK_CRITICAL, "shell requires HITL approval");
     }
-    execute_shell(command, allowed_prefixes, timeout_sec)
+    execute_shell(command, argv, cwd, allowed_prefixes, timeout_sec, allow_nonzero_exit)
 }
 
 
@@ -414,28 +443,66 @@ pub fn builtin_shell(
 ///   2. 首 token 白名单校验
 ///   3. 长度上限 4096
 ///   4. 超时强杀
-pub fn execute_shell(command: &str, allowed_prefixes: &[String], timeout_sec: u64) -> ToolResult {
-    let trimmed = command.trim();
-    if trimmed.is_empty() {
+///
+/// ``argv`` 非空时走**免 shell 路径**（根治 BUGFIX #166）：直接以参数数组执行，
+/// 无引号规则 / 无转义 / 无操作符解释 —— 这是唯一能可靠调用「路径含空格的
+/// 可执行文件」的方式。此前只有 command 形式，模型为了拼对引号连试 22 轮：
+/// cmd 下直接调用不成立，pwsh 下唯一正确的 `& "路径"` 写法又被操作符拦截。
+///
+/// ``cwd`` 非空时设置工作目录 —— `cd` 只影响那一次子进程，跨调用不生效。
+pub fn execute_shell(
+    command: &str,
+    argv: &[String],
+    cwd: &str,
+    allowed_prefixes: &[String],
+    timeout_sec: u64,
+    allow_nonzero_exit: bool,
+) -> ToolResult {
+    // ---- argv 形式：绕过 shell，不做操作符校验（数组元素不会被解释）----
+    let use_argv = !argv.is_empty();
+    let argv_clean: Vec<String> = argv.iter().filter(|a| !a.is_empty()).cloned().collect();
+    if use_argv && argv_clean.is_empty() {
         return ToolResult::fail("empty_command", RISK_CRITICAL);
     }
-    if trimmed.len() > SHELL_MAX_BYTES {
+    let trimmed = command.trim();
+    if !use_argv && trimmed.is_empty() {
+        return ToolResult::fail("empty_command", RISK_CRITICAL)
+            .with_hint("传 command 字符串，或（推荐）传 argv 参数数组绕过 shell 引号规则。");
+    }
+    let total_len: usize = if use_argv {
+        argv_clean.iter().map(|a| a.len()).sum()
+    } else {
+        trimmed.len()
+    };
+    if total_len > SHELL_MAX_BYTES {
         return ToolResult::fail(
-            format!("command_too_long: {} > {}", trimmed.len(), SHELL_MAX_BYTES),
+            format!("command_too_long: {} > {}", total_len, SHELL_MAX_BYTES),
             RISK_CRITICAL,
         );
     }
-    // 危险操作符拦截
-    for &ch in DANGEROUS_SHELL_CHARS {
-        if trimmed.contains(ch) {
-            return ToolResult::fail(
-                format!("dangerous_operator: {ch:?} not allowed in shell command"),
-                RISK_CRITICAL,
-            );
+    // 危险操作符拦截（仅 command 形式 —— argv 不经 shell，无注入面）
+    if !use_argv {
+        for &ch in DANGEROUS_SHELL_CHARS {
+            if trimmed.contains(ch) {
+                return ToolResult::fail(
+                    format!("dangerous_operator: {ch:?} not allowed in shell command"),
+                    RISK_CRITICAL,
+                )
+                .with_hint(operator_hint(ch));
+            }
         }
     }
-    // 首 token 白名单
-    let first = trimmed.split_whitespace().next().unwrap_or("");
+    // 首 token 白名单。argv 形式直接取首元素 —— 无需分词，天然免疫
+    // 「POSIX 分词啃掉 Windows 反斜杠」那类问题（BUGFIX #166）。
+    let first: &str = if use_argv {
+        argv_clean[0].as_str()
+    } else {
+        trimmed
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .trim_matches('"')
+    };
     if !allowed_prefixes.is_empty()
         && !allowed_prefixes.iter().any(|p| {
             let p = p.trim();
@@ -449,11 +516,28 @@ pub fn execute_shell(command: &str, allowed_prefixes: &[String], timeout_sec: u6
         return ToolResult::fail(
             format!("command_not_allowed: {first} (allowed: {allowed_prefixes:?})"),
             RISK_CRITICAL,
+        )
+        .with_hint(GENERAL_SHELL_HINT);
+    }
+
+    // 工作目录校验：不存在就直接报错，别让子进程抛难懂的 OSError
+    if !cwd.is_empty() && !Path::new(cwd).is_dir() {
+        return ToolResult::fail(format!("cwd_not_a_directory: {cwd}"), RISK_CRITICAL).with_hint(
+            "cwd 必须是已存在的目录。先用 builtin_stat_file / builtin_list_dir 确认。",
         );
     }
 
     let timeout = if timeout_sec == 0 { 30 } else { timeout_sec };
-    let mut cmd = shell_command(trimmed);
+    let mut cmd = if use_argv {
+        let mut c = Command::new(&argv_clean[0]);
+        c.args(&argv_clean[1..]);
+        c
+    } else {
+        shell_command(trimmed)
+    };
+    if !cwd.is_empty() {
+        cmd.current_dir(cwd);
+    }
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -486,13 +570,144 @@ pub fn execute_shell(command: &str, allowed_prefixes: &[String], timeout_sec: u6
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     let content = serde_json::json!({
-        "command": trimmed,
+        "command": if use_argv { argv_clean.join(" ") } else { trimmed.to_string() },
+        "argv": if use_argv { serde_json::json!(argv_clean) } else { serde_json::Value::Null },
+        "cwd": if cwd.is_empty() { serde_json::Value::Null } else { serde_json::json!(cwd) },
+        // argv 形式不经 shell → "none"（与 Python 端镜像）
+        "shell": if use_argv { "none" } else { shell_name() },
         "exit_code": exit_code,
         "stdout": stdout,
         "stderr": stderr,
         "timed_out": timed_out,
     });
+    // ok = 命令达成目标（根治 BUGFIX #165），不是「进程成功启动」。
+    // 此前无条件 ToolResult::ok(...)，退出码埋在 content 里 —— 于是
+    // 「成功地启动了一个失败的命令」也算成功，tools/loop.py 的停滞熔断
+    // （连续 3 轮零成功 → 掐断）计数器一次都涨不起来，模型可以对着同一条
+    // 失败命令重试到预算耗尽。Python 端 builtin/shell.py 严格镜像本逻辑。
+    // 超时一律算失败（即使 allow_nonzero_exit=true）—— 被强杀的命令没有产出。
+    if timed_out {
+        return ToolResult::fail_with_content(
+            format!("timeout: killed after {timeout}s"),
+            content,
+            RISK_CRITICAL,
+        )
+        .with_hint("命令超时。拆成更小步骤，或提高 timeout_sec。");
+    }
+    if exit_code != 0 && !allow_nonzero_exit {
+        let digest = stderr_digest(&stderr, &stdout);
+        let error = if digest.is_empty() {
+            format!("exit_code={exit_code}")
+        } else {
+            format!("exit_code={exit_code}: {digest}")
+        };
+        return ToolResult::fail_with_content(error, content, RISK_CRITICAL)
+            .with_hint(GENERAL_SHELL_HINT);
+    }
     ToolResult::ok(content, RISK_CRITICAL).needs_hitl_meta(false)
+}
+
+
+/// 危险操作符拦截时的可操作替代建议（与 Python `_OPERATOR_HINTS` 镜像）。
+fn operator_hint(ch: char) -> String {
+    let specific = match ch {
+        '&' => "禁止 `&` / `&&` 串联：拆成多次 builtin_shell 调用，每次一条命令。",
+        '|' => "禁止管道：先用 builtin_shell 取全量输出，再用 builtin_grep 过滤。",
+        ';' => "禁止 `;` 串联：拆成多次 builtin_shell 调用。",
+        '>' => "禁止重定向：用 builtin_write_file 写文件。",
+        '<' => "禁止输入重定向：用 builtin_read_file 读内容后作为参数传入。",
+        '(' | ')' => {
+            "禁止子 shell / 括号分组（含 cmd 的 `if exist (...)`）：             目录与文件存在性用 builtin_stat_file / builtin_list_dir 判断。"
+        }
+        '`' => "禁止命令替换：分两步做 —— 先取输出，再把结果作为参数传入。",
+        '$' => "禁止变量展开 / 命令替换：需要环境变量请显式写出完整值。",
+        _ => "",
+    };
+    if specific.is_empty() {
+        GENERAL_SHELL_HINT.to_string()
+    } else {
+        format!("{specific} {GENERAL_SHELL_HINT}")
+    }
+}
+
+/// 当前 shell 名称（`pwsh` / `cmd` / `sh`）—— 与 Python current_shell_name 镜像。
+fn shell_name() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        if pwsh_path().is_some() {
+            "pwsh"
+        } else {
+            "cmd"
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "sh"
+    }
+}
+
+/// 剥掉 ANSI 转义码（根治 BUGFIX #166）。
+///
+/// pwsh 输出彩色错误，未剥离时 error 字段长这样：
+/// `exit_code=1: [31;1mResourceUnavailable: ...` —— 噪声挤占有效信息。
+/// 手写状态机而非引入 regex 依赖（这里只需处理 CSI 序列）。
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        // ESC [ ... <letter>  或  裸 [ 数字;数字 m（pwsh 有时丢掉 ESC）
+        if c == '' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                while let Some(&n) = chars.peek() {
+                    chars.next();
+                    if n.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        if c == '[' {
+            let mut lookahead = chars.clone();
+            let mut body = String::new();
+            let mut matched = false;
+            for n in lookahead.by_ref() {
+                if n.is_ascii_digit() || n == ';' {
+                    body.push(n);
+                } else if n == 'm' && !body.is_empty() {
+                    matched = true;
+                    break;
+                } else {
+                    break;
+                }
+            }
+            if matched {
+                for _ in 0..body.len() + 1 {
+                    chars.next();
+                }
+                continue;
+            }
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// 从 stderr（空则退回 stdout）取一段摘要放进 error 字段。
+///
+/// 命令失败时模型首先读 error —— 把真实原因（"python3 不是内部或外部命令"）
+/// 摆到 error 里，而不是让它自己去 content.stderr 里翻。
+fn stderr_digest(stderr: &str, stdout: &str) -> String {
+    let src = if stderr.trim().is_empty() { stdout } else { stderr };
+    let cleaned = strip_ansi(src);
+    let flat = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= 300 {
+        flat
+    } else {
+        let cut: String = flat.chars().take(300).collect();
+        format!("{cut}…")
+    }
 }
 
 
@@ -506,13 +721,58 @@ pub const DANGEROUS_SHELL_CHARS: &[char] = &[
 /// shell 命令最大字节数。
 pub const SHELL_MAX_BYTES: usize = 4096;
 
+/// 通用 shell 提示（与 Python `_GENERAL_SHELL_HINT` 镜像）：拦截 / 非零退出时
+/// 附在 hint 里，告诉模型该用哪些不受引号规则影响的内置工具。
+/// （BUGFIX #165 配套常量，此前丢失导致 crate 编译不过。）
+pub const GENERAL_SHELL_HINT: &str = "另外：列目录用 builtin_list_dir、查文件用 builtin_find、读文件用 builtin_read_file —— \
+它们不受 shell 引号规则影响，路径含空格也不会出错，优先用它们而不是 dir / where / type。";
+
 
 /// 构造平台 shell 命令（Windows → cmd /C；Unix → /bin/sh -c）。
 #[cfg(target_os = "windows")]
 fn shell_command(command: &str) -> Command {
+    // pwsh 优先 / cmd 回退（2026-08-27，与 Python builtin/shell.py 镜像）。
+    //
+    // 为什么优先 pwsh：cmd 的引号规则是 BUGFIX #165 的直接推手 —— 路径含空格
+    // （`Enterprise AI IDE`）时模型反复在引号 / `^` 转义上翻车，连试 22 轮。
+    // pwsh 引号规则一致得多。未安装 pwsh 时回退 cmd（行为与此前一致）。
+    //
+    // -NoProfile：用户 profile 可能改编码 / 加别名 / 打印横幅，污染 stdout。
+    // -NonInteractive：防命令等待输入挂死到超时。
+    // 不回退 powershell.exe（5.1）—— 编码与参数解析和 pwsh 有差异，混用只会多一种
+    // 不确定性；没有 pwsh 就老老实实用 cmd。
+    if let Some(pwsh) = pwsh_path() {
+        let mut c = Command::new(pwsh);
+        c.arg("-NoProfile")
+            .arg("-NonInteractive")
+            .arg("-Command")
+            .arg(command);
+        return c;
+    }
     let mut c = Command::new("cmd");
     c.arg("/C").arg(command);
     c
+}
+
+/// pwsh 可执行文件路径（探测一次后缓存；None = 未安装）。
+#[cfg(target_os = "windows")]
+fn pwsh_path() -> Option<&'static std::path::Path> {
+    use std::sync::OnceLock;
+    static PWSH: OnceLock<Option<PathBuf>> = OnceLock::new();
+    PWSH.get_or_init(|| {
+        // `where pwsh` 会拉起子进程，这里改为直接扫 PATH —— 更快且无副作用。
+        let path_var = std::env::var_os("PATH")?;
+        for dir in std::env::split_paths(&path_var) {
+            for name in ["pwsh.exe", "pwsh.EXE", "pwsh"] {
+                let candidate = dir.join(name);
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
+        None
+    })
+    .as_deref()
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -1289,7 +1549,7 @@ mod tests {
 
     #[test]
     fn test_shell_echo_ok() {
-        let r = execute_shell("echo hello builtin", &["echo".to_string()], 10);
+        let r = execute_shell("echo hello builtin", &[], "", &["echo".to_string()], 10, false);
         assert!(r.ok, "shell failed: {:?}", r.error);
         let content = r.content.unwrap();
         assert_eq!(content["exit_code"], 0);
@@ -1299,7 +1559,7 @@ mod tests {
     #[test]
     fn test_shell_requires_hitl_even_without_flag() {
         // critical 工具：即使 require_hitl=false 也必须 HITL
-        let r = builtin_shell("echo hi", &[], 10, false);
+        let r = builtin_shell("echo hi", &[], "", &[], 10, false, false);
         assert!(!r.ok);
         assert!(r.error.unwrap().contains("hitl_required"));
         assert!(r.needs_hitl);
@@ -1315,7 +1575,7 @@ mod tests {
             "echo $(id)",
             "echo hi > /tmp/x",
         ] {
-            let r = execute_shell(cmd, &["echo".to_string()], 10);
+            let r = execute_shell(cmd, &[], "", &["echo".to_string()], 10, false);
             assert!(!r.ok, "should block: {cmd}");
             assert!(r.error.unwrap().contains("dangerous_operator"));
         }
@@ -1323,14 +1583,14 @@ mod tests {
 
     #[test]
     fn test_shell_command_not_allowed() {
-        let r = execute_shell("rm -rf x", &["echo".to_string()], 10);
+        let r = execute_shell("rm -rf x", &[], "", &["echo".to_string()], 10, false);
         assert!(!r.ok);
         assert!(r.error.unwrap().contains("command_not_allowed"));
     }
 
     #[test]
     fn test_shell_empty_command() {
-        let r = execute_shell("   ", &[], 10);
+        let r = execute_shell("   ", &[], "", &[], 10, false);
         assert!(!r.ok);
         assert!(r.error.unwrap().contains("empty_command"));
     }
@@ -1338,7 +1598,7 @@ mod tests {
     #[test]
     fn test_shell_allowed_prefix_wildcard() {
         // git 可能不存在于 PATH（CI 环境）；用 echo 做通配前缀验证
-        let r = execute_shell("echo git status", &["echo".to_string()], 10);
+        let r = execute_shell("echo git status", &[], "", &["echo".to_string()], 10, false);
         assert!(r.ok, "wildcard prefix failed: {:?}", r.error);
     }
 
@@ -1348,10 +1608,118 @@ mod tests {
         let cmd = "ping -n 6 127.0.0.1";
         #[cfg(not(target_os = "windows"))]
         let cmd = "sleep 5";
-        let r = execute_shell(cmd, &[cmd.split(' ').next().unwrap().to_string()], 1);
-        assert!(r.ok, "timeout run failed: {:?}", r.error);
-        let content = r.content.unwrap();
+        let r = execute_shell(cmd, &[], "", &[cmd.split(' ').next().unwrap().to_string()], 1, false);
+        // 根治 BUGFIX #165：超时是失败 —— 被强杀的命令没有产出。
+        // 此前断言 r.ok（"进程成功启动"语义），让停滞熔断看不见空转。
+        assert!(!r.ok, "timeout must be reported as failure");
+        assert!(r.error.as_deref().unwrap_or("").contains("timeout"));
+        let content = r.content.expect("失败也要保留 content 供模型读 stdout/stderr");
         assert_eq!(content["timed_out"], true);
+        assert_eq!(content["exit_code"], 124);
+    }
+
+    #[test]
+    fn test_shell_nonzero_exit_is_failure() {
+        // 根治 BUGFIX #165 的核心：命令跑了但失败 → ok=false，
+        // 且真实原因进 error（而不是埋在 content.stderr 里）。
+        #[cfg(target_os = "windows")]
+        let cmd = "cmd /c exit 3";
+        #[cfg(not(target_os = "windows"))]
+        let cmd = "sh -c \"exit 3\"";
+        let first = cmd.split(' ').next().unwrap().to_string();
+        let r = execute_shell(cmd, &[], "", std::slice::from_ref(&first), 10, false);
+        assert!(!r.ok, "nonzero exit must be failure");
+        assert!(r.error.as_deref().unwrap_or("").contains("exit_code=3"));
+        assert!(r.content.is_some(), "失败也要保留 content");
+
+        // allow_nonzero_exit=true → 显式放行（findstr / grep / diff 语义）
+        let r2 = execute_shell(cmd, &[], "", &[first], 10, true);
+        assert!(r2.ok, "allow_nonzero_exit should permit: {:?}", r2.error);
+        assert_eq!(r2.content.unwrap()["exit_code"], 3);
+    }
+
+    #[test]
+    fn test_shell_argv_bypasses_shell_quoting() {
+        // 根治 BUGFIX #166：argv 形式直接执行，路径含空格也不需要引号。
+        // command 形式在 pwsh 下无法调用带空格路径的可执行文件（`&` 被拦），
+        // argv 是唯一可靠路径。
+        #[cfg(target_os = "windows")]
+        let argv = vec!["cmd".to_string(), "/C".to_string(), "echo argv-ok".to_string()];
+        #[cfg(not(target_os = "windows"))]
+        let argv = vec!["echo".to_string(), "argv-ok".to_string()];
+        let r = execute_shell("", &argv, "", &[], 10, false);
+        assert!(r.ok, "argv exec failed: {:?}", r.error);
+        let content = r.content.unwrap();
+        assert!(content["stdout"].as_str().unwrap().contains("argv-ok"));
+        // argv 不经 shell
+        assert_eq!(content["shell"], "none");
+    }
+
+    #[test]
+    fn test_shell_argv_skips_operator_check() {
+        // argv 元素不会被 shell 解释 → 含 & 的字面量参数不该被拦
+        #[cfg(target_os = "windows")]
+        let argv = vec!["cmd".to_string(), "/C".to_string(), "echo a&b".to_string()];
+        #[cfg(not(target_os = "windows"))]
+        let argv = vec!["echo".to_string(), "a&b".to_string()];
+        let r = execute_shell("", &argv, "", &[], 10, false);
+        assert!(r.ok, "argv should not run operator check: {:?}", r.error);
+    }
+
+    #[test]
+    fn test_shell_argv_whitelist_uses_first_element() {
+        let argv = vec!["echo".to_string(), "hi".to_string()];
+        let bad = execute_shell("", &argv, "", &["python".to_string()], 10, false);
+        assert!(!bad.ok);
+        assert!(bad.error.unwrap().contains("command_not_allowed"));
+    }
+
+    #[test]
+    fn test_shell_empty_argv_is_empty_command() {
+        let r = execute_shell("", &["".to_string()], "", &[], 10, false);
+        assert!(!r.ok);
+        assert!(r.error.unwrap().contains("empty_command"));
+    }
+
+    #[test]
+    fn test_shell_cwd_must_exist() {
+        let argv = vec!["echo".to_string(), "x".to_string()];
+        let r = execute_shell("", &argv, "/definitely/not/here/xyz", &[], 10, false);
+        assert!(!r.ok);
+        assert!(r.error.unwrap().contains("cwd_not_a_directory"));
+    }
+
+    #[test]
+    fn test_strip_ansi_removes_pwsh_colour_codes() {
+        // pwsh 彩色报错会把 [31;1m 混进 stderr（BUGFIX #166）
+        assert_eq!(strip_ansi("[31;1mResourceUnavailable[0m: x"), "ResourceUnavailable: x");
+        assert_eq!(strip_ansi("[31mred[0m"), "red");
+        // 普通方括号不该被吃掉
+        assert_eq!(strip_ansi("array[0] = x"), "array[0] = x");
+        assert_eq!(strip_ansi("plain"), "plain");
+    }
+
+    #[test]
+    fn test_glob_root_defaults_to_cwd() {
+        // 根治 BUGFIX #166：base_dir/root 缺省时必须回落 "."，
+        // 否则 validate_path("") 报 empty path，glob 工具永远不可用。
+        let r = builtin_glob("*", ".", 10, &[]);
+        assert!(r.ok, "glob with '.' root failed: {:?}", r.error);
+    }
+
+    #[test]
+    fn test_shell_block_hints_are_actionable() {
+        // 拦截必须给出路，否则模型会盲试到预算耗尽（BUGFIX #165）
+        let r = execute_shell("echo a && echo b", &[], "", &["echo".to_string()], 10, false);
+        assert!(!r.ok);
+        let hint = r.hint.expect("dangerous_operator 必须带 hint");
+        assert!(hint.contains("builtin_shell"), "hint 应指出拆分调用: {hint}");
+
+        let r2 = execute_shell("echo a | sh", &[], "", &["echo".to_string()], 10, false);
+        assert!(r2.hint.unwrap().contains("builtin_grep"));
+
+        let r3 = execute_shell("dir x", &[], "", &["echo".to_string()], 10, false);
+        assert!(r3.hint.expect("白名单拦截也要带 hint").contains("builtin_list_dir"));
     }
 
     #[test]

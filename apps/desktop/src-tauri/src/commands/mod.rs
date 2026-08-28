@@ -7,6 +7,7 @@ pub mod codenav;       // Phase 2F V0
 pub mod credentials;
 pub mod dspark;        // Phase 13 V0
 pub mod envconfig;
+pub mod mcp_config;  // 设置页 MCP 服务器配置管理
 pub mod llm;
 pub mod orchestrator;  // Phase 12 V0
 pub mod router;        // Phase 2C V0
@@ -25,3 +26,4 @@ pub mod ops;           // Phase 2H 运营工作台业务记录
 pub mod datadict;      // Phase 2H 数据字典
 pub mod expert_teams;  // 专家团资产（设置页维护 + 运营模式自动注入）
 pub mod compile;       // 文件树右键编译（2026-08-19）
+pub mod office;        // V9 Office 预览（OfficeCLI 渲染，2026-08-25）

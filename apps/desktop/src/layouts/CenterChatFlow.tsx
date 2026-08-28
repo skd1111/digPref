@@ -23,13 +23,14 @@ import { ChatMessage } from "@/components/chat/ChatMessage";
 import { ChatInput } from "@/components/chat/ChatInput";
 import { TabBar } from "@/components/chat/TabBar";
 import { ExecutionBlock } from "@/components/chat/ExecutionBlock";
+import { ExecutionTree } from "@/components/chat/ExecutionTree";
+import { groupExecutionSteps } from "@/lib/executionGrouping";
 import { useChatStore, type ChatTab } from "@/store/chatStore";
 import { useUIStore } from "@/store/uiStore";
 import { useCodeNavStore } from "@/store/codeNavStore";
 import { CHAT_SEND_EVENT } from "@/components/chat/ChatMessage";
 import { ContextChip } from "@/components/biznav/ContextChip";
 import { ReqAlignmentBanner } from "@/components/reqflow/ReqAlignmentBanner";
-import { SkillRoutingBadge } from "@/components/skills/SkillRoutingBadge";
 import { CodeEditorPane } from "@/components/editor/CodeEditorPane";
 import { LivePreviewPanel } from "@/components/preview/LivePreviewPanel";
 import { PreviewButton } from "@/components/preview/PreviewButton";
@@ -216,8 +217,8 @@ export function CenterChatFlow(): JSX.Element {
           style={{ borderColor: "#e7e5e4", backgroundColor: "#f5f5f4" }}
         >
           {/* reqflow V1：需求对齐中横幅（发起改造需求后才显示） */}
+          {/* skill 命中提示已改作对话流内的执行步骤卡（2026-08-28），输入框上方不再显示徽标 */}
           <ReqAlignmentBanner />
-          <SkillRoutingBadge />
           <ContextChip />
           <ChatInput />
         </div>
@@ -252,8 +253,9 @@ function Pane({
   const [paneHighlight, setPaneHighlight] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const [chatWidth, setChatWidth] = useState(0);
-  // 2026-08-07：busy + 最后一条 assistant 消息 → 流式光标
-  const busy = useChatStore((s) => s.busy);
+  // 2026-08-07：busy + 最后一条 assistant 消息 → 流式光标；
+  // 2026-08-26 多会话并发：只看当前页签是否在跑（其他页签的运行不影响本视图）
+  const busy = useChatStore((s) => s.busyTabIds.includes(s.activeTabId));
   // 2026-08-07：整轮耗时（done 后由 useAgentStream 写入）
   const lastRunMs = useChatStore((s) => s.lastRunMs);
   const q = (searchText ?? "").trim().toLowerCase();
@@ -310,6 +312,9 @@ function Pane({
     return null;
   })();
 
+  // 任务进度待办卡迁居左侧「任务计划」面板（2026-08-28，SideBar 头部可切）；
+  // 对话区不再渲染悬浮横幅，todo 消息仍留在 store 供左侧面板读取与历史归档。
+
   // 搜索定位（2026-08-07）：首个命中消息滚进视口中央
   useEffect(() => {
     if (!q) return;
@@ -359,6 +364,8 @@ function Pane({
         </div>
       )}
 
+      {/* 任务进度卡已迁居左侧「任务计划」面板（2026-08-28），对话区不再渲染横幅 */}
+
       <div
         ref={listRef}
         className="flex-1 overflow-auto px-6 py-4"
@@ -404,25 +411,34 @@ function Pane({
             </div>
           </div>
         ) : (
-          tab.messages.map((m) => (
-            <div
-              key={m.id}
-              id={`msg-${m.id}`}
-              className={isHit(m) ? "search-hit rounded" : undefined}
-            >
-              {m.role === "system" && m.kind === "execution" ? (
-                <ExecutionBlock message={m} />
-              ) : (
-                <ChatMessage
-                  message={m}
-                  maxWidth={chatWidth > 0 ? Math.round(chatWidth * 0.4) : undefined}
-                  streaming={busy && m.id === lastAssistantId}
-                />
-              )}
-            </div>
-          ))
+          groupExecutionSteps(tab.messages).map((item) =>
+            item.type === "tree" ? (
+              <div key={`tree-${item.key}`} id={`msg-${item.key}`}>
+                <ExecutionTree items={item.items} />
+              </div>
+            ) : (
+              <div
+                key={item.m.id}
+                id={`msg-${item.m.id}`}
+                className={isHit(item.m) ? "search-hit rounded" : undefined}
+              >
+                {item.m.role === "system" && item.m.kind === "execution" ? (
+                  <ExecutionBlock
+                    message={item.m}
+                    {...(item.occurrence != null ? { occurrence: item.occurrence } : {})}
+                  />
+                ) : (
+                  <ChatMessage
+                    message={item.m}
+                    maxWidth={chatWidth > 0 ? Math.round(chatWidth * 0.4) : undefined}
+                    streaming={busy && item.m.id === lastAssistantId}
+                  />
+                )}
+              </div>
+            )
+          )
         )}
-        <ThinkingIndicator messages={tab?.messages ?? []} />
+        <ThinkingIndicator messages={tab?.messages ?? []} tabId={tab?.id ?? ""} />
         {/* 整轮耗时（2026-08-07）：上一轮 done 后展示 */}
         {!busy && lastRunMs != null && messages.length > 0 && (
           <div className="mt-1 text-center text-[10px]" style={{ color: "#9ca3af" }}>
@@ -469,21 +485,33 @@ function Splitter({
 }
 
 /**
- * 思考动画（2026-08-05 / aicss 风格升级 2026-08-10）：busy 且 assistant 还没开始输出时，
+ * 思考动画（2026-08-05 / aicss 风格升级 2026-08-10）：执行中且 assistant 还没开始输出时，
  * 在消息流末尾显示 aicss 风格思考指示器（星芒 orb + 流光文字 + 跳动圆点），
  * 避免长时间无反馈显得卡死。
+ * 2026-08-26 细化（用户反馈「思考中太宽泛」）：
+ *   - 只有发起执行的页签才显示（切到别的页签不再假显思考态）；
+ *   - 文案随执行阶段变化：等模型返回 / 工具调用中：某动作。
  */
 function ThinkingIndicator({
   messages,
+  tabId,
 }: {
   messages: ChatMessageT[];
+  tabId: string;
 }): JSX.Element | null {
-  const busy = useChatStore((s) => s.busy);
-  if (!busy) return null;
+  // 2026-08-26 多会话并发：指示器只在本页签有 run 时显示，阶段文案按 run 取，
+  // 多个会话同时跑互不串扰。
+  const isBusy = useChatStore((s) => s.busyTabIds.includes(tabId));
+  const runId = useChatStore((s) => s.tabRunIds[tabId]);
+  const phaseInfo = useChatStore((s) => (runId ? s.runPhaseByRun[runId] : undefined));
+  if (!isBusy) return null;
+  const phase = phaseInfo?.phase ?? "model";
+  const detail = phaseInfo?.detail ?? "";
   const last = messages[messages.length - 1];
-  // assistant 已经开始输出正文 → 不再重复展示思考态
-  if (last && last.role === "assistant" && last.content) return null;
-  return <AiThinkingIndicator />;
+  // assistant 已经开始输出正文 → 不再重复展示思考态（工具阶段照常展示）
+  if (phase !== "tool" && last && last.role === "assistant" && last.content) return null;
+  const label = phase === "tool" && detail ? `工具调用中：${detail}` : "等模型返回";
+  return <AiThinkingIndicator label={label} />;
 }
 
 function SplitButton({

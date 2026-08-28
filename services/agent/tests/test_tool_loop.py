@@ -336,9 +336,69 @@ class TestDynamicToolLoop:
         out = await loop.run(_loop_state())
         out = await loop.run(_loop_state(**out))
         out = await loop.run(_loop_state(**out))
-        assert "轮次上限" not in out.get("final_answer", "")
+        assert "预算已用尽" not in out.get("final_answer", "")
         out = await loop.run(_loop_state(**out))
-        assert "轮次上限" in out["final_answer"]
+        # 2026-08-25 文案诚实化：不再说「请缩小问题范围」，明确是预算耗尽可接续
+        assert "预算已用尽" in out["final_answer"]
+        assert "继续" in out["final_answer"]
+
+    async def test_stagnant_fuse_trips_after_consecutive_failed_turns(self):
+        """停滞熔断（2026-08-25）：连续 3 轮零成功执行 → 提前终止；
+        防小模型重复同一失败调用无限空转（预算不再是唯一拦截）。
+        """
+        catalog = _FakeCatalog(
+            execute_results={
+                "get_weather": {"name": "get_weather", "ok": False, "error": "boom"}
+            }
+        )
+        llm = _ScriptedLoopLLM(
+            [_action("SELECT_TOOLS", selected_tool_names=["get_weather"])]
+            + [
+                _action(
+                    "TOOL_CALLS",
+                    tool_calls=[{"id": f"c{i}", "name": "get_weather", "arguments": {}}],
+                )
+                for i in range(3)
+            ]
+        )
+        loop = DynamicToolLoop(llm, catalog, max_turns=20)
+        out = await loop.run(_loop_state())  # SELECT_TOOLS
+        out = await loop.run(_loop_state(**out))  # 失败轮 1（streak=1）
+        assert out.get("final_answer") is None
+        out = await loop.run(_loop_state(**out))  # 失败轮 2（streak=2）
+        assert out.get("final_answer") is None
+        out = await loop.run(_loop_state(**out))  # 失败轮 3（streak=3 → 熔断）
+        assert "均无有效结果" in out["final_answer"]
+        assert out["tool_loop_active"] is False
+
+    async def test_stagnant_streak_resets_on_success(self):
+        """有进展就继续：成功执行一轮即清零，不误杀长链任务。"""
+        catalog = _FakeCatalog()
+        llm = _ScriptedLoopLLM(
+            [_action("SELECT_TOOLS", selected_tool_names=["get_weather"])]
+            + [
+                _action(
+                    "TOOL_CALLS",
+                    tool_calls=[{"id": f"c{i}", "name": "get_weather", "arguments": {}}],
+                )
+                for i in range(6)
+            ]
+            + [_action("FINAL_ANSWER", final_answer="done")]
+        )
+        loop = DynamicToolLoop(llm, catalog, max_turns=20)
+        out = await loop.run(_loop_state())
+        # 真实图状态合并会保留 registered_tools；_loop_state 每轮新建 state，
+        # 需手动携带（TOOL_CALLS 增量不回传该字段）
+        def _next(o: dict) -> dict:
+            return _loop_state(**{**o, "registered_tools": o.get("registered_tools") or reg})
+
+        reg = out.get("registered_tools") or []
+        for _ in range(6):  # 6 轮成功执行（远超旧默认 8 轮预算的场景）
+            out = await loop.run(_next(out))
+            assert out.get("tool_stagnant_streak", 0) == 0
+            assert out.get("final_answer") is None
+        out = await loop.run(_next(out))
+        assert out["final_answer"] == "done"
 
     async def test_llm_error_fallback(self):
         catalog = _FakeCatalog()
@@ -735,7 +795,7 @@ class TestGraphEndToEnd:
             async def orchestrate_tools(self, **kwargs):
                 return self.actions.pop(0)
 
-            async def summarise(self, *, intent, user_prompt, plan, results):
+            async def summarise(self, *, intent, user_prompt, plan, results, history=None):
                 self.summarise_calls += 1
                 return "工具结果汇总答案", []
 

@@ -285,7 +285,8 @@ class HITLBridge:
             raise
         await self._safe_cleanup(cleanup_approval, approval_id)
 
-        if decision == "approve":
+        if decision in ("approve", "approve_always"):
+            # approve_always：子 Agent 桥不维护会话豁免集，仅按批准处理（2026-08-25）
             return "approve", False
         if decision == "reject":
             return "reject", False

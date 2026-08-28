@@ -108,6 +108,13 @@ interface UIState {
   // 右侧控制台面板宽度（可拖拽调节，240–720，默认 320；持久化）
   rightPanelWidth: number;
 
+  // 左侧 SideBar 宽度（可拖拽调节，200–600，默认 260；持久化）
+  leftPanelWidth: number;
+
+  // 左侧面板视图切换（2026-08-28）：资源管理器 与 任务计划 并列可切；
+  // 仅 'full' 模式 + explorer activity 生效。持久化保留用户选择。
+  leftView: 'explorer' | 'plan';
+
   // 操作
   toggleCommandPalette: (open?: boolean) => void;
   toggleQuickOpen: (open?: boolean) => void;
@@ -129,6 +136,8 @@ interface UIState {
   setLeftPanelMode: (m: UIState['leftPanelMode']) => void;
   setDevPanelMode: (m: DevPanelMode) => void;
   setRightPanelWidth: (w: number) => void;
+  setLeftPanelWidth: (w: number) => void;
+  setLeftView: (v: UIState['leftView']) => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -155,6 +164,8 @@ export const useUIStore = create<UIState>()(
       leftPanelMode: 'auto',
       devPanelMode: 'assets',
       rightPanelWidth: 320,
+      leftPanelWidth: 260,
+      leftView: 'explorer',
 
       toggleCommandPalette: (open) =>
         set((s) => ({ commandPaletteOpen: open ?? !s.commandPaletteOpen })),
@@ -190,6 +201,8 @@ export const useUIStore = create<UIState>()(
       setLeftPanelMode: (m) => set({ leftPanelMode: m }),
       setDevPanelMode: (m) => set({ devPanelMode: m }),
       setRightPanelWidth: (w) => set({ rightPanelWidth: Math.min(720, Math.max(240, w)) }),
+      setLeftPanelWidth: (w) => set({ leftPanelWidth: Math.min(600, Math.max(200, w)) }),
+      setLeftView: (v) => set({ leftView: v }),
     }),
     {
       name: 'eaide.ui',
@@ -206,6 +219,8 @@ export const useUIStore = create<UIState>()(
         leftPanelMode: s.leftPanelMode,
         devPanelMode: s.devPanelMode,
         rightPanelWidth: s.rightPanelWidth,
+        leftPanelWidth: s.leftPanelWidth,
+        leftView: s.leftView,
       }),
       onRehydrateStorage: () => (state) => {
         // 旧版 'audit' 占位模式 → 新版 'auditor'（Phase 5 改名）

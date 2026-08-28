@@ -187,15 +187,47 @@ BUILTIN_TOOL_SCHEMAS: dict[str, dict] = {
     "shell": {
         "type": "object",
         "properties": {
-            "command": {"type": "string", "description": "要执行的 shell 命令"},
+            "argv": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "【首选】参数数组，首元素为可执行文件。直接执行，完全绕过 shell —— "
+                    "无需引号、无需转义、不受操作符限制。路径含空格时必须用这种形式，"
+                    r'例如 ["C:\Program Files\python.exe", "script.py"]。'
+                ),
+            },
+            "command": {
+                "type": "string",
+                "description": (
+                    "命令字符串（与 argv 二选一，argv 优先）。仅在需要 shell 特性"
+                    "（内建命令、通配符展开）时使用；不得含操作符 ; & | < > ` $ ( )。"
+                ),
+            },
+            "cwd": {
+                "type": "string",
+                "description": (
+                    "工作目录。切目录必须用这个参数 —— `cd` 只影响那一次调用的子进程，"
+                    "下次调用是全新进程，所以先 cd 再调用等于没切。"
+                ),
+            },
             "allowed_prefixes": {
                 "type": "array",
                 "items": {"type": "string"},
                 "description": "允许的命令前缀白名单",
             },
             "timeout_sec": {"type": "integer", "description": "超时秒数", "default": 30},
+            "allow_nonzero_exit": {
+                "type": "boolean",
+                "description": (
+                    "非零退出码是否算成功。默认 false（非零 = 失败）。"
+                    "仅当命令的非零退出是正常语义时置 true —— 如 findstr / grep 无匹配返 1、"
+                    "diff 有差异返 1。不要为了绕过失败而设置它。"
+                ),
+                "default": False,
+            },
         },
-        "required": ["command"],
+        # command 与 argv 二选一 —— 不强制 required，运行时校验（两者都空报 empty_command）
+        "required": [],
     },
     # ---- 新增常用工具（纯 Python）----
     "datetime_now": {
@@ -526,6 +558,95 @@ BUILTIN_TOOL_SCHEMAS: dict[str, dict] = {
             "timeout_s": {"type": "number", "description": "探测超时（秒，1~30）", "default": 5.0},
         },
         "required": ["url", "model"],
+    },
+    # ---- V9 Office 文档工具族（OfficeCLI，2026-08-25）----
+    "office_read": {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "docx / xlsx / pptx 文件绝对路径"},
+            "action": {
+                "type": "string",
+                "enum": ["outline", "text", "annotated", "stats", "get", "query"],
+                "description": "outline/text/annotated/stats=语义视图；get=取元素；query=选择器查询",
+                "default": "outline",
+            },
+            "element_path": {
+                "type": "string",
+                "description": "元素路径（action=get，如 /slide[1]/shape[2]；1 起索引）",
+            },
+            "query": {
+                "type": "string",
+                "description": "CSS 风格选择器（action=query，如 'paragraph[style=Heading1]'）",
+            },
+            "depth": {"type": "integer", "description": "get 返回子元素层数（1~8）", "default": 1},
+        },
+        "required": ["path"],
+    },
+    "office_edit": {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "docx / xlsx / pptx 文件绝对路径"},
+            "op": {
+                "type": "string",
+                "enum": ["set", "add", "remove", "move", "batch"],
+                "description": "set=改属性；add=新增元素；remove=删除；move=移动；batch=批量原子执行",
+            },
+            "element_path": {
+                "type": "string",
+                "description": "元素路径（add 时为父路径；默认 /）",
+                "default": "/",
+            },
+            "type": {
+                "type": "string",
+                "description": "add 的元素类型（slide / shape / sheet / row 等）",
+            },
+            "props": {
+                "type": "object",
+                "description": '属性键值对（如 {"text": "...", "bold": true, "x": "2cm"}）',
+            },
+            "to_parent": {"type": "string", "description": "move 的目标父路径"},
+            "index": {"type": "integer", "description": "move 的目标位置（0 起）"},
+            "selector": {"type": "string", "description": "set 的选择器（优先于 element_path）"},
+            "commands": {
+                "type": "array",
+                "items": {"type": "object"},
+                "description": "batch 命令列表（{command, path, props...}；任一失败整体回滚）",
+            },
+        },
+        "required": ["path", "op"],
+    },
+    "office_create": {
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": (
+                    "输出文件名或路径（扩展名决定类型）；建议只给文件名，会自动落入当前任务文件夹，"
+                    "禁止自造用户目录绝对路径"
+                ),
+            },
+            "template": {
+                "type": "string",
+                "description": "模板文件路径（含 {{key}} 占位符；传入则走 merge 填充）",
+            },
+            "data": {
+                "type": "object",
+                "description": "merge 填充数据（{{key}} → 值，模板合并必填）",
+            },
+            "overwrite": {
+                "type": "boolean",
+                "description": "目标已存在时是否覆盖（默认 False）",
+                "default": False,
+            },
+        },
+        "required": ["path"],
+    },
+    "office_validate": {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "docx / xlsx / pptx 文件绝对路径"},
+        },
+        "required": ["path"],
     },
 }
 

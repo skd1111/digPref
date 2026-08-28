@@ -26,7 +26,11 @@ export interface ApprovalRequest {
   recommendationReason?: string | null;
 }
 
-export type ApprovalDecision = 'approve' | 'reject';
+/**
+ * approve_always（2026-08-25）：批准且本会话内同工具（同 server·name）
+ * 后续操作自动放行；硬阻断（DROP/TRUNCATE）任何决策都不可豁免。
+ */
+export type ApprovalDecision = 'approve' | 'reject' | 'approve_always';
 
 export interface PendingApproval extends ApprovalRequest {
   // mirrors ApprovalRequest; kept distinct so it can evolve separately.

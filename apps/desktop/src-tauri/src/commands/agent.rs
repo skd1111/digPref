@@ -31,6 +31,8 @@ fn os_username() -> String {
 /// history：会话上下文（当前 tab 最近几轮对话），Rust 侧不解析，透传后端。
 /// page_context：页面上下文（2026-08-14，当前页签/场景），透传后端注入 intent/decompose。
 /// model_override：会话模型选择（2026-08-17，模型管理 backend 名），透传后端置顶回答链。
+/// last_skill_id：上一轮命中的 skill（2026-08-26，追问/修改时继承，防裸生成）。
+/// task_id / task_title：任务级工作目录（2026-08-26，一个聊天页签 = 一个任务文件夹）。
 // 本函数与 start_run 同为透传缝（参数原样进 chat 请求体，不解析语义），
 // 聚成结构体反而增加上下游改动面 → 豁免 too_many_arguments
 #[allow(clippy::too_many_arguments)]
@@ -45,6 +47,9 @@ pub async fn agent_chat(
     page_context: Option<serde_json::Value>,
     model_override: Option<String>,
     history_summary: Option<String>,
+    last_skill_id: Option<String>,
+    task_id: Option<String>,
+    task_title: Option<String>,
 ) -> AppResult<String> {
     crate::agent_manager::app_log(&format!("[agent_chat] 收到 prompt，长度={}", prompt.len()));
     // 输入校验：拒绝空 prompt
@@ -64,7 +69,7 @@ pub async fn agent_chat(
     let bridge = Arc::clone(&state.sse);
     crate::agent_manager::app_log(&format!("[agent_chat] run_id={}，start_run 即将开始", run_id));
     bridge
-        .start_run(run_id.clone(), trimmed.to_string(), work_mode, autonomy, inference_mode, history, page_context, model_override, history_summary)
+        .start_run(run_id.clone(), trimmed.to_string(), work_mode, autonomy, inference_mode, history, page_context, model_override, history_summary, last_skill_id, task_id, task_title)
         .await?;
     crate::agent_manager::app_log(&format!("[agent_chat] run_id={}，SSE 流已建立", run_id));
     state.audit_handle().append(
@@ -220,4 +225,33 @@ pub async fn agent_workspace_save(
     state
         .agent_post("/workspace", serde_json::json!({ "path": path }))
         .await
+}
+
+/// 任务目录文件清单（2026-08-26）：产物/中间文件，验收清理卡用。
+#[tauri::command]
+pub async fn task_files_get(state: State<'_, AppState>, task_id: String) -> AppResult<serde_json::Value> {
+    state
+        .agent_get(&format!("/workspace/tasks/{task_id}"))
+        .await
+}
+
+/// 验收后清理任务目录内除产物外的文件（2026-08-26）：
+/// 转发后端 /workspace/tasks/{task_id}/cleanup，返回 {ok, deleted, kept, taskDirRemoved}。
+#[tauri::command]
+pub async fn task_cleanup(
+    state: State<'_, AppState>,
+    task_id: String,
+    keep: Option<Vec<String>>,
+) -> AppResult<serde_json::Value> {
+    let resp = state
+        .agent_post(
+            &format!("/workspace/tasks/{task_id}/cleanup"),
+            serde_json::json!({ "keep": keep.unwrap_or_default() }),
+        )
+        .await?;
+    state.audit_handle().append(
+        "task.cleanup",
+        serde_json::json!({ "task_id": task_id, "operator": os_username() }),
+    )?;
+    Ok(resp)
 }

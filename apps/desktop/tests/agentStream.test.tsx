@@ -76,6 +76,51 @@ describe('agent stream subscription', () => {
     );
   });
 
+  it('done/error 双发幂等（BUGFIX #150）：Rust 桥转发后端事件后又补发 stream_closed，只生效一次', async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    await act(async () => {
+      root.render(<App />);
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const emitError = listeners.get('agent://error');
+    expect(emitError).toBeDefined();
+
+    // 模拟一次运行：发送时登记 run→页签归属（多会话并发后归属表即幂等键）
+    useChatStore.getState().startRun('run-dup-1', useChatStore.getState().activeTabId);
+
+    // 同一错误到达两次（后端 error 事件 + 桥层连接错误补发）
+    await act(async () => {
+      emitError!({ payload: { kind: 'error', message: 'boom' } });
+    });
+    await act(async () => {
+      emitError!({ payload: { kind: 'error', message: 'boom' } });
+    });
+
+    const tab = useChatStore
+      .getState()
+      .tabs.find((t) => t.id === useChatStore.getState().activeTabId);
+    const errorCards = (tab?.messages ?? []).filter((m) => m.kind === 'error');
+    // 只追加一张错误卡；归属已清（首个 error 消费）；全局运行态解除
+    expect(errorCards).toHaveLength(1);
+    expect(errorCards[0].content).toContain('boom');
+    expect(useChatStore.getState().busy).toBe(false);
+    expect(useChatStore.getState().runId).toBeNull();
+
+    // done 同理：无 runId 时（已被消费）第二个 done 不重复归档，也不报错
+    const emitDone = listeners.get('agent://done');
+    await act(async () => {
+      emitDone!({ payload: { kind: 'done', reason: 'stream_closed' } });
+      emitDone!({ payload: { kind: 'done', reason: 'stream_closed' } });
+    });
+    expect(useChatStore.getState().busy).toBe(false);
+  });
+
   it('rag_retrieve trace 与知识检索工具调用不进对话（2026-08-17 隐藏「检索知识库」卡片），执行链路不变', async () => {
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -129,5 +174,40 @@ describe('agent stream subscription', () => {
     expect(msgs.some((m) => m.id === 'c-web' && m.kind === 'search')).toBe(true);
     // 普通工具执行链路块保留
     expect(msgs.some((m) => m.id === 'c-sql' && m.kind === 'execution')).toBe(true);
+  });
+
+  it('skill_matched 不再写输入框上方徽标态，改为对话流内执行步骤卡，同 skill 重命中不刷屏', async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    await act(async () => {
+      root.render(<App />);
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const emit = listeners.get('agent://skill_matched');
+    expect(emit).toBeDefined();
+
+    await act(async () => {
+      emit!({ payload: { kind: 'skill_matched', skill_id: 'sk-1', skill_name: '坏账分析' } });
+      // 追问轮同 skill 再次命中 → 原地翻牌，不追加第二张卡
+      emit!({ payload: { kind: 'skill_matched', skill_id: 'sk-1', skill_name: '坏账分析' } });
+    });
+
+    const state = useChatStore.getState();
+    const tab = state.tabs.find((t) => t.id === state.activeTabId);
+    const skillSteps = (tab?.messages ?? []).filter(
+      (m) => m.kind === 'execution' && m.category === 'skill_matched',
+    );
+    // 对话流内只有一张技能加载步骤卡，正文含技能名，状态为完成态
+    expect(skillSteps).toHaveLength(1);
+    expect(skillSteps[0].content).toContain('坏账分析');
+    expect(skillSteps[0].status).toBe('ok');
+    // skill 粘性照旧（追问轮透传依赖），旧徽标态已下线（store 无该字段）
+    expect(state.lastSkillId).toBe('sk-1');
+    expect('selectedSkill' in state).toBe(false);
   });
 });

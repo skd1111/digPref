@@ -50,6 +50,23 @@ class LLMParseError(LLMBackendError):
     """LLM 返回 200 但 JSON 解析失败 —— 通常是 prompt 问题，不建议频繁切链。"""
 
 
+class LLMParamUnsupportedError(LLMBackendError):
+    """400 且响应体指向请求参数不被支持（response_format / max_tokens 等）。
+
+    换后端同样参数大概率复发 —— 属客户端/协议适配问题而非后端故障；
+    客户端层应先做参数适配重试（private_llm._post_chat），到这里说明适配也失败。
+    不计入熔断失败计数（后端本身可用）。
+    """
+
+
+class LLMToolIdMismatchError(LLMBackendError):
+    """400 且响应体指向 tool_call_id 配对失败（如 MiniMax「tool id not found」）。
+
+    与参数不支持的关键区别：这是消息链构造问题（BUGFIX #139 类问题复发信号），
+    重试/换后端无意义，需修消息构造逻辑。不计入熔断失败计数。
+    """
+
+
 @dataclass
 class FallbackResult:
     """降级链执行结果 + 降级轨迹（用于审计 / UI 提示）。"""
@@ -117,8 +134,13 @@ async def with_fallback(
         except LLMRateLimitError as e:
             trail.append((backend_name, f"rate_limit: {e}"))
             logger.warning("[%s] %s hit rate limit: %s", label, backend_name, e)
-            if circuit_breaker_registry is not None:
-                cb.on_failure()  # V2：429 也计失败（与 unavailable 同处理）
+            # 429 = 后端活着但在限流，不是故障：不计熔断失败，否则限流窗口内 3 次
+            # 请求就把后端熔断 30s（BUGFIX #159）。客户端层已做 Retry-After 重试。
+            degradation_count += 1
+        except (LLMParamUnsupportedError, LLMToolIdMismatchError) as e:
+            trail.append((backend_name, f"request_invalid: {e}"))
+            logger.warning("[%s] %s request rejected: %s", label, backend_name, e)
+            # 请求构造/协议适配问题，后端无过错 → 不计熔断失败；照常切下一级。
             degradation_count += 1
         except LLMUnavailableError as e:
             trail.append((backend_name, f"unavailable: {e}"))

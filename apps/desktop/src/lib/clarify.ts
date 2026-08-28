@@ -17,6 +17,8 @@ export interface ClarifyOption {
 export interface ClarifyQuestion {
   question: string;
   options: ClarifyOption[];
+  /** 多选标记（BUGFIX #149）：true 时前端渲染复选框、可选多项；旧数据无此字段按单选 */
+  multi?: boolean;
 }
 
 export interface ClarifyParseResult {
@@ -67,15 +69,23 @@ export function parseClarifyBlock(content: string): ClarifyParseResult | null {
       });
     }
     if (options.length === 0) continue;
-    questions.push({ question, options: options.slice(0, MAX_OPTIONS) });
+    questions.push({
+      question,
+      options: options.slice(0, MAX_OPTIONS),
+      multi: q.multi === true,
+    });
   }
   if (questions.length === 0) return null;
 
   return { text: content.replace(m[0], '').trim(), questions };
 }
 
-/** 渲染消息正文用：剥离 clarify 围栏块；无块时原样返回 */
+/** 渲染消息正文用：剥离 clarify 围栏块；无块时原样返回。
+ *  注意：围栏内 JSON 损坏也照样剥离 —— 原始 JSON 永远不该裸露给用户（#149）；
+ *  此时 parseClarifyBlock 仍返回 null（不渲染卡片），正文只丢围栏不丢可读部分。 */
 export function stripClarifyBlock(content: string): string {
-  const parsed = parseClarifyBlock(content);
-  return parsed ? parsed.text : content;
+  if (!content) return content;
+  const m = content.match(CLARIFY_FENCE);
+  if (!m) return content;
+  return content.replace(m[0], '').trim();
 }

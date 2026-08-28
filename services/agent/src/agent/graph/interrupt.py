@@ -61,8 +61,12 @@ async def check_decision(approval_id: str) -> str | None:
 
 
 async def post_decision(approval_id: str, decision: str) -> None:
-    """由 /approval 端点调用 —— 写入决策供后台轮询任务消费。"""
-    if decision not in ("approve", "reject"):
+    """由 /approval 端点调用 —— 写入决策供后台轮询任务消费。
+
+    approve_always（2026-08-25）：批准且登记本会话同类豁免，由 hitl_gate
+    消费时处理（出口归一为 approve）。
+    """
+    if decision not in ("approve", "reject", "approve_always"):
         raise ValueError(f"无效的决策值: {decision!r}")
     await _store_decision(approval_id, decision)
     log.info("HITL 决策已存储: %s -> %s", approval_id, decision)

@@ -21,7 +21,7 @@ class _FakeBackend:
         self.calls = 0
         self.base_url = "http://fake.test"
 
-    async def summarise(self, *, intent, user_prompt, plan, results):
+    async def summarise(self, *, intent, user_prompt, plan, results, history=None):
         self.calls += 1
         if self.fail:
             raise RuntimeError("override backend down")

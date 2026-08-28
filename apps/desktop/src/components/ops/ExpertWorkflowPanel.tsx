@@ -156,6 +156,8 @@ function WorkflowBody({
   const drafts = useOpsCaseStore((s) => s.drafts);
   /** 最近一次点交付物直开的草稿 → 自动全屏展开表单（2026-08-14） */
   const lastDirectDraftId = useOpsCaseStore((s) => s.lastDirectDraftId);
+  /** 本次会话新到达的草稿 → 自动展开草稿区；启动恢复的历史草稿不展开（BUGFIX #134） */
+  const lastNewDraftId = useOpsCaseStore((s) => s.lastNewDraftId);
   const busyMembers = useOpsCaseStore((s) => s.busyMembers);
   const exporting = useOpsCaseStore((s) => s.exporting);
   const caseError = useOpsCaseStore((s) => s.error);
@@ -216,6 +218,15 @@ function WorkflowBody({
     }
   }, [drafts, activeDraftId]);
   const activeDraft = drafts.find((d) => d.id === activeDraftId) ?? null;
+  // 草稿区默认收起（BUGFIX #134）：启动/切业务恢复的历史草稿不自动弹出表单，
+  // 只留一条提醒栏；本会话新草稿到达（专家回答/点交付物直开）或手动点开才展开
+  const [draftsOpen, setDraftsOpen] = useState(false);
+  useEffect(() => {
+    if (lastNewDraftId) {
+      setDraftsOpen(true);
+      setActiveDraftId(lastNewDraftId);
+    }
+  }, [lastNewDraftId]);
   // 草稿关联的材料行：审核意见收进草稿卡展示，材料行不再重复气泡（BUGFIX #86）
   const draftFileIds = useMemo(
     () => new Set(drafts.map((d) => d.file_id).filter(Boolean)),
@@ -549,7 +560,27 @@ function WorkflowBody({
       </div>
 
       {/* ===== 交付草稿（BUGFIX #78）：要「模板/清单」不给一大段文字，界面直填 ===== */}
-      {drafts.length > 0 && (
+      {drafts.length > 0 && !draftsOpen && (
+        // 收起态提醒栏（BUGFIX #134）：历史草稿不自动铺屏，点开才展开
+        <div
+          className="flex flex-shrink-0 items-center gap-2 border-t px-3 py-1"
+          style={{ borderColor: "#e0e0e0", backgroundColor: "#fafaf9" }}
+        >
+          <button
+            type="button"
+            onClick={() => setDraftsOpen(true)}
+            className="rounded px-1.5 py-0.5 text-2xs font-semibold transition-colors hover:text-[#10a37f]"
+            style={{ color: "#1f1f1f" }}
+            title="展开交付草稿区（启动时不自动弹出，避免遮挡办理区）"
+          >
+            📝 交付草稿（{drafts.length}）▸ 展开填写
+          </button>
+          <span className="text-[10px]" style={{ color: "#9ca3af" }}>
+            上次办理留下的草稿已保留，点开继续填写或重新提交
+          </span>
+        </div>
+      )}
+      {drafts.length > 0 && draftsOpen && (
         <div
           className="flex-shrink-0 overflow-y-auto border-t px-3 py-2"
           style={{ maxHeight: "55%", borderColor: "#e0e0e0", backgroundColor: "#fafaf9" }}
@@ -561,6 +592,15 @@ function WorkflowBody({
             <span className="text-[10px]" style={{ color: "#9ca3af" }}>
               直接填写 → 提交给专家审核 → 通过后自动并入交付物
             </span>
+            <button
+              type="button"
+              onClick={() => setDraftsOpen(false)}
+              className="ml-auto rounded px-1.5 py-0.5 text-[10px]"
+              style={{ color: "#616161" }}
+              title="收起草稿区（草稿不会丢失，下次点提醒栏展开）"
+            >
+              ▾ 收起
+            </button>
           </div>
           {/* 草稿页签：一份草稿一个页签，不再上下接龙（BUGFIX #87） */}
           <div className="mb-1.5 flex items-end gap-1 overflow-x-auto">

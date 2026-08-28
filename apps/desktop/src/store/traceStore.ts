@@ -41,6 +41,13 @@ interface TraceState {
   append: (s: TraceStep) => void;
   reset: () => void;
 
+  /** 执行块 → 思维链跳转高亮查询（BUGFIX #153）：工具名或节点名；
+   *  ts 保证重复点同一条也能再次触发闪烁；
+   *  occurrence（2026-08-27 树形合并）：同名工具多次调用时定位第 N 次（1 基，
+   *  从早到晚），缺省回退最新一条（旧行为兼容） */
+  highlight: { query: string; ts: number; occurrence?: number } | null;
+  setHighlight: (query: string, occurrence?: number) => void;
+
   consoleEntries: ConsoleEntry[];
   /** 推一条新 entry，返回生成的 id（让 caller 用 updateConsole 原地更新同一行 —— 流式体验） */
   pushConsole: (e: Omit<ConsoleEntry, 'id' | 'ts'>) => string;
@@ -56,6 +63,12 @@ export const useTraceStore = create<TraceState>((set) => ({
   steps: [],
   append: (s) => set((state) => ({ steps: [...state.steps, s] })),
   reset: () => set({ steps: [] }),
+
+  highlight: null,
+  setHighlight: (query, occurrence) =>
+    set({
+      highlight: occurrence != null ? { query, ts: Date.now(), occurrence } : { query, ts: Date.now() },
+    }),
 
   consoleEntries: [],
   pushConsole: (e) => {

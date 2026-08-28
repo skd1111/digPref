@@ -5,10 +5,20 @@ description = "Enterprise AI IDE — desktop shell"
 authors = ["EAIDE Team"]
 edition = "2021"
 rust-version = "1.85"
+# 包内有两个二进制（主壳 + eaide-executor 执行器），必须显式指定主二进制，
+# 否则 cargo/tauri 无法推断，报 "failed to find main binary"。
+default-run = "eaide-desktop"
 
 [lib]
 name = "eaide_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+# 执行过程可视化（阶段二）：Rust 本地执行器独立二进制。
+# Agent 独立部署（无桌面壳注入）时由 Python JsonRpcStdioClient 拉起，
+# stdin/stdout 走 JSON-RPC 2.0，复用 builtin 沙箱实现（同一份代码两种壳）。
+[[bin]]
+name = "eaide-executor"
+path = "src/bin/eaide_executor.rs"
 
 [build-dependencies]
 tauri-build = { version = "2.0", features = [] }

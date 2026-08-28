@@ -17,6 +17,16 @@ class ToolCall(BaseModel):
     target_system: str | None = Field(default=None, alias="targetSystem")
 
 
+class ToolResultUi(BaseModel):
+    """工具结果 UI 摘要：只给前端展示用，大结果体仍只进 LLM 上下文（result_spill）。"""
+
+    summary: str | None = None
+    icon: str | None = None
+    path: str | None = None
+    lines: int | None = None
+    truncated: bool | None = None
+
+
 class ToolResult(BaseModel):
     server: str
     name: str
@@ -25,3 +35,4 @@ class ToolResult(BaseModel):
     error: str | None = None
     truncated: bool | None = None
     rows_returned: int | None = Field(default=None, alias="rowsReturned")
+    ui: ToolResultUi | None = None

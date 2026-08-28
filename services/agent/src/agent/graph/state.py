@@ -67,6 +67,13 @@ class AgentState(TypedDict, total=False):
     tool_results: list[dict]  # 工具执行结果（循环累积）
     tool_turn_count: int  # 动态工具循环轮次
     tool_loop_active: bool  # 循环内 HITL 审批后路由回循环的标志
+    # 停滞熔断（2026-08-25）：连续零成功执行的轮数（prompt 模式跨图轮累计，
+    # native 内层循环自带局部计数）；达阈提前终止，防小模型死循环空转
+    tool_stagnant_streak: int
+    # 重复调用熔断跨图轮状态（BUGFIX #165）：上一次调用指纹 + 连续重复次数。
+    # prompt 模式每轮是独立节点执行，不存 state 就无法识别跨轮的原地打转。
+    tool_last_call_fp: str
+    tool_repeat_streak: int
     # OpenAI 原生工具调用模式（2026-08-07）：每次运行首节点探测一次后固定
     tool_calling_mode: str  # "prompt"（提示词协议，默认）| "native"
     native_backend: str | None  # native 模式实际后端（private / cloud）
@@ -100,6 +107,15 @@ class AgentState(TypedDict, total=False):
     active_skill_id: str | None
     active_skill_name: str | None
     skill_routing: Any | None  # SkillRoutingResult (avoid import cycle)
+    # Skill 粘性（2026-08-26）：前端记录上一轮命中的 skill（skill_matched 事件），
+    # 本轮未命中新 skill 且属追问/修改类输入时继承，防「太丑了重做」裸生成。
+    last_skill_id: str | None
+
+    # ---- 任务级工作目录（2026-08-26）----
+    # 一个聊天页签 = 一个任务文件夹：task_id = 前端页签唯一标识（映射持久化），
+    # task_title = 首个问题摘要（任务文件夹命名用）。
+    task_id: str | None
+    task_title: str | None
 
     # ---- Phase 4 V0 本地端侧模型 ----
     inference_mode: str  # "normal" | "performance"（默认 normal）
@@ -155,6 +171,9 @@ def empty_state(prompt: str) -> dict:
         "tool_results": [],
         "tool_turn_count": 0,
         "tool_loop_active": False,
+        "tool_stagnant_streak": 0,
+        "tool_last_call_fp": "",
+        "tool_repeat_streak": 0,
         "tool_calling_mode": "prompt",
         "native_backend": None,
         "native_turn_context": None,
@@ -194,6 +213,10 @@ def empty_state(prompt: str) -> dict:
         "repair_attempt": 0,
         "needs_human_intervention": False,
         "dual_rules_addon": "",
+        # Skill 粘性 + 任务级工作目录（2026-08-26）
+        "last_skill_id": None,
+        "task_id": None,
+        "task_title": None,
     }
 
 

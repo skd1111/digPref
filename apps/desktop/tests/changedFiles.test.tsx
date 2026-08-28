@@ -58,7 +58,6 @@ describe('任务结束汇总改动文件（流事件 → changed_files 卡片）
     }
     listeners.clear();
     useChatStore.getState().newTab();
-    useChatStore.getState().clearChangedFiles();
   });
 
   async function mountApp(): Promise<void> {
@@ -79,6 +78,10 @@ describe('任务结束汇总改动文件（流事件 → changed_files 卡片）
     const emitDone = listeners.get('agent://done');
     expect(emitToolDone).toBeDefined();
     expect(emitDone).toBeDefined();
+
+    // 多会话并发（2026-08-26）：发送时登记 run→页签归属，事件按归属累积/汇总；
+    // 不带 runId 的旧式事件在唯一活跃 run 时自动归它（兼容路径）
+    useChatStore.getState().startRun('run-x', useChatStore.getState().activeTabId);
 
     await act(async () => {
       emitToolDone!({
@@ -124,11 +127,12 @@ describe('任务结束汇总改动文件（流事件 → changed_files 卡片）
         },
       });
     });
-    expect(useChatStore.getState().changedFiles).toEqual([
+    expect(useChatStore.getState().changedFilesByRun['run-x']).toEqual([
       'D:/proj/src/Foo.java',
       'D:/proj/src/Bar.java',
     ]);
 
+    // 真实链路：发送时已登记归属（done 幂等键 = runTabMap 归属，BUGFIX #150/#158）
     await act(async () => {
       emitDone!({ payload: { kind: 'done', runId: 'run-x' } });
     });
@@ -142,13 +146,14 @@ describe('任务结束汇总改动文件（流事件 → changed_files 卡片）
       'D:/proj/src/Foo.java',
       'D:/proj/src/Bar.java',
     ]);
-    // 累积已清空（下一轮不串）
-    expect(useChatStore.getState().changedFiles).toEqual([]);
+    // 累积已随 endRun 清理（下一轮/其他并发 run 不串）
+    expect(useChatStore.getState().changedFilesByRun['run-x']).toBeUndefined();
   });
 
   it('没有文件改动时 done 不生成卡片', async () => {
     await mountApp();
     const emitDone = listeners.get('agent://done');
+    useChatStore.getState().startRun('run-y', useChatStore.getState().activeTabId);
     await act(async () => {
       emitDone!({ payload: { kind: 'done', runId: 'run-y' } });
     });

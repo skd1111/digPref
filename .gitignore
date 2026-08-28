@@ -114,6 +114,19 @@ config/driver/_site/
 config/driver/*.whl
 
 # =========================
+# V9 OfficeCLI binary (fetched by infra/scripts/fetch-officecli.ps1)
+# =========================
+vendor/officecli/officecli-*
+
+# =========================
+# V9.7 PPT Master runtime (fetched by infra/scripts/fetch-ppt-master.ps1)
+# 技能包 ~76MB + 嵌入式 Python + 离线 wheel，仅本地/构建机持有；
+# spec 不进 datas，tauri resources 随安装包分发，运行时缺失友好降级。
+# =========================
+/vendor/ppt-master/
+/vendor/python/
+
+# =========================
 # Tauri generated
 # =========================
 **/src-tauri/gen/
