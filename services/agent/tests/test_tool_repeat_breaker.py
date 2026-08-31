@@ -26,7 +26,6 @@ from agent.tools.loop import (
     _repeat_msg,
 )
 
-
 # ---- 调用指纹 ---------------------------------------------------------------
 
 
@@ -130,7 +129,7 @@ def test_repeat_msg_is_actionable() -> None:
 
 
 def test_repeat_msg_handles_missing_name() -> None:
-    assert _repeat_msg(3, {}) .strip()
+    assert _repeat_msg(3, {}).strip()
 
 
 # ---- 端到端：复现那 22 轮空转 ------------------------------------------------

@@ -23,8 +23,17 @@ INTERNAL_PORT = 8000
 def _internal_reachable(timeout: float = 2.0) -> bool:
     try:
         with socket.create_connection((INTERNAL_URL, INTERNAL_PORT), timeout=timeout):
-            return True
+            pass
     except OSError:
+        return False
+    # 网关活着但后端模型挂了（5xx）同样视为不可用 —— 避免 live 用例被瞬时故障拖红；
+    # 探测失败（连接重置等）也按不可用处理。
+    import httpx
+
+    try:
+        r = httpx.get(f"http://{INTERNAL_URL}:{INTERNAL_PORT}/v1/models", timeout=timeout)
+        return r.status_code < 500
+    except httpx.HTTPError:
         return False
 
 

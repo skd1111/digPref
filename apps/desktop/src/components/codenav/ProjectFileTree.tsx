@@ -12,6 +12,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { useCodeNavStore } from '@/store/codeNavStore';
 import { useUIStore } from '@/store/uiStore';
 import { useOfficePreviewStore } from '@/store/officePreviewStore';
+import { pickAndImportFolder } from '@/components/codenav/fileOps';
 import { ipc } from '@/ipc/invoke';
 
 /** Office 文档后缀（V9 右键预览入口判定） */
@@ -366,7 +367,27 @@ export function ProjectFileTree(): JSX.Element | null {
     void runCompile(items);
   }, [selected, runCompile]);
 
-  if (!openedProjects || openedProjects.length === 0) return null;
+  // 空态（2026-08-28）：未导入工程时不再返回 null，提供「导入工程」按钮，
+  // 避免「文件列表」页签整片空白找不到导入入口（用户反馈）。
+  if (!openedProjects || openedProjects.length === 0) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 px-4 py-10 text-center">
+        <div className="text-3xl">📂</div>
+        <div className="text-2xs" style={{ color: '#616161' }}>
+          暂无已导入的工程文件夹
+        </div>
+        <button
+          type="button"
+          onClick={() => void pickAndImportFolder()}
+          className="rounded px-3 py-1.5 text-2xs font-semibold"
+          style={{ backgroundColor: '#0e639c', color: '#ffffff' }}
+          title="选择项目文件夹，导入后展示文件树并建立代码索引"
+        >
+          📁 导入工程
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="py-1" onContextMenu={(e) => e.preventDefault()}>

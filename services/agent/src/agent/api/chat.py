@@ -57,6 +57,10 @@ class ChatRequest(BaseModel):
     # Skill 粘性（2026-08-26）：前端记录上一轮命中的 skill（skill_matched 事件），
     # 本轮未命中新 skill 且属追问/修改类输入时由 intent_node 继承。
     last_skill_id: str | None = Field(default=None, alias="lastSkillId")
+    # Skill 强钉（2026-08-28）：用户经 `/` 指令手动选择的 skill，优先级最高：
+    # intent_node 直接短路路由器固定用它，低优先级命中（关键词/功能点绑定）
+    # 物理不进入模型输入空间（本地小模型/云端大模型同一策略）。
+    pinned_skill_id: str | None = Field(default=None, alias="pinnedSkillId")
     # 任务级工作目录（2026-08-26）：一个聊天页签 = 一个任务文件夹。
     # task_id = 前端页签唯一标识（映射持久化）；task_title = 首问摘要（文件夹命名）。
     task_id: str | None = Field(default=None, alias="taskId")
@@ -116,8 +120,9 @@ async def chat_stream(run_id: str, body: ChatRequest, request: Request):
                     # 页面上下文（2026-08-14）：前端当前页签/场景，注入 intent /
                     # decompose prompt 消除“连接”这类模糊动词的歧义
                     "page_context": body.context or None,
-                    # Skill 粘性 + 任务级工作目录（2026-08-26）
+                    # Skill 粘性 + Skill 强钉 + 任务级工作目录（2026-08-26 / 2026-08-28）
                     "last_skill_id": (body.last_skill_id or "").strip() or None,
+                    "pinned_skill_id": (body.pinned_skill_id or "").strip() or None,
                     "task_id": (body.task_id or "").strip() or None,
                     "task_title": (body.task_title or "").strip() or None,
                 },

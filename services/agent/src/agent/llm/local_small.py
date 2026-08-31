@@ -88,6 +88,17 @@ class LocalSmallLLMClient:
         except httpx.TimeoutException as exc:
             logger.debug("local_small: request timed out")
             raise LocalSmallUnavailableError("Local small model request timed out") from exc
+        except httpx.HTTPStatusError as exc:
+            # 后端 5xx（网关活着但模型服务挂了）等价于不可用 → 走安全兜底；
+            # 4xx 是请求本身问题，继续上抛便于排障。
+            if exc.response.status_code >= 500:
+                logger.debug(
+                    "local_small: backend error %s, treat as unavailable", exc.response.status_code
+                )
+                raise LocalSmallUnavailableError(
+                    f"Local small model backend error {exc.response.status_code}"
+                ) from exc
+            raise
         except (KeyError, IndexError) as exc:
             logger.debug("local_small: unexpected response shape: %s", exc)
             raise LocalSmallUnavailableError(

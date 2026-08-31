@@ -233,10 +233,12 @@ def test_chat_request_accepts_new_fields():
         {
             "prompt": "太丑了，优化一下",
             "lastSkillId": "office_pptx_designer",
+            "pinnedSkillId": "office_doc_writer",
             "taskId": "tab-1",
             "taskTitle": "做个介绍 ppt",
         }
     )
     assert body.last_skill_id == "office_pptx_designer"
+    assert body.pinned_skill_id == "office_doc_writer"  # `/` 指令强钉（2026-08-28）
     assert body.task_id == "tab-1"
     assert body.task_title == "做个介绍 ppt"

@@ -15,3 +15,10 @@ CREATE TABLE IF NOT EXISTS preview_sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_status ON preview_sessions(status);
 CREATE INDEX IF NOT EXISTS idx_sessions_last_active ON preview_sessions(last_active_at);
+
+-- 预览白名单追加根目录（BUGFIX #175）：用户在预览按钮确认后追加，
+-- 与 settings.preview_allowed_paths 叠加生效（持久化，重启不丢）。
+CREATE TABLE IF NOT EXISTS preview_allowed_roots (
+    path        TEXT PRIMARY KEY,            -- 规范化后的绝对路径（正斜杠）
+    created_at  INTEGER NOT NULL             -- Unix 毫秒
+);

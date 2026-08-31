@@ -29,10 +29,11 @@ apply_active()
 
 import asyncio
 import logging
+import sys
 import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -59,11 +60,33 @@ except OSError:
     _AGENT_LOG.parent.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     filename=str(_AGENT_LOG),
-    level=logging.DEBUG,
+    # BUGFIX #175：级别跟随 settings.log_level（默认 info）—— 此前硬编码 DEBUG，
+    # aiosqlite 每条 SQL 两行 DEBUG 刷屏，掩盖真实错误。
+    level=getattr(logging, settings.log_level.upper(), logging.INFO),
     format="%(asctime)s.%(msecs)03d [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+# handler 级别同步钉住：防止传播链上的低级记录（如 CoT 专用 logger 的 DEBUG）
+# 绕过 logger 级别判断后刷进 agent.log。
+for _h in logging.getLogger().handlers:
+    _h.setLevel(getattr(logging, settings.log_level.upper(), logging.INFO))
 log = logging.getLogger("agent.main")
+
+
+def _quiet_proactor_pipe_handler(loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+    """Windows ProactorEventLoop 降噪（BUGFIX #175）。
+
+    子进程（MCP / executor）stdio 管道被对端先断开时，
+    `_ProactorBasePipeTransport._call_connection_lost` 抛 ConnectionResetError
+    10054，默认 handler 按 ERROR 刷屏（实测十分钟 14 条，全是同一条堆栈）。
+    这类断开是正常生命周期收尾，降为 DEBUG；其余异常走默认处理。
+    """
+    exc = context.get("exception")
+    if isinstance(exc, ConnectionResetError):
+        log.debug("[asyncio] pipe connection reset ignored: %s", context.get("message"))
+        return
+    loop.default_exception_handler(context)
+
 
 # ---- CoT 专用日志（logs/cot.log）：意图识别 / 思维链全链路汇聚单文件分析用
 from agent.observability.cot_log import get_cot_logger
@@ -161,12 +184,17 @@ async def reload_mcp_clients() -> list[str]:
 
     关闭既有连接后整体重建；文件缺失 / 空表 → mcp=None（与启动时语义一致）。
     Runtime.mcp 是动态引用（tool catalog / chat 每轮取），替换后即刻生效。
+    同时清空 planner 的 5 分钟工具目录 TTL 缓存 —— 否则重载后新工具要等
+    缓存过期才进规划目录，_normalise_step 还会按旧目录丢弃新工具步骤。
     """
+    from agent.graph.nodes.planner import reset_tool_specs_cache
+
     runtime = get_runtime()
     old = runtime.mcp
     if isinstance(old, _LazyMcp):
         await old.close()
     runtime.mcp = _build_mcp()
+    reset_tool_specs_cache()
     servers: list[str] = []
     registry = getattr(runtime.mcp, "_registry", None)
     if registry is not None and hasattr(registry, "servers"):
@@ -182,6 +210,9 @@ async def reload_mcp_clients() -> list[str]:
 async def lifespan(app: FastAPI):
     # Startup: pre-build the runtime + compiled graph so the first request
     # doesn't pay the latency tax.
+    # Windows proactor 管道断开噪音降噪（BUGFIX #175）
+    if sys.platform == "win32":
+        asyncio.get_running_loop().set_exception_handler(_quiet_proactor_pipe_handler)
     runtime = get_runtime()
     graph = get_compiled_graph()
     app.state.runtime = runtime
@@ -341,6 +372,11 @@ def create_app() -> FastAPI:
 
     app.include_router(skills_api.router)
     skills_api.init_loader()
+
+    # Phase 19 V0: 自进化与自评测闭环（用户反馈 + 经验库管理）
+    from agent.evolution import api as evolution_api
+
+    app.include_router(evolution_api.router)
 
     # 专家团资产（list/get/save/delete/import/export/recommend）
     from agent.expert_teams import api as expert_teams_api

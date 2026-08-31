@@ -31,9 +31,7 @@ const KINDS: Array<SymbolKind | 'all'> = [
   'all', 'class', 'method', 'function', 'interface', 'field', 'enum',
 ];
 
-const LANGUAGES: Array<Language | 'all'> = [
-  'all', 'java', 'python', 'typescript', 'go', 'rust',
-];
+const LANGUAGES: Array<Language | 'all'> = ['all', ...(Object.keys(LANGUAGE_COLORS) as Language[])];
 
 function SymbolRow({
   sym,

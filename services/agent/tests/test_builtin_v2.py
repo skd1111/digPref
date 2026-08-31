@@ -478,7 +478,6 @@ class TestPythonFallbackShell:
         assert r.content["timed_out"] is True
         assert r.content["exit_code"] == 124
 
-
     # ---- 根治 BUGFIX #165：ok 语义 = 命令达成目标 ----------------------------
 
     @pytest.mark.asyncio
@@ -871,7 +870,7 @@ class TestShellRobustness:
         assert "\\" in _first_token(raw), "反斜杠不得被吞掉"
         # 带引号的完整路径应被完整取出且剥掉引号
         quoted = r'"C:\Program Files\python.exe" script.py'
-        assert _first_token(quoted).startswith("C:\Program Files")
+        assert _first_token(quoted).startswith(r"C:\Program Files")
 
     @pytest.mark.asyncio
     async def test_unbalanced_quotes_do_not_crash(self):

@@ -18,6 +18,7 @@ import { ApprovalCard } from './ApprovalCard';
 import { Markdown } from './Markdown';
 import { AiSearchIndicator } from './AiStatus';
 import { TaskCleanupCard } from './TaskCleanupCard';
+import { FeedbackButtons } from './FeedbackButtons';
 
 interface Props {
   message: ChatMessageT;
@@ -211,6 +212,10 @@ function AssistantBubble({
           {message.pendingApproval && <ApprovalCard approval={message.pendingApproval} />}
         </div>
         {!streaming && <CopyButton text={displayContent} />}
+        {/* Phase 19 V0 自进化：终答 👍/👎 反馈（非流式且有内容才挂载） */}
+        {!streaming && displayContent.trim() !== '' && (
+          <FeedbackButtons messageId={message.id} sessionId={message.runId ?? ''} />
+        )}
       </div>
     </div>
   );

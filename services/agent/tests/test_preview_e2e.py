@@ -392,6 +392,11 @@ class TestPortAvoidanceAndDegradation:
         proj = tmp_path / "no-vite-proj"
         proj.mkdir()
         (proj / "index.html").write_text("<html></html>", encoding="utf-8")
+        # BUGFIX #176 后：纯静态工程走进程内静态服务，不依赖 Vite；
+        # 必须是 Vite 系框架（带 package.json 依赖）才会触发 Vite 缺失降级
+        (proj / "package.json").write_text(
+            '{"dependencies": {"react": "^18.0.0"}}', encoding="utf-8"
+        )
         allow_preview_path(proj)
         # node / vite 都找不到 → ViteUnavailableError → PreviewError（优雅降级）
         monkeypatch.setattr(vm.shutil, "which", lambda _name: None)

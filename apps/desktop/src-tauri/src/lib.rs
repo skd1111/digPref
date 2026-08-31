@@ -153,6 +153,11 @@ pub fn run() {
             commands::agent::chat_summarize_title,
             commands::agent::chat_attach_file,
             commands::agent::chat_compress_history,
+            // Phase 19 V0：自进化闭环（用户反馈 + 经验库管理）
+            commands::agent::evolution_feedback,
+            commands::agent::evolution_experiences,
+            commands::agent::evolution_experience_toggle,
+            commands::agent::evolution_experience_delete,
             commands::agent::agent_active_runs,
             commands::agent::agent_restart,
             commands::agent::agent_autonomy_confirm,

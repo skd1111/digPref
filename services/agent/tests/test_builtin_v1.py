@@ -673,7 +673,8 @@ class TestLocalOnlyTasksV1:
         # Phase 12 V2 (2026-08-03) 新增 decompose → 15；动态工具编排 tool_orchestrate → 16
         # v2.87 (2026-08-13) Phase 7 MetricResolver 抽象层新增 metric_resolve → 17
         # (2026-08-17) 会话历史压缩 history_compress 入本地红线 → 18
-        assert len(_LOCAL_ONLY_TASKS) == 18, f"got {_LOCAL_ONLY_TASKS}"
+        # Phase 19 V0 (2026-08-31) 自进化失败反思 reflection 入本地红线 → 19
+        assert len(_LOCAL_ONLY_TASKS) == 19, f"got {_LOCAL_ONLY_TASKS}"
 
 
 # ---- stream.py SSE 三处同步 ----------------------------------------------------

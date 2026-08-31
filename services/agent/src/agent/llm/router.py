@@ -588,6 +588,9 @@ _LOCAL_ONLY_TASKS: frozenset[TaskKind] = frozenset(
         # 会话历史压缩 (2026-08-17)：旧对话含用户原始内容（可能含 PII / 业务敏感信息）
         # → 本地优先，不可用时才降级（与 intent / decompose 同红线语义）
         "history_compress",
+        # Phase 19 V0 (2026-08-31)：失败轨迹反思——输入含用户任务内容 /
+        # 工具失败详情（可能含 PII / 敏感业务描述）→ 本地优先，不可用才降级
+        "reflection",
     }
 )
 

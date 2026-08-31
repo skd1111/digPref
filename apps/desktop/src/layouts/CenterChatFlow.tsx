@@ -51,6 +51,9 @@ export function CenterChatFlow(): JSX.Element {
   const setSecondaryId = useUIStore((s) => s.setSecondaryTabId);
   const editorSplit = useUIStore((s) => s.editorSplit);
   const setEditorSplit = useUIStore((s) => s.setEditorSplit);
+  // 中央拆分比例（2026-08-28）：分隔条可拖拽调节对话区与编辑器/预览区占比
+  const chatPaneRatio = useUIStore((s) => s.chatPaneRatio);
+  const splitRef = useRef<HTMLDivElement>(null);
   // 会话管理 activity：只读浏览历史会话，底部输入区整体隐藏（用户要求 2026-08-07）
   const activityId = useUIStore((s) => s.activityId);
   const previewOpen = usePreviewStore((s) => s.previewOpen);
@@ -179,29 +182,37 @@ export function CenterChatFlow(): JSX.Element {
       </div>
 
       <div
+        ref={splitRef}
         className="flex flex-1 overflow-hidden"
         style={{
           flexDirection: editorSplit === "horizontal" ? "column" : "row",
         }}
       >
-        <Pane tab={activeTab ?? null} flex={1} searchText={searchOpen ? searchText : ""} />
+        {/* 拆分时对话区按 chatPaneRatio 占宽/高（分隔条可拖拽，2026-08-28） */}
+        <Pane
+          tab={activeTab ?? null}
+          flex={editorSplit ? chatPaneRatio : 1}
+          searchText={searchOpen ? searchText : ""}
+        />
         {editorSplit && (
           <>
             <Splitter
               orientation={
                 editorSplit === "vertical" ? "vertical" : "horizontal"
               }
+              containerRef={splitRef}
             />
             {hasCodeFiles ? (
-              previewOpen ? (
-                <LivePreviewPanel />
-              ) : (
-                <CodeEditorPane />
-              )
+              <div
+                className="min-h-0 min-w-0 overflow-hidden"
+                style={{ flex: 1 - chatPaneRatio }}
+              >
+                {previewOpen ? <LivePreviewPanel /> : <CodeEditorPane />}
+              </div>
             ) : (
               <Pane
                 tab={secondaryTab ?? null}
-                flex={1}
+                flex={1 - chatPaneRatio}
                 onChangeTab={(id) => setSecondaryId(id)}
                 tabs={tabs}
                 searchText={searchOpen ? searchText : ""}
@@ -469,16 +480,51 @@ function Pane({
 
 function Splitter({
   orientation,
+  containerRef,
 }: {
   orientation: "vertical" | "horizontal";
+  containerRef: React.RefObject<HTMLDivElement>;
 }): JSX.Element {
+  const setChatPaneRatio = useUIStore((s) => s.setChatPaneRatio);
+  const [dragging, setDragging] = useState(false);
+
+  // 拖拽分隔条（2026-08-28）：同左/右侧栏 sash 方案 —— pointer capture +
+  // 按容器内相对位置换算对话区占比；双击复位 0.5。
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
+    setDragging(true);
+    // 可选链：部分环境（如 jsdom 测试）无 pointer capture API，不影响拖拽换算
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+  };
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>): void => {
+    if (!dragging) return;
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    if (orientation === "vertical") {
+      if (rect.width <= 0) return;
+      setChatPaneRatio((e.clientX - rect.left) / rect.width);
+    } else {
+      if (rect.height <= 0) return;
+      setChatPaneRatio((e.clientY - rect.top) / rect.height);
+    }
+  };
+  const onPointerUp = (): void => setDragging(false);
+
   return (
     <div
-      className="flex-shrink-0"
+      role="separator"
+      aria-orientation={orientation}
+      title="拖动调节宽度，双击恢复均分"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onDoubleClick={() => setChatPaneRatio(0.5)}
+      className="flex-shrink-0 transition-colors hover:bg-[#10a37f]/50"
+      data-testid="center-splitter"
       style={{
-        width: orientation === "vertical" ? 4 : "100%",
-        height: orientation === "vertical" ? "100%" : 4,
-        backgroundColor: "#e7e5e4",
+        width: orientation === "vertical" ? 5 : "100%",
+        height: orientation === "vertical" ? "100%" : 5,
+        cursor: orientation === "vertical" ? "col-resize" : "row-resize",
+        backgroundColor: dragging ? "rgba(16,163,127,0.5)" : "#e7e5e4",
       }}
     />
   );

@@ -90,7 +90,8 @@ async def hitl_gate_node(state: AgentState, llm: Any | None = None) -> dict:
                 scope, kind = exemption_scope(state), tool_kind_key(call)
                 add_exempt(scope, kind)
                 await _audit_autonomy(
-                    state, call,
+                    state,
+                    call,
                     AutonomyDecision(action="approve", decided_by="session_exempt"),
                     reason=f"用户选择「此后都按此执行」：{kind}（scope={scope}）",
                 )
@@ -160,7 +161,8 @@ async def hitl_gate_node(state: AgentState, llm: Any | None = None) -> dict:
         scope, kind = exemption_scope(state), tool_kind_key(call)
         if is_exempt(scope, kind):
             await _audit_autonomy(
-                state, call,
+                state,
+                call,
                 AutonomyDecision(action="approve", decided_by="session_exempt"),
                 reason=f"会话豁免命中：{kind}（scope={scope}）",
             )
@@ -170,8 +172,11 @@ async def hitl_gate_node(state: AgentState, llm: Any | None = None) -> dict:
                 "awaiting_approval": False,
                 "trace": [
                     record_trace(
-                        "hitl_gate", "ok", reason="session_exempt",
-                        risk_level=risk_level, kind=kind,
+                        "hitl_gate",
+                        "ok",
+                        reason="session_exempt",
+                        risk_level=risk_level,
+                        kind=kind,
                     )
                 ],
             }

@@ -161,6 +161,10 @@ export const EVT = {
   /** L3 情景记忆 → 语义记忆蒸馏完成（后台任务，含 distilled_count） */
   SESSION_MEMORY_CONSOLIDATED: "agent://session_memory_consolidated",
 
+  // Phase 19 V0 —— 自进化闭环 SSE 三处同步（CLAUDE.md §4）
+  /** 失败反思产出新经验（含 experience_id + insight + attribution）；经验库页据此刷新 */
+  AGENT_EVOLUTION_INSIGHT_CREATED: "agent://evolution_insight_created",
+
   // ---- Phase 2F+ V1.5: logviewer Tauri Events (Rust → frontend) ----
   /** 索引进度更新（bytes_scanned / file_size / pct） */
   LOGVIEWER_INDEX_PROGRESS: "logviewer://index-progress",

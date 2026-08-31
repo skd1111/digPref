@@ -48,6 +48,8 @@ TaskKind = Literal[
     "doc_analyze",
     # 会话历史压缩（2026-08-17）：LLM 摘要旧对话（含用户原始内容 → 本地红线）
     "history_compress",
+    # Phase 19 V0：失败轨迹反思（输入含用户任务内容 → 本地红线）
+    "reflection",
     # mock 模式标记（非真实任务，不走 LLM 调度）
     "mock_mode",
 ]

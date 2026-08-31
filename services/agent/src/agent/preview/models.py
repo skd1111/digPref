@@ -52,6 +52,9 @@ class StartPreviewRequest(BaseModel):
     entry_file: str | None = Field(None, description="入口文件相对路径")
     framework: Framework | None = Field(None, description="手动指定框架（默认自动检测）")
     port: int | None = Field(None, description="手动指定端口（默认自动分配）")
+    # BUGFIX #175：项目不在预览白名单时，前端确认后带 true 重试 →
+    # 追加该目录到持久化白名单（仅允许用户已导入的工程，入口受前端控制）
+    allow_path: bool = Field(False, description="确认加入预览白名单后重试")
 
 
 class PreviewSession(BaseModel):

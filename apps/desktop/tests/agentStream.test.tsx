@@ -25,6 +25,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 
 import { App } from '@/App';
 import { useChatStore } from '@/store/chatStore';
+import { useUIStore } from '@/store/uiStore';
 
 describe('agent stream subscription', () => {
   let container: HTMLDivElement;
@@ -209,5 +210,57 @@ describe('agent stream subscription', () => {
     // skill 粘性照旧（追问轮透传依赖），旧徽标态已下线（store 无该字段）
     expect(state.lastSkillId).toBe('sk-1');
     expect('selectedSkill' in state).toBe(false);
+  });
+
+  it('首次出现任务计划时，左侧停在资源管理器视角自动切到任务计划；进度刷新/手动切回不再强切', async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    await act(async () => {
+      root.render(<App />);
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // 前置：开发模式 + explorer activity + 资源管理器视角（默认态）
+    useUIStore.setState({ mode: 'full', activityId: 'explorer', leftView: 'explorer' });
+
+    const emit = listeners.get('agent://trace');
+    expect(emit).toBeDefined();
+
+    const todoPayload = {
+      kind: 'trace',
+      runId: 'run-todo-1',
+      step: {
+        id: 't-todo-1',
+        node: 'todo',
+        status: 'ok',
+        todos: [{ content: '第一步', status: 'pending' }],
+      },
+    };
+
+    // 首次下发 → 计划卡新建，左侧自动切到任务计划
+    useChatStore.getState().startRun('run-todo-1', useChatStore.getState().activeTabId);
+    await act(async () => {
+      emit!({ payload: todoPayload });
+    });
+    expect(useUIStore.getState().leftView).toBe('plan');
+
+    // 进度刷新（原地更新同一张卡）：用户手动切回资源管理器后不再被强切
+    useUIStore.setState({ leftView: 'explorer' });
+    await act(async () => {
+      emit!({
+        payload: {
+          ...todoPayload,
+          step: { ...todoPayload.step, todos: [{ content: '第一步', status: 'done' }] },
+        },
+      });
+    });
+    expect(useUIStore.getState().leftView).toBe('explorer');
+
+    // 还原，避免污染同文件其它用例（leftView 持久化到 localStorage）
+    useUIStore.setState({ leftView: 'explorer' });
   });
 });

@@ -20,7 +20,22 @@ export type SymbolKind =
   | 'field'
   | 'enum';
 
-export type Language = 'java' | 'python' | 'typescript' | 'go' | 'rust';
+export type Language =
+  | 'java'
+  | 'python'
+  | 'typescript'
+  | 'javascript'
+  | 'vue'
+  | 'go'
+  | 'c'
+  | 'cpp'
+  | 'csharp'
+  | 'php'
+  | 'ruby'
+  | 'rust'
+  | 'kotlin'
+  | 'swift'
+  | 'scala';
 
 // ---------- Symbol ----------
 
@@ -96,6 +111,16 @@ export const LANGUAGE_COLORS: Record<Language, { bg: string; fg: string; label: 
   java:       { bg: '#cd3131', fg: '#0e0e0e', label: 'Java' },
   python:     { bg: '#3776ab', fg: '#ffffff', label: 'Python' },
   typescript: { bg: '#007acc', fg: '#ffffff', label: 'TS' },
+  javascript: { bg: '#f7df1e', fg: '#0e0e0e', label: 'JS' },
+  vue:        { bg: '#42b883', fg: '#0e0e0e', label: 'Vue' },
   go:         { bg: '#00add8', fg: '#ffffff', label: 'Go' },
+  c:          { bg: '#555555', fg: '#ffffff', label: 'C' },
+  cpp:        { bg: '#00599c', fg: '#ffffff', label: 'C++' },
+  csharp:     { bg: '#68217a', fg: '#ffffff', label: 'C#' },
+  php:        { bg: '#777bb3', fg: '#0e0e0e', label: 'PHP' },
+  ruby:       { bg: '#cc342d', fg: '#ffffff', label: 'Ruby' },
   rust:       { bg: '#dea584', fg: '#0e0e0e', label: 'Rust' },
+  kotlin:     { bg: '#7f52ff', fg: '#ffffff', label: 'Kotlin' },
+  swift:      { bg: '#f05138', fg: '#ffffff', label: 'Swift' },
+  scala:      { bg: '#dc322f', fg: '#ffffff', label: 'Scala' },
 };

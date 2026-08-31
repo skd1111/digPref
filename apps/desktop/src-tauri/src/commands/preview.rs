@@ -58,12 +58,15 @@ pub async fn preview_start(
     entry_file: Option<String>,
     framework: Option<String>,
     port: Option<u16>,
+    // BUGFIX #175：项目不在预览白名单时，前端用户确认后带 true 重试
+    allow_path: Option<bool>,
 ) -> AppResult<Value> {
     let body = json!({
         "project_path": project_path,
         "entry_file": entry_file.unwrap_or_default(),
         "framework": framework,
         "port": port,
+        "allow_path": allow_path.unwrap_or(false),
     });
     state.agent_post("/preview/start", body).await
 }

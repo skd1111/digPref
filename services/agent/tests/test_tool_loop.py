@@ -347,9 +347,7 @@ class TestDynamicToolLoop:
         防小模型重复同一失败调用无限空转（预算不再是唯一拦截）。
         """
         catalog = _FakeCatalog(
-            execute_results={
-                "get_weather": {"name": "get_weather", "ok": False, "error": "boom"}
-            }
+            execute_results={"get_weather": {"name": "get_weather", "ok": False, "error": "boom"}}
         )
         llm = _ScriptedLoopLLM(
             [_action("SELECT_TOOLS", selected_tool_names=["get_weather"])]
@@ -387,6 +385,7 @@ class TestDynamicToolLoop:
         )
         loop = DynamicToolLoop(llm, catalog, max_turns=20)
         out = await loop.run(_loop_state())
+
         # 真实图状态合并会保留 registered_tools；_loop_state 每轮新建 state，
         # 需手动携带（TOOL_CALLS 增量不回传该字段）
         def _next(o: dict) -> dict:

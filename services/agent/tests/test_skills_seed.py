@@ -68,6 +68,7 @@ class TestBundledSeedsValidity:
             "office_excel_analyst",
             "office_pptx_designer",
             "visual_deck_designer",
+            "ui_frontend_designer",
         }
         assert expected <= ids
 

@@ -122,6 +122,34 @@ class PreviewStorage:
             finally:
                 await db.close()
 
+    # ---- 预览白名单追加根目录（BUGFIX #175）----------------------------
+
+    async def add_allowed_root(self, path: str) -> None:
+        """持久化追加预览白名单根目录（幂等：主键冲突忽略）。"""
+        async with self._lock:
+            db = await self._connect()
+            try:
+                from agent.preview.models import now_ms
+
+                await db.execute(
+                    "INSERT OR IGNORE INTO preview_allowed_roots (path, created_at) VALUES (?, ?)",
+                    (path, now_ms()),
+                )
+                await db.commit()
+            finally:
+                await db.close()
+
+    async def list_allowed_roots(self) -> list[str]:
+        """读全部持久化白名单根目录。"""
+        async with self._lock:
+            db = await self._connect()
+            try:
+                cur = await db.execute("SELECT path FROM preview_allowed_roots")
+                rows = await cur.fetchall()
+                return [str(r[0]) for r in rows]
+            finally:
+                await db.close()
+
 
 def _row_to_dict(row: aiosqlite.Row) -> dict[str, Any]:
     """SQLite 行 → dict（与 schema.sql 列序匹配）。"""

@@ -12,6 +12,7 @@ import { useEffect } from 'react';
 import { subscribeAgentStream } from '@/streams/agentStream';
 import { ipc } from '@/ipc/invoke';
 import { useChatStore } from '@/store/chatStore';
+import { useUIStore } from '@/store/uiStore';
 import { useThinkingStore } from '@/store/thinkingStore';
 import { useTraceStore } from '@/store/traceStore';
 import { isMockText } from '@/lib/mockFilter';
@@ -251,11 +252,22 @@ export function useAgentStream(): void {
             // 切到 B 会话，任务计划卡串到 B 且关掉 B 后彻底丢失。
             const todos = (evt.step as { todos?: unknown }).todos;
             if (evt.step.node === 'todo' && Array.isArray(todos) && todos.length > 0) {
-              useChatStore.getState().upsertTodo(
-                tabFor(evt.runId),
-                `todo-${evt.runId ?? 'run'}`,
-                JSON.stringify(todos),
-              );
+              const stTodo = useChatStore.getState();
+              const tabIdTodo = tabFor(evt.runId);
+              const msgIdTodo = `todo-${evt.runId ?? 'run'}`;
+              // 首次出现任务计划（新建而非原地更新）：左侧停在资源管理器视角时
+              // 自动切到任务计划（限开发模式 + explorer activity，其他 activity
+              // 各有专属内容不强抢）；后续进度刷新不重复切（用户手动切回不拦）
+              const isNewTodo = !(
+                stTodo.tabs.find((t) => t.id === tabIdTodo)?.messages ?? []
+              ).some((m) => m.id === msgIdTodo);
+              stTodo.upsertTodo(tabIdTodo, msgIdTodo, JSON.stringify(todos));
+              if (isNewTodo) {
+                const ui = useUIStore.getState();
+                if (ui.mode === 'full' && ui.activityId === 'explorer' && ui.leftView === 'explorer') {
+                  ui.setLeftView('plan');
+                }
+              }
               break;
             }
             // 知识检索节点不在对话展示（2026-08-17）：rag_retrieve 已在

@@ -26,15 +26,18 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sqlite3
 import time
 from pathlib import Path
 
 from tree_sitter import Node
 
+from agent.codenav import generic_extractors
 from agent.codenav.language_registry import (
     get_parser_for_file,
     get_supported_extensions,
+    get_virtual_language_id,
 )
 from agent.codenav.models import IndexStatus, Symbol
 
@@ -200,7 +203,13 @@ class WorkspaceIndexer:
             return []
 
         if language:
-            # 测试用：直接给定语言
+            # 测试用：直接给定语言（虚拟后缀无 grammar，走专用分支）
+            if language == "vue":
+                try:
+                    source = path.read_bytes()
+                except (OSError, UnicodeDecodeError):
+                    return []
+                return _extract_vue(source, str(path.resolve()), int(path.stat().st_mtime * 1000))
             from agent.codenav.language_registry import _LANGUAGE_BUILDERS, _build_parser
 
             ext = next((e for e, (_, lid) in _LANGUAGE_BUILDERS.items() if lid == language), None)
@@ -210,6 +219,13 @@ class WorkspaceIndexer:
             if not parser:
                 return []
         else:
+            # 虚拟后缀（.vue）：无整文件 grammar，抽 <script> 块后复用 JS/TS 解析
+            if get_virtual_language_id(file_path) == "vue":
+                try:
+                    source = path.read_bytes()
+                except (OSError, UnicodeDecodeError):
+                    return []
+                return _extract_vue(source, str(path.resolve()), int(path.stat().st_mtime * 1000))
             result = get_parser_for_file(file_path)
             if not result:
                 return []
@@ -339,6 +355,8 @@ def _extract_from_tree(
         return _extract_python(root, source, file_path, language, last_mtime)
     if language in ("typescript", "javascript"):
         return _extract_typescript(root, source, file_path, language, last_mtime)
+    if generic_extractors.supports(language):
+        return generic_extractors.extract_generic(root, source, file_path, language, last_mtime)
     return []
 
 
@@ -598,4 +616,41 @@ def _extract_typescript(
                         last_mtime,
                     )
                 )
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Vue SFC（.vue）：无整文件 grammar，抽 <script> 块后复用 JS/TS 解析
+# ---------------------------------------------------------------------------
+
+_VUE_SCRIPT_RE = re.compile(rb"<script\b([^>]*)>(.*?)</script>", re.IGNORECASE | re.DOTALL)
+_VUE_TS_ATTR_RE = re.compile(rb"""lang\s*=\s*['"](?:ts|typescript)['"]""", re.IGNORECASE)
+
+
+def _extract_vue(source: bytes, file_path: str, last_mtime: int) -> list[Symbol]:
+    """解析 .vue 所有 <script> 块：lang="ts" 走 TS 语法，其余走 JS。
+
+    符号行号按块在文件中的起始行偏移；language 统一标为 'vue'。
+    """
+    from agent.codenav.language_registry import (
+        _build_parser,  # 局部 import，与 extract_symbols 一致
+    )
+
+    out: list[Symbol] = []
+    for m in _VUE_SCRIPT_RE.finditer(source):
+        attrs, body = m.group(1), m.group(2)
+        if not body.strip():
+            continue
+        ext = ".ts" if _VUE_TS_ATTR_RE.search(attrs) else ".js"
+        parser = _build_parser(ext)
+        if not parser:
+            continue
+        inner_lang = "typescript" if ext == ".ts" else "javascript"
+        tree = parser.parse(body)
+        base_line = source.count(b"\n", 0, m.start(2))
+        for sym in _extract_from_tree(tree.root_node, body, file_path, inner_lang, last_mtime):
+            sym.start_line += base_line
+            sym.end_line += base_line
+            sym.language = "vue"
+            out.append(sym)
     return out

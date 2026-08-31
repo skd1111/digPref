@@ -108,6 +108,35 @@ enum Color { RED, GREEN, BLUE }
     assert kinds["Color"] == "enum"
 
 
+def test_extract_javascript_js_and_jsx(tmp_path):
+    """2026-08-28 回归：.js/.jsx 前端工程此前不在支持后缀里，
+    导入后提取 0 功能点。补充 tree-sitter-javascript 后应能正常抽符号。"""
+    f = tmp_path / "src" / "utils.js"
+    _write(
+        f,
+        """
+export function formatPrice(n) { return n.toFixed(2); }
+
+export class OrderService {
+    calc(o) { return o.total; }
+}
+""",
+    )
+    idx = WorkspaceIndexer(db_path=str(tmp_path / "idx.db"), root_paths=[tmp_path])
+    syms = idx.extract_symbols(str(f))
+    by_name = {(s.kind, s.name): s for s in syms}
+    assert ("function", "formatPrice") in by_name
+    assert ("class", "OrderService") in by_name
+    assert by_name[("method", "calc")].parent_class == "OrderService"
+    assert all(s.language == "javascript" for s in syms)
+
+    # .jsx 同样受支持（默认导出函数）
+    f2 = tmp_path / "src" / "App.jsx"
+    _write(f2, "export default function App() { return null; }\n")
+    syms2 = idx.extract_symbols(str(f2))
+    assert ("function", "App") in {(s.kind, s.name) for s in syms2}
+
+
 def test_full_scan_writes_sqlite(tmp_path):
     (tmp_path / "A.java").write_text("public class A { void m() {} }", encoding="utf-8")
     (tmp_path / "b.py").write_text("def f(): pass", encoding="utf-8")

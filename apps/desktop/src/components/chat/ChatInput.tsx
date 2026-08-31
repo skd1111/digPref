@@ -22,10 +22,11 @@
  */
 import { useState, useCallback, useEffect, useMemo, useRef, type KeyboardEvent } from 'react';
 import { invoke, ipc } from '@/ipc/invoke';
-import { useChatStore, useFeatureContextPromptSnippet, useExpertTeamPromptSnippet, tabContextMessages, estimateHistoryTokens } from '@/store/chatStore';
+import { useChatStore, useFeatureContextPromptSnippet, useExpertTeamPromptSnippet, tabContextMessages, estimateHistoryTokens, renderSkillBlock } from '@/store/chatStore';
 import { parseClarifyBlock } from '@/lib/clarify';
 import { expandOptionReply } from '@/lib/optionReply';
 import { buildUserHistory } from '@/lib/chatHistory';
+import { parseSlashQuery, filterSkillsForSlash } from '@/lib/slashCommands';
 import {
   buildAttachmentsSnippet,
   readFileAsBase64,
@@ -34,11 +35,13 @@ import {
 } from '@/lib/attachments';
 import { ClarifyCard } from '@/components/chat/ClarifyCard';
 import { ExpertTeamSelector } from '@/components/chat/ExpertTeamSelector';
+import { SlashMenu } from '@/components/chat/SlashMenu';
 import { CHAT_RETRY_EVENT, CHAT_SEND_EVENT } from '@/components/chat/ChatMessage';
 import { useUIStore } from '@/store/uiStore';
 import { useCodeNavStore } from '@/store/codeNavStore';
 import { useBiznavStore } from '@/store/biznavStore';
 import { useExpertTeamStore } from '@/store/expertTeamStore';
+import { useSkillsStore } from '@/store/skillsStore';
 import { useReqcardStore, buildDoneCardsSnippet } from '@/store/reqcardStore';
 // 2026-08-05：推理模式 / 会话自主性开关已迁至 设置 → 高级设置
 // （AdvancedSettingsPanel），不再占用发送按钮旁空间；值仍由 chatStore 透传。
@@ -72,6 +75,19 @@ export function ChatInput(): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  // `/` 系统指令（2026-08-28，V1：Skill）：选中后挂待注入态，发送时拼进 prompt；
+  // slashIdx = 菜单键盘高亮项；slashDismissedFor = 被 Esc 关闭时的查询词（防立即重开）
+  const [pendingSkillId, setPendingSkillId] = useState<string | null>(null);
+  const [slashIdx, setSlashIdx] = useState(0);
+  const [slashDismissedFor, setSlashDismissedFor] = useState<string | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const skills = useSkillsStore((s) => s.skills);
+  useEffect(() => {
+    // 首次进会话时确保 Skill 已加载（运营工作台之外的入口不拉过）
+    if (useSkillsStore.getState().skills.length === 0) {
+      void useSkillsStore.getState().loadSkills();
+    }
+  }, []);
   // 历史记录快捷输入（2026-08-26）：空输入框按 ↑ 进入浏览（终端习惯），
   // historyIdx = null 未在浏览 / 0 最新 / 增大向更早翻；进入前暂存草稿，↓ 到底或 Esc 恢复
   const [historyIdx, setHistoryIdx] = useState<number | null>(null);
@@ -99,8 +115,9 @@ export function ChatInput(): JSX.Element {
   const chatSelection = useCodeNavStore((s) => s.chatSelection);
   const clearChatSelection = useCodeNavStore((s) => s.clearChatSelection);
   // 已选定业务功能点上下文 + 已导入工程名（发送时前置注入 prompt，
-  // 让模型不再反问「哪个功能 / 什么语言 / 哪个项目」）
-  const featureSnippet = useFeatureContextPromptSnippet();
+  // 让模型不再反问「哪个功能 / 什么语言 / 哪个项目」）；
+  // `/` 钉住技能时剔除功能点绑定技能段（Skill 强钉互斥，2026-08-28）
+  const featureSnippet = useFeatureContextPromptSnippet(pendingSkillId != null);
   // 专家团上下文（运营工作台自动/手动选择后，发送时拼接）
   const expertTeamSnippet = useExpertTeamPromptSnippet();
   const projectName = useBiznavStore((s) => s.projectName);
@@ -132,6 +149,36 @@ export function ChatInput(): JSX.Element {
   const toggleCleanMode = useCallback((): void => {
     useChatStore.getState().setTabCleanMode(activeTabId, !cleanMode);
   }, [activeTabId, cleanMode]);
+
+  // `/` 指令菜单（2026-08-28）：文本以 / 开头且未被 Esc 关闭时展示已启用 Skill；
+  // 选中 → 挂待注入态 + 剥离 / 词；发送时 skill 经验块拼进 prompt（用户主动选择，
+  // 不受 cleanMode 影响，同附件）；同时写 lastSkillId 让后端粘性链同步生效。
+  const slashQuery = useMemo(() => parseSlashQuery(text), [text]);
+  const slashSkills = useMemo(
+    () => (slashQuery == null ? [] : filterSkillsForSlash(skills, slashQuery)),
+    [skills, slashQuery],
+  );
+  const slashMenuOpen = slashQuery != null && slashDismissedFor !== slashQuery;
+  // 查询词变化时高亮回第一项（含重新打开菜单）
+  useEffect(() => {
+    setSlashIdx(0);
+  }, [slashQuery]);
+
+  /** 选中一个 `/` 指令项（Skill）：挂待注入态、剥离指令词、聚焦回输入框 */
+  const pickSlashItem = useCallback(
+    (skillId: string): void => {
+      setPendingSkillId(skillId);
+      useChatStore.getState().setLastSkillId(skillId);
+      // 剥离 `/查询词`（及其后紧跟的空白），保留用户已输入的其余文本
+      const q = parseSlashQuery(text);
+      if (q != null) {
+        setText(text.slice(1 + q.length).replace(/^\s+/, ''));
+      }
+      setSlashDismissedFor(q); // 选中后不重开菜单（继续输入新 / 时查询词变化自然重置）
+      textareaRef.current?.focus();
+    },
+    [text],
+  );
 
   // 会话模型选择（2026-08-17）：选项 = 模型管理已启用模型；选中随发送透传
   // 后端（优先级最高），未选回落模型管理路由配置；按页签记忆（随 tabs 持久化）
@@ -199,6 +246,19 @@ export function ChatInput(): JSX.Element {
     if (cleanMode) {
       chips.push({ label: '🌙 纯净对话（排除项目上下文，系统提示词照常）' });
     }
+    // `/` 指令选中的 Skill（2026-08-28）：用户主动选择，纯净模式下也照常注入，可 ✕ 移除
+    const pendingSkillChip = pendingSkillId ? skills.find((s) => s.id === pendingSkillId) : undefined;
+    if (pendingSkillChip) {
+      chips.push({
+        label: `🧩 Skill：${pendingSkillChip.name}`,
+        onRemove: () => {
+          setPendingSkillId(null);
+          const st = useChatStore.getState();
+          // 同步回收后端粘性位（仅限就是本项写入的情况，不误删真实命中记录）
+          if (st.lastSkillId === pendingSkillId) st.setLastSkillId(null);
+        },
+      });
+    }
     if (!cleanMode && featureSnippet) {
       chips.push({
         label: '📌 功能点上下文',
@@ -240,7 +300,7 @@ export function ChatInput(): JSX.Element {
       chips.push({ label: `💬 会话历史（近 ${Math.min(turns, 12)} 轮 · ≈${formatChars(historyTokens)} tok）` });
     }
     return chips;
-  }, [featureSnippet, expertTeamSnippet, projectName, alignmentActive, attachments, activeTab, historyMsgs, historyTokens, profileSuppressed, cleanMode]);
+  }, [featureSnippet, expertTeamSnippet, projectName, alignmentActive, attachments, activeTab, historyMsgs, historyTokens, profileSuppressed, cleanMode, skills, pendingSkillId]);
 
   /** 📎 选中文件：逐个读 base64 → 后端转文本，状态写回 attachments */
   const addFiles = useCallback(async (list: FileList | File[]): Promise<void> => {
@@ -436,13 +496,21 @@ export function ChatInput(): JSX.Element {
       const profile = !cleanMode && profileActive && projectName ? await getProjectProfile(projectName) : '';
       const doneSnippet = !cleanMode && alignmentActive ? buildDoneCardsSnippet() : '';
       const attachSnippet = buildAttachmentsSnippet(attachments) ?? '';
+      // `/` 指令选中的 Skill（2026-08-28）：skill 经验块（角色/流程/示例/交付物）拼进 prompt；
+      // 用户主动选择，不受 cleanMode 影响（同附件/选区）
+      const pendingSkill = pendingSkillId
+        ? useSkillsStore.getState().skills.find((s) => s.id === pendingSkillId)
+        : undefined;
+      const skillSnippet = pendingSkill
+        ? `【已加载 Skill（用户经 / 指令主动选择）· ${pendingSkill.name}】\n${renderSkillBlock(pendingSkill).join('\n')}`
+        : '';
       // 选区代码直接拼进 prompt（2026-08-19 修复）：之前只写了条 system 消息进 chatStore，
       // 但 history 只带 user/assistant、agent_chat 也没有 selection 参数 → 代码从未到达后端，
       // 导致模型反问「想了解哪个类」。cleanMode 下仍保留（用户主动关注项，同附件）
       const selSnippet = chatSelection
         ? `[用户当前关注的代码 · ${chatSelection.label} · 来自 ${shortFile(chatSelection.file)}]\n\`\`\`\n${chatSelection.text}\n\`\`\``
         : '';
-      const contextParts = [profile, cleanMode ? '' : featureSnippet, cleanMode ? '' : expertTeamSnippet, doneSnippet, selSnippet, attachSnippet].filter((p) => p.length > 0);
+      const contextParts = [profile, skillSnippet, cleanMode ? '' : featureSnippet, cleanMode ? '' : expertTeamSnippet, doneSnippet, selSnippet, attachSnippet].filter((p) => p.length > 0);
       const finalPrompt =
         contextParts.length > 0
           ? `${contextParts.join('\n\n')}\n\n【用户问题】\n${trimmed}`
@@ -480,8 +548,11 @@ export function ChatInput(): JSX.Element {
         // 豁免只在当前页签生效，切新会话不复用
         pageContext: { page: { workMode, tabTitle: activeTab?.title ?? '', tabId: activeTab?.id ?? '' } },
         // Skill 粘性（2026-08-26）：上一轮命中的 skill，追问/修改轮由后端继承，
-        // 防「太丑了重做」脱离设计规范的裸生成
-        lastSkillId: chatState.lastSkillId ?? null,
+        // 防「太丑了重做」脱离设计规范的裸生成；`/` 指令选中时优先用该项（2026-08-28）
+        lastSkillId: pendingSkillId ?? chatState.lastSkillId ?? null,
+        // Skill 强钉（2026-08-28）：`/` 手动指定时后端短路路由器固定用它，
+        // 关键词/功能点绑定等低优先级命中物理不进入模型输入空间（本地/云端同策略）
+        pinnedSkillId: pendingSkillId ?? null,
         // 任务级工作目录（2026-08-26）：一个聊天页签 = 一个任务文件夹；
         // taskId 用页签 id，taskTitle 取页签首个用户问题（文件夹命名用）
         taskId: activeTab?.id ?? null,
@@ -502,11 +573,12 @@ export function ChatInput(): JSX.Element {
       setText('');
       setBusy(false);
       setHistoryIdx(null);  // 发送后退出历史浏览态（下次 ↑ 从新历史最新条开始）
-      // 发送后清掉选区与附加文件（一次性附加）
+      // 发送后清掉选区与附加文件（一次性附加）；`/` 选中的 Skill 同为一次性注入（2026-08-28）
       clearChatSelection();
       setAttachments([]);
+      setPendingSkillId(null);
     }
-  }, [busy, activeTabId, chatSelection, appendChat, setRunId, clearChatSelection, workMode, autonomy, inferenceMode, featureSnippet, expertTeamSnippet, projectName, alignmentActive, archiveUserMessage, attachments, profileActive, cleanMode, ctxLimit, compressing, runCompression]);
+  }, [busy, activeTabId, chatSelection, appendChat, setRunId, clearChatSelection, workMode, autonomy, inferenceMode, featureSnippet, expertTeamSnippet, projectName, alignmentActive, archiveUserMessage, attachments, profileActive, cleanMode, ctxLimit, compressing, runCompression, pendingSkillId]);
 
   const submit = useCallback(async (): Promise<void> => {
     await sendUserMessage(text);
@@ -596,6 +668,33 @@ export function ChatInput(): JSX.Element {
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
+      // `/` 指令菜单优先（2026-08-28）：↑↓ 循环移高亮，Enter/Tab 确认，Esc 关闭；
+      // 菜单打开时 Enter 不发送（选中项），与历史浏览/普通发送互不干扰
+      if (slashMenuOpen) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          setSlashIdx((i) => (slashSkills.length === 0 ? 0 : (i + 1) % slashSkills.length));
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          setSlashIdx((i) =>
+            slashSkills.length === 0 ? 0 : (i - 1 + slashSkills.length) % slashSkills.length,
+          );
+          return;
+        }
+        if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
+          e.preventDefault();
+          const hit = slashSkills[Math.min(slashIdx, slashSkills.length - 1)];
+          if (hit) pickSlashItem(hit.id);
+          return;
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          setSlashDismissedFor(slashQuery);
+          return;
+        }
+      }
       // Enter 发送，Shift+Enter 换行（与 VSCode Copilot Chat 一致）
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -631,7 +730,7 @@ export function ChatInput(): JSX.Element {
         setText(historyDraftRef.current);
       }
     },
-    [submit, historyIdx, text, userHistory],
+    [submit, historyIdx, text, userHistory, slashMenuOpen, slashSkills, slashIdx, pickSlashItem, slashQuery],
   );
 
   return (
@@ -766,7 +865,7 @@ export function ChatInput(): JSX.Element {
         )}
         {/* aicss AI Agent Input 风格（2026-08-10）：圆角整体框 + 底部工具栏 + 圆形发送键 */}
         <div
-          className="chat-input-frame rounded-xl border bg-white shadow-sm transition-shadow focus-within:shadow-md"
+          className="chat-input-frame relative rounded-xl border bg-white shadow-sm transition-shadow focus-within:shadow-md"
           style={{ borderColor: '#e7e5e4' }}
           onDragOver={(e) => {
             e.preventDefault();
@@ -780,7 +879,17 @@ export function ChatInput(): JSX.Element {
             if (dropped.length > 0) void addFiles(dropped);
           }}
         >
+          {/* `/` 系统指令菜单（2026-08-28，V1：Skill）：浮在输入框上方，鼠标/键盘双通道 */}
+          {slashMenuOpen && (
+            <SlashMenu
+              skills={slashSkills}
+              activeIdx={slashIdx}
+              onHover={setSlashIdx}
+              onSelect={(s) => pickSlashItem(s.id)}
+            />
+          )}
           <textarea
+            ref={textareaRef}
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={handleKeyDown}

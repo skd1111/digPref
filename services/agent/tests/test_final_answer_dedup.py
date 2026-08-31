@@ -57,10 +57,12 @@ class TestFinalAnswerDedup:
         dedup: set[str] = set()
         msg_id: list[str] = []
         raw = "请选择风格：\n1. 简洁实用\n2. 视觉设计"
-        refined = raw + "\n\n```clarify\n[{\"question\": \"请选择风格\"}]\n```"
+        refined = raw + '\n\n```clarify\n[{"question": "请选择风格"}]\n```'
 
         events1 = _convert_chunk("values", {"final_answer": raw}, "r", set(), None, dedup, msg_id)
-        events2 = _convert_chunk("values", {"final_answer": refined}, "r", set(), None, dedup, msg_id)
+        events2 = _convert_chunk(
+            "values", {"final_answer": refined}, "r", set(), None, dedup, msg_id
+        )
 
         m1 = _messages(events1)
         m2 = _messages(events2)

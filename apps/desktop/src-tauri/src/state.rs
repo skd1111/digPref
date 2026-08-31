@@ -205,6 +205,18 @@ impl AppState {
             .map_err(|e| AppError::Internal(format!("agent_post {}: {}", path, e)))?;
         agent_json_or_err(resp, "agent_post").await
     }
+
+    /// DELETE 到 Python Agent（Phase 19 经验库删除用；与 agent_post 同模式）。
+    pub async fn agent_delete(&self, path: &str) -> AppResult<serde_json::Value> {
+        let url = format!("{}{}", self.config.agent_base_url, path);
+        let client = reqwest::Client::new();
+        let resp = client
+            .delete(&url)
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("agent_delete {}: {}", path, e)))?;
+        agent_json_or_err(resp, "agent_delete").await
+    }
 }
 
 

@@ -124,6 +124,9 @@ _CHANNEL_BY_KIND = {
     "tool_progress": "agent://tool_progress",
     "shell_chunk": "agent://shell_chunk",
     "file_write_preview": "agent://file_write_preview",
+    # Phase 19 V0：自进化闭环 SSE 三处同步（CLAUDE.md §4）
+    # evolution_insight_created：失败反思产出新经验（前端经验库页刷新）
+    "evolution_insight_created": "agent://evolution_insight_created",
 }
 
 
@@ -295,6 +298,8 @@ async def stream_graph_events(
     # 已下发的 trace 条目数（用列表包装以便在 _convert_chunk 里更新）：
     # 增量下发所有新增条目，工具循环每步操作都能进思维链（2026-08-17）
     sent_trace_count: list[int] = [len(initial_state.get("trace") or [])]
+    # Phase 19 V0：跟踪最近一次全量状态快照（done 前抽任务轨迹用）
+    last_values: dict | None = None
 
     # 心跳保活（BUGFIX #118）：把 astream 包成单任务逐块 await，等待超过
     # _HEARTBEAT_INTERVAL_SEC 就先 yield 一条注释行保活再继续等（任务不取消，
@@ -347,6 +352,9 @@ async def stream_graph_events(
             if not isinstance(chunk, tuple) or len(chunk) != 2:
                 continue
             mode, payload = chunk
+            # Phase 19 V0：留存最近全量快照（任务收尾轨迹抽取用，best-effort）
+            if mode == "values" and isinstance(payload, dict):
+                last_values = payload
             for event in _convert_chunk(
                 mode,
                 payload,
@@ -365,6 +373,9 @@ async def stream_graph_events(
                 yield evt
             # Phase 2D V1：消费 skill 后台事件并推到 SSE 流
             for evt in await _drain_skill_events():
+                yield evt
+            # Phase 19 V0：消费自进化后台事件（新经验产出）并推到 SSE 流
+            for evt in await _drain_evolution_events():
                 yield evt
             # Phase 1B V1：消费 builtin 后台事件并推到 SSE 流
             for evt in await _drain_builtin_events():
@@ -396,6 +407,8 @@ async def stream_graph_events(
             yield evt
         for evt in await _drain_skill_events():
             yield evt
+        for evt in await _drain_evolution_events():
+            yield evt
         for evt in await _drain_builtin_events():
             yield evt
         for evt in await _drain_image_events():
@@ -410,6 +423,21 @@ async def stream_graph_events(
             yield evt
         for evt in await _drain_preview_events():
             yield evt
+        # Phase 19 V0：任务收尾轨迹抽取（自进化闭环起点）——后台 best-effort，
+        # 失败只记日志；不阻塞 done 下发（反思也在其内部后台执行）
+        if last_values is not None:
+            try:
+                from agent.evolution.trajectory import record_run_outcome
+
+                asyncio.get_running_loop().create_task(
+                    record_run_outcome(
+                        run_id=run_id,
+                        user_prompt=prompt,
+                        state=dict(last_values),
+                    )
+                )
+            except Exception:
+                pass  # best-effort：进化失败绝不影响主链路
         yield _sse_event(
             "done",
             {
@@ -525,6 +553,28 @@ async def _drain_skill_events() -> list[dict]:
         from agent.skills.events import consume_skill_events
 
         raw = await consume_skill_events(timeout_s=0.0)
+        for kind, payload in raw:
+            channel = _CHANNEL_BY_KIND.get(kind)
+            if channel:
+                events.append(
+                    {"event": channel, "data": json.dumps(payload, default=str, ensure_ascii=False)}
+                )
+    except Exception:
+        pass  # best-effort
+    return events
+
+
+async def _drain_evolution_events() -> list[dict]:
+    """Phase 19 V0：从 evolution.events in-process deque 拉已 emit 的事件，转 SSE。
+
+    反思后台任务通过 `emit_evolution_event()` 写入 deque；本函数被 stream 循环
+    + 收尾各调一次，把 buffered 事件全部推到 SSE 前端。
+    """
+    events: list[dict] = []
+    try:
+        from agent.evolution.events import consume_evolution_events
+
+        raw = await consume_evolution_events(timeout_s=0.0)
         for kind, payload in raw:
             channel = _CHANNEL_BY_KIND.get(kind)
             if channel:

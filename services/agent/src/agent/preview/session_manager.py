@@ -11,14 +11,17 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from pathlib import Path
 
 from agent.preview import events as preview_events
+from agent.preview import path_policy
 from agent.preview.audit import audit_preview
 from agent.preview.config_generator import generate as generate_config
 from agent.preview.framework_detector import detect_framework, find_project_root
 from agent.preview.models import (
+    Framework,
     PreviewSession,
     PreviewStatus,
     StartPreviewRequest,
@@ -35,6 +38,8 @@ from agent.preview.vite_manager import VitePreviewManager, ViteUnavailableError
 INACTIVE_TIMEOUT_SEC = 30 * 60  # 30 分钟无活动自动停止（设计 §5.2）
 SESSION_SWEEP_SEC = 60.0
 CRASH_RESTART_DELAY_SEC = 1.0
+
+log = logging.getLogger("agent.preview.session_manager")
 
 
 class PreviewError(RuntimeError):
@@ -62,6 +67,8 @@ class SessionManager:
         self._inactive_timeout_sec = inactive_timeout_sec
         self._sessions: dict[str, PreviewSession] = {}
         self._sweep_task: asyncio.Task[None] | None = None
+        # 持久化白名单根目录只回载一次（#175）
+        self._allowed_roots_loaded = False
         # 构造即注册为全局默认（与 ssh.session_manager 同模式）——
         # 让 FastAPI 路由（get_default_manager）直接拿到本实例
         global _default_manager
@@ -75,13 +82,28 @@ class SessionManager:
         流程：校验路径 → 检测框架 → 分配端口 → 生成配置 → 启动 Vite 子进程
         → 落库 + 审计 → 返回会话。启动失败时回滚（释放端口）。
         """
+        await self._load_persisted_allowed_roots()
         project_root = _resolve_project_root(req.project_path)
         if project_root is None:
             raise PreviewError(f"项目目录不存在或找不到 package.json: {req.project_path}")
         try:
             project_root = validate_project_path(project_root)
         except PreviewPathNotAllowedError as exc:
-            raise PreviewError(str(exc)) from exc
+            if not req.allow_path:
+                log.warning("[preview] path not allowed, rejected: %s", project_root)
+                raise PreviewError(str(exc)) from exc
+            # 用户已在前端确认（#175）：追加该目录到持久化白名单后继续。
+            # 只允许已导入工程的根目录（入口由前端文件树控制），
+            # 持久化 + 审计，重启后仍生效。
+            root_str = str(Path(project_root).resolve(strict=False))
+            await self._storage.add_allowed_root(root_str)
+            path_policy.add_runtime_root(root_str)
+            await audit_preview(
+                "preview_allowed_root_added",
+                {"project_path": root_str},
+            )
+            log.info("[preview] allowed root added by user confirm: %s", root_str)
+            project_root = validate_project_path(project_root)
 
         framework = req.framework or detect_framework(project_root)
         port = req.port or self._allocator.allocate()
@@ -92,6 +114,11 @@ class SessionManager:
 
         session_id = uuid.uuid4().hex
         url = f"http://127.0.0.1:{port}"
+        # HTML 静态服务：入口文件存在时直达该文件（否则打开目录首页）
+        if framework == Framework.HTML and req.entry_file:
+            entry_rel = _entry_relative_to(project_root, req.entry_file)
+            if entry_rel:
+                url = f"{url}/{entry_rel}"
         session = PreviewSession(
             id=session_id,
             project_path=str(project_root),
@@ -105,13 +132,16 @@ class SessionManager:
         )
         self._sessions[session_id] = session
 
-        # 配置生成失败 → 回滚
-        try:
-            config_path = generate_config(project_root, framework, port)
-        except OSError as exc:
-            self._allocator.release(port)
-            self._sessions.pop(session_id, None)
-            raise PreviewError(f"生成 Vite 配置失败: {exc}") from exc
+        # HTML 框架走进程内静态服务（#176），无需生成/下发 Vite 配置；
+        # 配置生成失败 → 回滚（仅 Vite 系框架）
+        config_path: str | None = None
+        if framework != Framework.HTML:
+            try:
+                config_path = generate_config(project_root, framework, port)
+            except OSError as exc:
+                self._allocator.release(port)
+                self._sessions.pop(session_id, None)
+                raise PreviewError(f"生成 Vite 配置失败: {exc}") from exc
         session.config_path = config_path
 
         try:
@@ -120,6 +150,7 @@ class SessionManager:
                 project_path=str(project_root),
                 config_path=config_path,
                 port=port,
+                framework=framework,
             )
         except (ViteUnavailableError, OSError) as exc:
             self._allocator.release(port)
@@ -190,7 +221,7 @@ class SessionManager:
     async def restart_crashed(self, session_id: str) -> bool:
         """崩溃自动重启（1 次）。重启成功返回 True。"""
         session = self._sessions.get(session_id)
-        if session is None or session.config_path is None:
+        if session is None:
             return False
         await asyncio.sleep(CRASH_RESTART_DELAY_SEC)
         try:
@@ -199,6 +230,7 @@ class SessionManager:
                 project_path=session.project_path,
                 config_path=session.config_path,
                 port=session.port,
+                framework=session.framework,
             )
         except (ViteUnavailableError, OSError):
             session.status = PreviewStatus.ERRORED
@@ -261,6 +293,17 @@ class SessionManager:
 
     # ---- 内部 -------------------------------------------------------------
 
+    async def _load_persisted_allowed_roots(self) -> None:
+        """首次 start 时回载持久化白名单根目录到运行时（#175，幂等）。"""
+        if self._allowed_roots_loaded:
+            return
+        self._allowed_roots_loaded = True
+        try:
+            for raw in await self._storage.list_allowed_roots():
+                path_policy.add_runtime_root(raw)
+        except Exception as exc:  # 白名单回载失败不阻塞启动，走默认规则
+            log.warning("[preview] load persisted allowed roots failed: %s", exc)
+
     async def _persist(self, session: PreviewSession) -> None:
         from contextlib import suppress
 
@@ -297,6 +340,18 @@ class SessionManager:
         if self._sweep_task is not None:
             self._sweep_task.cancel()
         await self._vite.stop_all()
+
+
+def _entry_relative_to(project_root: Path, entry_file: str) -> str | None:
+    """把入口文件（绝对/相对路径）规范化为项目根下的相对路径（正斜杠）。"""
+    try:
+        entry = Path(entry_file).expanduser()
+        if not entry.is_absolute():
+            entry = project_root / entry
+        rel = entry.resolve(strict=False).relative_to(project_root.resolve(strict=False))
+        return rel.as_posix()
+    except (ValueError, OSError):
+        return None
 
 
 def _resolve_project_root(project_path: str) -> Path | None:

@@ -77,6 +77,32 @@ def _inherit_last_skill(prompt: str, last_skill_id: str) -> SkillRoutingResult |
         return None
 
 
+def _load_pinned_skill(skill_id: str) -> SkillRoutingResult | None:
+    """Skill 强钉（2026-08-28）：直接装载用户经 `/` 指令指定的 skill。
+
+    与自动路由的区别：不走 LLM 分类也不走关键词（省一次模型调用），
+    优先级最高；目标不存在/已停用返 None → 回退正常路由（不阻断对话）。
+    """
+    sid = skill_id.strip()
+    if not sid:
+        return None
+    try:
+        from agent.skills import api as skills_api
+        from agent.skills.models import SkillRoutingResult
+
+        sk = skills_api._loader.get(sid) if skills_api._loader else None
+        if not sk or not sk.enabled:
+            return None
+        return SkillRoutingResult(
+            skill_id=sid,
+            skill_name=sk.name,
+            confidence=1.0,
+            matched_keywords=[],
+        )
+    except Exception:
+        return None
+
+
 async def intent_node(state: AgentState, llm: LMRouter) -> dict:
     """返回部分状态更新，由 LangGraph 合并。
 
@@ -180,23 +206,30 @@ async def intent_node(state: AgentState, llm: LMRouter) -> dict:
         from agent.skills import api as skills_api
 
         if prompt and skills_api._loader:
-            # 端侧地址以「模型管理」为准（router.db 自定义 URL/端口），与 LMRouter 同源
-            from agent.llm.router import load_enabled_local_backend
-            from agent.skills.router import SkillRouter
+            # Skill 强钉（2026-08-28）：用户经 `/` 指令手动指定时直接短路路由器，
+            # 关键词/LLM 分类/粘性继承全部跳过——低优先级命中物理不进入输入空间，
+            # 本地小模型与云端大模型同一策略（省 token + 免规则互掐）
+            pinned_routing = _load_pinned_skill(str(state.get("pinned_skill_id") or ""))
+            if pinned_routing:
+                routing = pinned_routing
+            else:
+                # 端侧地址以「模型管理」为准（router.db 自定义 URL/端口），与 LMRouter 同源
+                from agent.llm.router import load_enabled_local_backend
+                from agent.skills.router import SkillRouter
 
-            router = SkillRouter(
-                skills_api._loader,
-                ollama_base_url=load_enabled_local_backend()[0],
-            )
-            # V1 用 async 路由（LLM 优先 + 关键词回退）；Ollama 不可用时静默降级
-            routing = await router.route_async(prompt)
-            if not routing.skill_id:
-                # Skill 粘性（2026-08-26）：本轮未命中新 skill，但前端透传了上一轮
-                # 命中的 skill 且本轮是追问/修改类短句（如「太丑了，用 skill 优化」）
-                # → 继承上一轮 skill，避免脱离设计规范的裸生成。
-                inherited = _inherit_last_skill(prompt, str(state.get("last_skill_id") or ""))
-                if inherited:
-                    routing = inherited
+                router = SkillRouter(
+                    skills_api._loader,
+                    ollama_base_url=load_enabled_local_backend()[0],
+                )
+                # V1 用 async 路由（LLM 优先 + 关键词回退）；Ollama 不可用时静默降级
+                routing = await router.route_async(prompt)
+                if not routing.skill_id:
+                    # Skill 粘性（2026-08-26）：本轮未命中新 skill，但前端透传了上一轮
+                    # 命中的 skill 且本轮是追问/修改类短句（如「太丑了，用 skill 优化」）
+                    # → 继承上一轮 skill，避免脱离设计规范的裸生成。
+                    inherited = _inherit_last_skill(prompt, str(state.get("last_skill_id") or ""))
+                    if inherited:
+                        routing = inherited
             if routing.skill_id:
                 skill_match = {
                     "active_skill_id": routing.skill_id,

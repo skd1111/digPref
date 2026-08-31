@@ -58,12 +58,8 @@ class TestValidation:
         assert "not_an_office_file" in r.json()["detail"]
 
     def test_rejects_invalid_mode(self, client, office_file: Path, monkeypatch):
-        monkeypatch.setattr(
-            "agent.office_preview.api.resolve_officecli_exe", lambda: "C:/fake.exe"
-        )
-        r = client.post(
-            "/office/preview", json={"path": str(office_file), "mode": "pdf"}
-        )
+        monkeypatch.setattr("agent.office_preview.api.resolve_officecli_exe", lambda: "C:/fake.exe")
+        r = client.post("/office/preview", json={"path": str(office_file), "mode": "pdf"})
         assert r.status_code == 400
 
     def test_not_installed_returns_503(self, client, office_file: Path, monkeypatch):
@@ -135,9 +131,7 @@ class TestSessionEviction:
 
         first_id = None
         for i in range(preview_api._MAX_SESSIONS + 1):
-            r = client.post(
-                "/office/preview", json={"path": str(office_file), "mode": "html"}
-            )
+            r = client.post("/office/preview", json={"path": str(office_file), "mode": "html"})
             assert r.status_code == 200
             if i == 0:
                 first_id = r.json()["session_id"]

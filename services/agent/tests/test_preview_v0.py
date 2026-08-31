@@ -726,10 +726,154 @@ class TestSessionManager:
         assert mgr.list_active() == []
 
 
-def StartRequest(project_path, port=None):
+class TestPreviewAllowedRoots:
+    """BUGFIX #175：白名单拒绝后用户确认加入 → 持久化 + 运行时生效。"""
+
+    @pytest.fixture(autouse=True)
+    def _clean_runtime_roots(self):
+        from agent.preview import path_policy
+
+        path_policy.clear_runtime_roots()
+        yield
+        path_policy.clear_runtime_roots()
+
+    @pytest.mark.asyncio
+    async def test_allow_path_true_persists_root_and_starts(self, tmp_path, monkeypatch):
+        from agent.config import settings
+        from agent.preview import path_policy
+        from agent.preview.port_allocator import PortAllocator
+        from agent.preview.session_manager import SessionManager
+        from agent.preview.storage import PreviewStorage
+        from agent.preview.vite_manager import VitePreviewManager
+
+        # 白名单只含无关目录 → tmp_path 在名单外；带 allow_path 重试应放行
+        _allow_project_path(monkeypatch, tmp_path / "allowed")
+        (tmp_path / "allowed").mkdir(exist_ok=True)
+        monkeypatch.setattr(settings, "preview_db_path", str(tmp_path / "preview.db"))
+        _write_package_json(tmp_path, {"vue": "^3.4"})
+        storage = PreviewStorage(str(tmp_path / "preview.db"))
+        mgr = SessionManager(
+            vite=VitePreviewManager(spawner=_fake_spawner(FakeProcess)),
+            allocator=PortAllocator(5173, 5176),
+            storage=storage,
+        )
+        session = await mgr.start(StartRequest(tmp_path, allow_path=True))
+        assert session.status.value == "running"
+        # 持久化落库 + 运行时白名单生效（同会话内再启动不再需要 allow_path）
+        roots = await storage.list_allowed_roots()
+        assert [Path(r).resolve() for r in roots] == [tmp_path.resolve()]
+        session2 = await mgr.start(StartRequest(tmp_path))
+        assert session2.status.value == "running"
+        assert path_policy.resolve_allowed_roots()  # 运行时根已合入
+        await mgr.stop(session.id)
+        await mgr.stop(session2.id)
+
+    @pytest.mark.asyncio
+    async def test_persisted_root_reloaded_by_new_manager(self, tmp_path, monkeypatch):
+        """重启后回载：新 SessionManager 读持久化白名单，无需再次确认。"""
+        from agent.config import settings
+        from agent.preview.port_allocator import PortAllocator
+        from agent.preview.session_manager import SessionManager
+        from agent.preview.storage import PreviewStorage
+        from agent.preview.vite_manager import VitePreviewManager
+
+        _allow_project_path(monkeypatch, tmp_path / "allowed")
+        (tmp_path / "allowed").mkdir(exist_ok=True)
+        monkeypatch.setattr(settings, "preview_db_path", str(tmp_path / "preview.db"))
+        _write_package_json(tmp_path, {"vue": "^3.4"})
+        db = str(tmp_path / "preview.db")
+
+        # 第一代：确认加入
+        mgr1 = SessionManager(
+            vite=VitePreviewManager(spawner=_fake_spawner(FakeProcess)),
+            allocator=PortAllocator(5173, 5176),
+            storage=PreviewStorage(db),
+        )
+        s1 = await mgr1.start(StartRequest(tmp_path, allow_path=True))
+        await mgr1.stop(s1.id)
+
+        # 模拟重启：清空运行时状态 + 新实例，不带 allow_path 也应放行
+        from agent.preview import path_policy
+
+        path_policy.clear_runtime_roots()
+        mgr2 = SessionManager(
+            vite=VitePreviewManager(spawner=_fake_spawner(FakeProcess)),
+            allocator=PortAllocator(5173, 5176),
+            storage=PreviewStorage(db),
+        )
+        s2 = await mgr2.start(StartRequest(tmp_path))
+        assert s2.status.value == "running"
+        await mgr2.stop(s2.id)
+
+    def test_runtime_roots_merge_into_resolve(self, tmp_path, monkeypatch):
+        from agent.config import settings
+        from agent.preview import path_policy
+
+        # 未配置白名单 → 运行时根目录并入默认规则
+        monkeypatch.setattr(settings, "preview_allowed_paths", [])
+        path_policy.add_runtime_root(tmp_path)
+        roots = path_policy.resolve_allowed_roots()
+        assert tmp_path.resolve() in roots
+
+
+class TestHtmlStaticPreview:
+    """BUGFIX #176：HTML 框架进程内静态服务 —— 零 Node 依赖。"""
+
+    @pytest.mark.asyncio
+    async def test_html_project_previews_without_node(self, tmp_path, monkeypatch):
+        """无 package.json / node_modules / vite 的纯静态工程也能预览。"""
+        import urllib.request
+
+        from agent.config import settings
+        from agent.preview.models import StartPreviewRequest
+        from agent.preview.port_allocator import PortAllocator
+        from agent.preview.session_manager import SessionManager
+        from agent.preview.storage import PreviewStorage
+        from agent.preview.vite_manager import VitePreviewManager
+
+        _allow_project_path(monkeypatch, tmp_path)
+        monkeypatch.setattr(settings, "preview_db_path", str(tmp_path / "preview.db"))
+        (tmp_path / "centralBusMonitor.html").write_text(
+            "<html><body>OK176</body></html>", encoding="utf-8"
+        )
+        allocator = PortAllocator(5391, 5392)
+        mgr = SessionManager(
+            # 真实 manager（不注入 spawner）—— 走静态服务真链路而非 Vite 子进程
+            vite=VitePreviewManager(),
+            allocator=allocator,
+            storage=PreviewStorage(str(tmp_path / "preview.db")),
+        )
+        req = StartPreviewRequest(project_path=str(tmp_path), entry_file="centralBusMonitor.html")
+        session = await mgr.start(req)
+        try:
+            assert session.framework.value == "html"
+            # 入口文件直达（不是目录首页）
+            assert session.url == "http://127.0.0.1:5391/centralBusMonitor.html"
+            assert mgr._vite.is_running(session.id) is True
+            # HTTP 真的能拉到内容（进程内静态服务）
+            body = urllib.request.urlopen(session.url, timeout=3).read()
+            assert b"OK176" in body
+        finally:
+            await mgr.stop(session.id)
+        # 停止后端口释放，服务不可达；同端口可被再次分配（无泄漏）
+        with pytest.raises(OSError):
+            urllib.request.urlopen("http://127.0.0.1:5391/", timeout=2)
+        assert allocator.used_slots() == 0
+
+    def test_entry_relative_mapping(self, tmp_path):
+        """入口文件绝对/相对/越界路径的 URL 拼接归一。"""
+        from agent.preview.session_manager import _entry_relative_to
+
+        assert _entry_relative_to(tmp_path, str(tmp_path / "sub" / "a.html")) == "sub/a.html"
+        assert _entry_relative_to(tmp_path, "b.html") == "b.html"
+        # 越界文件 → None（回退目录首页）
+        assert _entry_relative_to(tmp_path, str(tmp_path.parent / "x.html")) is None
+
+
+def StartRequest(project_path, port=None, allow_path=False):
     from agent.preview.models import StartPreviewRequest
 
-    return StartPreviewRequest(project_path=str(project_path), port=port)
+    return StartPreviewRequest(project_path=str(project_path), port=port, allow_path=allow_path)
 
 
 # ---- install_manager ------------------------------------------------------

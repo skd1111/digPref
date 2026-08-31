@@ -275,10 +275,17 @@ def _active_skill_addon(state: dict) -> str:
 
 
 def _merge_extra_rules(state: dict) -> str:
-    """提示词协议循环的 EXTRA_RULES 通道：双模式纪律 + 活跃 skill 规范（各自非空才拼）。"""
+    """提示词协议循环的 EXTRA_RULES 通道：双模式纪律 + 活跃 skill 规范 + 历史经验（各自非空才拼）。
+
+    Phase 19 V0：历史经验注入（自进化 L1）——按当前意图/技能检索经验库，
+    失败静默返空，不影响主链路（见 agent/evolution/memory.py）。
+    """
+    from agent.evolution.memory import experience_addon
+
     parts = [
         str(state.get("dual_rules_addon") or "").strip(),
         _active_skill_addon(state).strip(),
+        experience_addon(state).strip(),
     ]
     return "\n\n".join(p for p in parts if p)
 

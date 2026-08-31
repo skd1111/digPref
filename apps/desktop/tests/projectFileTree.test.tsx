@@ -192,3 +192,25 @@ describe('多选 / 右键编译（2026-08-19）', () => {
     expect(screen.getByText('⚙ 编译此目录')).toBeTruthy();
   });
 });
+
+describe('空态导入按钮（2026-08-28）', () => {
+  it('未导入工程时展示「导入工程」按钮，点击后导入并渲染文件树', async () => {
+    // 隔离功能点提取后台任务（避免真实 ipc 轮询）
+    useBiznavStore.setState({
+      extracting: false,
+      importProjectAndExtract: vi.fn().mockResolvedValue(undefined),
+    });
+
+    render(<ProjectFileTree />);
+    const btn = screen.getByText('📁 导入工程');
+    expect(btn).toBeTruthy();
+
+    fireEvent.click(btn);
+    await waitFor(() =>
+      expect(useCodeNavStore.getState().openedProjects).toContain('C:/code/TradeProj'),
+    );
+    // 导入后文件树标题栏出现，空态按钮消失
+    await waitFor(() => expect(screen.getByText('打开的项目')).toBeTruthy());
+    expect(screen.queryByText('📁 导入工程')).toBeNull();
+  });
+});

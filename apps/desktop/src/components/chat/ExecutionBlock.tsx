@@ -16,6 +16,7 @@ import { useTraceStore } from '@/store/traceStore';
 import { useChatStore } from '@/store/chatStore';
 import { ShellOutputPanel } from './ShellOutputPanel';
 import { WritePreviewCard } from './WritePreviewCard';
+import { renderTextWithPaths } from './FilePathChip';
 
 interface ExecutionBlockProps {
   message: ChatMessage;
@@ -188,7 +189,8 @@ export function ExecutionRow({
         >
           {label}
         </button>
-        <span className="flex-1 truncate">{body}</span>
+        {/* 正文中的文件路径渲染为可点击胶囊（#170：产物/改动文件路径直接点开） */}
+        <span className="min-w-0 flex-1 truncate">{renderTextWithPaths(body, 'ex')}</span>
         {/* 同类合并次数徽标（执行树压缩行，2026-08-27）：同类工具连续 N 次只占一行 */}
         {repeatCount != null && repeatCount > 1 && (
           <span

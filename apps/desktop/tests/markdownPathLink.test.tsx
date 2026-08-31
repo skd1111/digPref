@@ -49,6 +49,12 @@ describe('路径识别', () => {
     expect(isFilePath('https://example.com/a')).toBe(false);
     expect(isFilePath('随便一个句子')).toBe(false);
   });
+
+  it('目录名含空格的路径整体识别（#170：默认工作空间路径带空格）', () => {
+    expect(
+      isFilePath('C:\\Users\\79834\\AppData\\Local\\Enterprise AI IDE\\workspace\\a.pptx'),
+    ).toBe(true);
+  });
 });
 
 describe('Markdown 渲染路径胶囊', () => {
@@ -72,6 +78,23 @@ describe('Markdown 渲染路径胶囊', () => {
     render(<Markdown text={'已保存到 C:\\tmp\\a.txt。'} />);
     expect(screen.getByText('a.txt')).toBeTruthy();
   });
+
+  it('目录名含空格的路径完整成胶囊（#170：跨空格吸收到扩展名锚）', () => {
+    render(
+      <Markdown
+        text={
+          '产物 · C:\\Users\\79834\\AppData\\Local\\Enterprise AI IDE\\workspace\\docs\\EAIDE_Intro.pptx'
+        }
+      />,
+    );
+    expect(screen.getByText('EAIDE_Intro.pptx')).toBeTruthy();
+  });
+
+  it('路径后跟空格散文不误吞（扩展名锚之外的文本保持原样）', () => {
+    render(<Markdown text={'PPT 已生成：C:\\out\\b.pptx 请查收'} />);
+    expect(screen.getByText('b.pptx')).toBeTruthy();
+    expect(screen.getByText(/请查收/)).toBeTruthy();
+  });
 });
 
 describe('点击与右键交互', () => {
@@ -80,6 +103,15 @@ describe('点击与右键交互', () => {
     fireEvent.click(screen.getByText('slides.pptx'));
     await new Promise((r) => setTimeout(r, 0));
     expect(openWithDefault).toHaveBeenCalledWith('C:\\Users\\x\\slides.pptx');
+  });
+
+  it('带空格目录路径点击 → 传完整路径给默认程序（#170）', async () => {
+    const full =
+      'C:\\Users\\79834\\AppData\\Local\\Enterprise AI IDE\\workspace\\docs\\EAIDE_Intro.pptx';
+    render(<Markdown text={`产物 · ${full}`} />);
+    fireEvent.click(screen.getByText('EAIDE_Intro.pptx'));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(openWithDefault).toHaveBeenCalledWith(full);
   });
 
   it('右键 → 弹出菜单并可触发资源管理器定位', async () => {

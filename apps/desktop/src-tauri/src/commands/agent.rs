@@ -32,6 +32,7 @@ fn os_username() -> String {
 /// page_context：页面上下文（2026-08-14，当前页签/场景），透传后端注入 intent/decompose。
 /// model_override：会话模型选择（2026-08-17，模型管理 backend 名），透传后端置顶回答链。
 /// last_skill_id：上一轮命中的 skill（2026-08-26，追问/修改时继承，防裸生成）。
+/// pinned_skill_id：`/` 指令强钉的 skill（2026-08-28，后端短路路由器固定用它）。
 /// task_id / task_title：任务级工作目录（2026-08-26，一个聊天页签 = 一个任务文件夹）。
 // 本函数与 start_run 同为透传缝（参数原样进 chat 请求体，不解析语义），
 // 聚成结构体反而增加上下游改动面 → 豁免 too_many_arguments
@@ -48,6 +49,7 @@ pub async fn agent_chat(
     model_override: Option<String>,
     history_summary: Option<String>,
     last_skill_id: Option<String>,
+    pinned_skill_id: Option<String>,
     task_id: Option<String>,
     task_title: Option<String>,
 ) -> AppResult<String> {
@@ -69,7 +71,7 @@ pub async fn agent_chat(
     let bridge = Arc::clone(&state.sse);
     crate::agent_manager::app_log(&format!("[agent_chat] run_id={}，start_run 即将开始", run_id));
     bridge
-        .start_run(run_id.clone(), trimmed.to_string(), work_mode, autonomy, inference_mode, history, page_context, model_override, history_summary, last_skill_id, task_id, task_title)
+        .start_run(run_id.clone(), trimmed.to_string(), work_mode, autonomy, inference_mode, history, page_context, model_override, history_summary, last_skill_id, pinned_skill_id, task_id, task_title)
         .await?;
     crate::agent_manager::app_log(&format!("[agent_chat] run_id={}，SSE 流已建立", run_id));
     state.audit_handle().append(
@@ -152,6 +154,48 @@ pub async fn chat_compress_history(
     state: State<'_, AppState>,
 ) -> AppResult<serde_json::Value> {
     state.agent_post("/chat/compress-history", body).await
+}
+
+/// Phase 19 V0 自进化闭环：用户 👍/👎 反馈透传（/evolution/feedback）。
+/// body: {sessionId, messageId, rating: "up"|"down", correction?}。
+/// Rust 侧不解析业务语义；👎 触发的后台反思由后端自管。
+#[tauri::command]
+pub async fn evolution_feedback(
+    body: serde_json::Value,
+    state: State<'_, AppState>,
+) -> AppResult<serde_json::Value> {
+    state.agent_post("/evolution/feedback", body).await
+}
+
+/// Phase 19 V0：经验库列表（设置页「经验库」面板）。
+#[tauri::command]
+pub async fn evolution_experiences(state: State<'_, AppState>) -> AppResult<serde_json::Value> {
+    state.agent_get("/evolution/experiences").await
+}
+
+/// Phase 19 V0：经验启停切换（人工干预；后端按当前态翻转）。
+#[tauri::command]
+pub async fn evolution_experience_toggle(
+    experience_id: i64,
+    state: State<'_, AppState>,
+) -> AppResult<serde_json::Value> {
+    state
+        .agent_post(
+            &format!("/evolution/experiences/{}/toggle", experience_id),
+            serde_json::json!({}),
+        )
+        .await
+}
+
+/// Phase 19 V0：删除经验（人工干预）。
+#[tauri::command]
+pub async fn evolution_experience_delete(
+    experience_id: i64,
+    state: State<'_, AppState>,
+) -> AppResult<serde_json::Value> {
+    state
+        .agent_delete(&format!("/evolution/experiences/{}", experience_id))
+        .await
 }
 
 /// 诊断用：当前有多少个活跃的 SSE 流？

@@ -661,19 +661,21 @@ export const useChatStore = create<ChatState>()(
 // agent 系统提示词前缀，让 LLM 知道当前讨论的是哪个业务功能点。
 // ---------------------------------------------------------------------------
 
-export function useFeatureContextPromptSnippet(): string {
+export function useFeatureContextPromptSnippet(excludeSkill = false): string {
   const ctx = useChatStore((s) => s.selectedFeatureContext);
   const opsCtx = useChatStore((s) => s.opsNavContext);
   const alignment = useChatStore((s) => s.alignmentFeatures);
   const skills = useSkillsStore((s) => s.skills);
 
-  // reqflow V1 需求对齐模式优先：多功能点 + 需求分析角色设定
+  // reqflow V1 需求对齐模式优先：多功能点 + 需求分析角色设定；
+  // excludeSkill（2026-08-28 Skill 强钉）：`/` 指令钉住技能时剔除绑定技能段，
+  // 功能点上下文本身保留——低优先级技能物理不进入输入空间，免多段规则互掐
   if (alignment && alignment.length > 0) {
     const lines: string[] = ['【需求改造对齐上下文】'];
     for (const f of alignment) {
       lines.push(...renderFeatureBlock(f));
       const skill = skills.find((s) => s.id === f.skill_id);
-      if (skill) lines.push(...renderSkillBlock(skill));
+      if (skill && !excludeSkill) lines.push(...renderSkillBlock(skill));
     }
     lines.push('');
     lines.push(
@@ -700,7 +702,7 @@ export function useFeatureContextPromptSnippet(): string {
   const lines: string[] = ['【当前业务功能点上下文】'];
   lines.push(...renderFeatureBlock(activeCtx));
   const skill = skills.find((s) => s.id === activeCtx.skill_id);
-  if (skill) lines.push(...renderSkillBlock(skill));
+  if (skill && !excludeSkill) lines.push(...renderSkillBlock(skill));
   lines.push('');
   lines.push('（以上为已导入工程中选定的业务功能点；项目、功能、关联代码均已明确，直接基于这些信息回答，不要再反问功能名称、项目位置、技术栈等已知信息。如用户提出与该功能无关的问题，可正常脱离上下文。）');
   return lines.join('\n');

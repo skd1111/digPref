@@ -146,6 +146,10 @@ pub mod channel {
     pub const TOOL_PROGRESS: &str = "agent://tool_progress";
     pub const SHELL_CHUNK: &str = "agent://shell_chunk";
     pub const FILE_WRITE_PREVIEW: &str = "agent://file_write_preview";
+
+    // Phase 19 V0 自进化闭环 —— SSE 三处同步（CLAUDE.md §4）
+    // evolution_insight_created：失败反思产出新经验（前端经验库页刷新）
+    pub const EVOLUTION_INSIGHT_CREATED: &str = "agent://evolution_insight_created";
 }
 
 
@@ -207,6 +211,7 @@ impl SseBridge {
     /// Phase 18：work_mode / autonomy 可选透传进 chat 请求体（Rust 不解析语义）。
     /// history：会话上下文（当前 tab 最近几轮对话），透传进请求体。
     /// last_skill_id / task_id / task_title（2026-08-26）：skill 粘性与任务级工作目录，同样只透传。
+    /// pinned_skill_id（2026-08-28）：`/` 指令强钉的 skill，同样只透传。
     // 本函数是透传缝（参数原样进 chat 请求体，不解析语义），聚成结构体反而
     // 增加上下游改动面 → 豁免 too_many_arguments
     #[allow(clippy::too_many_arguments)]
@@ -222,6 +227,7 @@ impl SseBridge {
         model_override: Option<String>,
         history_summary: Option<String>,
         last_skill_id: Option<String>,
+        pinned_skill_id: Option<String>,
         task_id: Option<String>,
         task_title: Option<String>,
     ) -> AppResult<RunHandle> {
@@ -286,10 +292,16 @@ impl SseBridge {
                         body["historySummary"] = Value::String(hs);
                     }
                 }
-                // Skill 粘性（2026-08-26）：上一轮命中的 skill，本轮追问/修改时继承
+                // Skill 粘性（2026-08-26）：上一轮命中的 skill，本轮追问/修改时继承；
+                // Skill 强钉（2026-08-28）：`/` 手动指定时后端短路路由器固定用它
                 if let Some(sid) = last_skill_id {
                     if !sid.trim().is_empty() {
                         body["lastSkillId"] = Value::String(sid);
+                    }
+                }
+                if let Some(pid) = pinned_skill_id {
+                    if !pid.trim().is_empty() {
+                        body["pinnedSkillId"] = Value::String(pid);
                     }
                 }
                 // 任务级工作目录（2026-08-26）：一个聊天页签 = 一个任务文件夹，
@@ -521,6 +533,8 @@ fn map_event_to_channel(event_name: &str) -> &'static str {
         "tool_progress"      => channel::TOOL_PROGRESS,
         "shell_chunk"        => channel::SHELL_CHUNK,
         "file_write_preview" => channel::FILE_WRITE_PREVIEW,
+        // Phase 19 V0：自进化闭环 SSE 三处同步（CLAUDE.md §4）
+        "evolution_insight_created" => channel::EVOLUTION_INSIGHT_CREATED,
         _             => channel::LOG,
     }
 }

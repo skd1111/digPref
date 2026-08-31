@@ -115,6 +115,10 @@ interface UIState {
   // 仅 'full' 模式 + explorer activity 生效。持久化保留用户选择。
   leftView: 'explorer' | 'plan';
 
+  // 中央拆分比例（2026-08-28）：对话区与编辑器/预览区的宽度（水平拆分时为高度）
+  // 占比，0.15–0.85，默认 0.5；分隔条可拖拽，持久化。
+  chatPaneRatio: number;
+
   // 操作
   toggleCommandPalette: (open?: boolean) => void;
   toggleQuickOpen: (open?: boolean) => void;
@@ -138,6 +142,7 @@ interface UIState {
   setRightPanelWidth: (w: number) => void;
   setLeftPanelWidth: (w: number) => void;
   setLeftView: (v: UIState['leftView']) => void;
+  setChatPaneRatio: (r: number) => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -166,6 +171,7 @@ export const useUIStore = create<UIState>()(
       rightPanelWidth: 320,
       leftPanelWidth: 260,
       leftView: 'explorer',
+      chatPaneRatio: 0.5,
 
       toggleCommandPalette: (open) =>
         set((s) => ({ commandPaletteOpen: open ?? !s.commandPaletteOpen })),
@@ -203,6 +209,8 @@ export const useUIStore = create<UIState>()(
       setRightPanelWidth: (w) => set({ rightPanelWidth: Math.min(720, Math.max(240, w)) }),
       setLeftPanelWidth: (w) => set({ leftPanelWidth: Math.min(600, Math.max(200, w)) }),
       setLeftView: (v) => set({ leftView: v }),
+      setChatPaneRatio: (r) =>
+        set({ chatPaneRatio: Math.min(0.85, Math.max(0.15, r)) }),
     }),
     {
       name: 'eaide.ui',
@@ -221,6 +229,7 @@ export const useUIStore = create<UIState>()(
         rightPanelWidth: s.rightPanelWidth,
         leftPanelWidth: s.leftPanelWidth,
         leftView: s.leftView,
+        chatPaneRatio: s.chatPaneRatio,
       }),
       onRehydrateStorage: () => (state) => {
         // 旧版 'audit' 占位模式 → 新版 'auditor'（Phase 5 改名）

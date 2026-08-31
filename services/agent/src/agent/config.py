@@ -273,5 +273,16 @@ class Settings(BaseSettings):
     workspace_subdir_images: str = "images"
     workspace_subdir_other: str = "other"
 
+    # ---- Phase 19 V0 自进化与自评测闭环 ----
+    # 进化总开关（False 时不记轨迹 / 不反思 / 不注入经验；反馈 API 仍可用）
+    evolution_enabled: bool = True
+    # 独立持久库（与 sessions / orchestrator / audit 等 db 物理隔离）
+    evolution_db_path: str = "evolution.db"
+    # 主对话 Judge 抽样率（0 = 关闭；V1 才启用，设计文档 §2.3）
+    evolution_judge_sample_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    # 经验注入：单次检索条数上限 + 注入片段字符上限（防挤占上下文）
+    evolution_experience_top_k: int = Field(default=3, ge=1, le=10)
+    evolution_experience_max_chars: int = Field(default=1200, ge=200, le=4000)
+
 
 settings = Settings()

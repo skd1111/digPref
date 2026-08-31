@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -34,6 +35,8 @@ from agent.preview.session_manager import (
 
 router = APIRouter(prefix="/preview", tags=["preview"])
 
+log = logging.getLogger("agent.preview.api")
+
 # 后台安装任务强引用（防 GC 回收未完成任务；RUF006）
 _INSTALL_TASKS: set[asyncio.Task[None]] = set()
 
@@ -48,6 +51,8 @@ async def start_preview(req: StartPreviewRequest, request: Request) -> PreviewSe
     try:
         return await _manager(request).start(req)
     except PreviewError as exc:
+        # BUGFIX #175：失败原因落日志（此前 400 静默，排查只能靠抓包）
+        log.warning("[preview] start rejected (%s): %s", req.project_path, exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 

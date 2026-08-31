@@ -30,8 +30,9 @@ import { ToolchainSettingsPanel } from './settings/ToolchainSettingsPanel';
 import { WorkspaceSettingsPanel } from './settings/WorkspaceSettingsPanel';
 import { McpSettingsPanel } from './settings/McpSettingsPanel';
 import { AdvancedSettingsPanel } from './settings/AdvancedSettingsPanel';
+import { EvolutionPanel } from './settings/EvolutionPanel';
 
-type SectionId = 'envs' | 'models' | 'gen-limits' | 'dspark' | 'secrets' | 'terminal' | 'about' | 'skills' | 'expert-teams' | 'router' | 'codenav' | 'toolchain' | 'workspace' | 'advanced' | 'mcp';
+type SectionId = 'envs' | 'models' | 'gen-limits' | 'dspark' | 'secrets' | 'terminal' | 'about' | 'skills' | 'expert-teams' | 'router' | 'codenav' | 'toolchain' | 'workspace' | 'advanced' | 'mcp' | 'evolution';
 
 const SECTIONS: { id: SectionId; label: string; icon: string }[] = [
   { id: 'envs', label: 'Environments', icon: '🌍' },
@@ -44,6 +45,7 @@ const SECTIONS: { id: SectionId; label: string; icon: string }[] = [
   { id: 'terminal', label: 'Terminal', icon: '⌨' },
   { id: 'about', label: 'About', icon: 'ℹ' },
   { id: 'skills', label: '技能', icon: '🧠' },
+  { id: 'evolution', label: '经验库（自进化）', icon: '🌱' },
   { id: 'expert-teams', label: '专家团', icon: '👥' },
   { id: 'router', label: '路由仪表盘', icon: '🧭' },
   { id: 'codenav', label: '代码导航', icon: '🔍' },
@@ -51,7 +53,7 @@ const SECTIONS: { id: SectionId; label: string; icon: string }[] = [
   { id: 'advanced', label: '高级设置', icon: '⚙' },  // 推理模式 + 会话自主性（2026-08-05）
 ];
 
-const KNOWN_SEGS: SectionId[] = ['envs', 'models', 'gen-limits', 'dspark', 'secrets', 'terminal', 'about', 'skills', 'expert-teams', 'router', 'codenav', 'toolchain', 'workspace', 'advanced', 'mcp'];
+const KNOWN_SEGS: SectionId[] = ['envs', 'models', 'gen-limits', 'dspark', 'secrets', 'terminal', 'about', 'skills', 'expert-teams', 'router', 'codenav', 'toolchain', 'workspace', 'advanced', 'mcp', 'evolution'];
 
 export function SettingsView(): JSX.Element {
   const location = useLocation();
@@ -159,6 +161,7 @@ export function SettingsView(): JSX.Element {
           {active === 'terminal' && <TerminalSettingPanel />}
           {active === 'about' && <AboutSettingPanel />}
           {active === 'skills' && <SkillsManager />}
+          {active === 'evolution' && <EvolutionPanel />}
           {active === 'expert-teams' && <ExpertTeamsPanel />}
           {active === 'router' && <RouterDashboard />}
           {active === 'codenav' && <CodeNavSettingsPanel />}

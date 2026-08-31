@@ -16,16 +16,27 @@ import { useCodeNavStore } from '@/store/codeNavStore';
 import { useUIStore } from '@/store/uiStore';
 
 /** 路径主体：不含空白与常见引号/括号/中文标点（防止吞掉后续文本） */
-const PATH_BODY = "[^\\s\"'`<>|*，。；！？、）】）]+";
+const PATH_BODY_CHAR = "[^\\s\"'`<>|*，。；！？、）】）]";
+const PATH_BODY = `${PATH_BODY_CHAR}+`;
+
+/**
+ * 允许目录名含空格的路径主体（BUGFIX #170：`Enterprise AI IDE` 这类带空格目录）：
+ * 内部单个空格仅当后面紧跟合法路径字符时才放行（不吃尾部空格）。
+ * 只给「整体判定」（行内代码块）用——连续文本扫描仍用无空格版，
+ * 跨空格吸收由 renderTextWithPaths 的扩展名锚定后处理兜底。
+ */
+const PATH_BODY_SPACED = `(?:${PATH_BODY_CHAR}| (?=${PATH_BODY_CHAR}))+`;
 
 /** 三类绝对路径：盘符（C:\ / C:/）、UNC（\\server\share）、POSIX 常见根 */
-const PATH_CORE = `(?:[A-Za-z]:[\\\\/](?:${PATH_BODY})|\\\\\\\\(?:${PATH_BODY})|/(?:home|tmp|var|opt|usr|Users)/(?:${PATH_BODY}))`;
+function pathCore(body: string): string {
+  return `(?:[A-Za-z]:[\\\\/](?:${body})|\\\\\\\\(?:${body})|/(?:home|tmp|var|opt|usr|Users)/(?:${body}))`;
+}
 
-/** 全局扫描用（识别一段文本中的所有路径） */
-export const FILE_PATH_RE = new RegExp(PATH_CORE, 'g');
+/** 全局扫描用（识别一段文本中的所有路径；不含空格，防吞散文） */
+export const FILE_PATH_RE = new RegExp(pathCore(PATH_BODY), 'g');
 
-/** 整体判定用（行内代码是否就是一个路径） */
-const FILE_PATH_EXACT_RE = new RegExp(`^${PATH_CORE}$`);
+/** 整体判定用（行内代码是否就是一个路径；容忍内部空格） */
+const FILE_PATH_EXACT_RE = new RegExp(`^${pathCore(PATH_BODY_SPACED)}$`);
 
 /** 尾部标点修剪：句末的 。，；,.:!?)] 不属于路径 */
 function trimTrailingPunct(s: string): string {
@@ -50,6 +61,31 @@ function isTextLike(path: string): boolean {
   return TEXT_EXTS.has(path.slice(dot).toLowerCase());
 }
 
+/** 尾部扩展名锚：跨空格吸收后必须以扩展名收尾，防止吞掉后续散文（#170） */
+const EXT_ANCHOR_RE = /\.[A-Za-z0-9]{1,8}$/;
+
+/** 连续文本扫描用的无空格段匹配（跨空格吸收时逐段取用） */
+const PATH_SEGMENT_RE = new RegExp(`^${PATH_BODY}`);
+
+/**
+ * 跨空格延伸（BUGFIX #170）：无空格正则命中 `C:\...\Enterprise` 后，
+ * 后续「空格 + 路径字符段」逐段试吸收；只有吸收结果以扩展名收尾时
+ * 才记录锚点（`Enterprise AI IDE\...\EAIDE_Intro.pptx` 能完整命中），
+ * 锚点之外的散文保持原样不吞。返回延伸后的结束下标。
+ */
+function extendOverSpaces(text: string, start: number, end: number): number {
+  let best = EXT_ANCHOR_RE.test(text.slice(start, end)) ? end : -1;
+  let e = end;
+  for (let hops = 0; hops < 24 && e < text.length; hops++) {
+    if (text[e] !== ' ') break;
+    const m = PATH_SEGMENT_RE.exec(text.slice(e + 1));
+    if (!m) break;
+    e += 1 + m[0].length;
+    if (EXT_ANCHOR_RE.test(text.slice(start, e))) best = e;
+  }
+  return best > 0 ? best : end;
+}
+
 /** 把一段文本切分为 普通文本 + FilePathChip 节点（无路径时原样返回单字符串） */
 export function renderTextWithPaths(text: string, keyPrefix = 'fp'): ReactNode[] {
   const nodes: ReactNode[] = [];
@@ -57,7 +93,10 @@ export function renderTextWithPaths(text: string, keyPrefix = 'fp'): ReactNode[]
   let k = 0;
   for (const m of text.matchAll(FILE_PATH_RE)) {
     const idx = m.index ?? 0;
-    let path = m[0];
+    if (idx < last) continue; // 落在上一个已延伸区间内（跨空格吸收覆盖），跳过
+    // 跨空格延伸：目录名含空格的路径补全（#170）
+    const extendedEnd = extendOverSpaces(text, idx, idx + m[0].length);
+    let path = text.slice(idx, extendedEnd);
     const trimmedPath = trimTrailingPunct(path);
     // 尾部标点还给普通文本（如「路径是 C:\a\b.pptx。」的句号）
     const tail = path.slice(trimmedPath.length);
@@ -65,7 +104,7 @@ export function renderTextWithPaths(text: string, keyPrefix = 'fp'): ReactNode[]
     if (idx > last) nodes.push(text.slice(last, idx));
     nodes.push(<FilePathChip key={`${keyPrefix}-${k++}`} path={path} />);
     if (tail) nodes.push(tail);
-    last = idx + m[0].length;
+    last = extendedEnd;
   }
   if (last < text.length) nodes.push(text.slice(last));
   return nodes;

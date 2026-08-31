@@ -8,6 +8,7 @@
  *   /settings/terminal        -> 终端
  *   /settings/about           -> 关于
  *   /settings/skills          -> 技能
+ *   /settings/evolution       -> 经验库（自进化）
  *   /settings/codenav         -> 代码导航
  *   /settings/workspace       -> 工作空间（默认安装目录/workspace，可自定义）
  *   /settings/advanced        -> 高级设置（推理模式 + 会话自主性）
@@ -32,6 +33,7 @@ export const router = createBrowserRouter([
       { path: 'settings/terminal', element: <SettingsView /> },
       { path: 'settings/about', element: <SettingsView /> },
       { path: 'settings/skills', element: <SettingsView /> },
+      { path: 'settings/evolution', element: <SettingsView /> },  // Phase 19：经验库（自进化）
       { path: 'settings/expert-teams', element: <SettingsView /> },
       { path: 'settings/dspark', element: <SettingsView /> },
       { path: 'settings/router', element: <SettingsView /> },

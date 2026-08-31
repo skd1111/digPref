@@ -99,8 +99,13 @@ curl http://127.0.0.1:8765/audit/verify
 
 ```python
 from agent.audit_expert import (
-    AuditExpertStorage, ComplianceChecker, ApprovalStatus,
-    create_task, record_decision, verify_chain, get_stats,
+    AuditExpertStorage,
+    ComplianceChecker,
+    ApprovalStatus,
+    create_task,
+    record_decision,
+    verify_chain,
+    get_stats,
 )
 
 task = create_task(

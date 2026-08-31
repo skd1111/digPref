@@ -14,9 +14,15 @@ const { listeners } = vi.hoisted(() => {
   return { listeners };
 });
 
-const { invokeCalls } = vi.hoisted(() => {
+const { invokeCalls, previewStartError } = vi.hoisted(() => {
   const invokeCalls: Array<{ cmd: string; args: Record<string, unknown> }> = [];
-  return { invokeCalls };
+  // 非空时 preview_start mock 抛错（模拟后端 400：Node.js 缺失 / 白名单拒绝等）；
+  // rejectUnlessAllowPath=true 时：仅 allow_path 为真的调用放行（#175 重试链路）
+  const previewStartError: {
+    message: string | null;
+    rejectUnlessAllowPath: boolean;
+  } = { message: null, rejectUnlessAllowPath: false };
+  return { invokeCalls, previewStartError };
 });
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -32,6 +38,12 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: async (cmd: string, args: Record<string, unknown>) => {
     invokeCalls.push({ cmd, args });
     if (cmd === "preview_start") {
+      if (
+        previewStartError.message &&
+        !(previewStartError.rejectUnlessAllowPath && args.allowPath === true)
+      ) {
+        throw new Error(previewStartError.message);
+      }
       return {
         id: "sess-1",
         project_path: args.projectPath,
@@ -151,6 +163,8 @@ describe("HmrStatusBadge", () => {
 describe("PreviewButton", () => {
   afterEach(() => {
     invokeCalls.length = 0;
+    previewStartError.message = null;
+    previewStartError.rejectUnlessAllowPath = false;
     usePreviewStore.getState().setSessions([]);
     usePreviewStore.getState().setActiveSession(null);
   });
@@ -218,6 +232,87 @@ describe("PreviewButton", () => {
     expect(invokeCalls.some((c) => c.cmd === "preview_start")).toBe(false);
     expect(invokeCalls.some((c) => c.cmd === "preview_open_window")).toBe(true);
     expect(usePreviewStore.getState().activeSessionId).toBe("existing");
+    root.unmount();
+    container.remove();
+  });
+
+  it("preview_start 失败时不再静默，弹窗提示原因（BUGFIX #174）", async () => {
+    previewStartError.message = "未检测到 Node.js，无法启动预览引擎";
+    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
+    const { root, container } = render(
+      <PreviewButton currentFile="C:/proj/index.html" />,
+    );
+    const btn = container.querySelector(
+      'button[data-testid="preview-button"]',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      btn.click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(alertSpy).toHaveBeenCalledTimes(1);
+    expect(String(alertSpy.mock.calls[0][0])).toContain("启动预览失败");
+    expect(String(alertSpy.mock.calls[0][0])).toContain("未检测到 Node.js");
+    alertSpy.mockRestore();
+    previewStartError.message = null;
+    root.unmount();
+    container.remove();
+  });
+
+  it("白名单拒绝 → 确认后带 allowPath 重试成功（BUGFIX #175）", async () => {
+    previewStartError.message =
+      "agent returned 400: 项目路径不在预览白名单内: D:/work/前端";
+    previewStartError.rejectUnlessAllowPath = true;
+    const confirmSpy = vi
+      .spyOn(window, "confirm")
+      .mockReturnValue(true);
+    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
+    const { root, container } = render(
+      <PreviewButton currentFile="C:/proj/index.html" />,
+    );
+    const btn = container.querySelector(
+      'button[data-testid="preview-button"]',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      btn.click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    // 首次不带 allowPath 被拒 → 弹确认框；确认后带 allowPath=true 重试成功
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(String(confirmSpy.mock.calls[0][0])).toContain("不在预览白名单");
+    const starts = invokeCalls.filter((c) => c.cmd === "preview_start");
+    expect(starts).toHaveLength(2);
+    expect(starts[0].args.allowPath).toBe(false);
+    expect(starts[1].args.allowPath).toBe(true);
+    expect(usePreviewStore.getState().activeSessionId).toBe("sess-1");
+    expect(alertSpy).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+    alertSpy.mockRestore();
+    root.unmount();
+    container.remove();
+  });
+
+  it("白名单拒绝 → 用户取消确认则不重试不报错（BUGFIX #175）", async () => {
+    previewStartError.message =
+      "agent returned 400: 项目路径不在预览白名单内: D:/work/前端";
+    previewStartError.rejectUnlessAllowPath = true;
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
+    const { root, container } = render(
+      <PreviewButton currentFile="C:/proj/index.html" />,
+    );
+    const btn = container.querySelector(
+      'button[data-testid="preview-button"]',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      btn.click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    // 只发了一次（取消后不重试），也不弹失败告警（用户主动取消）
+    expect(invokeCalls.filter((c) => c.cmd === "preview_start")).toHaveLength(1);
+    expect(alertSpy).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+    alertSpy.mockRestore();
     root.unmount();
     container.remove();
   });

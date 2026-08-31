@@ -130,8 +130,11 @@ def ensure_ppt_master_runtime(roots: list[Path] | None = None) -> bool:
     python_exe = resolve_bundled_python(roots)
     skill_dir = resolve_ppt_master_skill_dir(roots)
     if python_exe is None or skill_dir is None:
-        logger.debug("ppt-master bootstrap: 捆绑运行时不全（python=%s skill=%s），跳过",
-                     python_exe, skill_dir)
+        logger.debug(
+            "ppt-master bootstrap: 捆绑运行时不全（python=%s skill=%s），跳过",
+            python_exe,
+            skill_dir,
+        )
         return False
 
     deps_dir = skill_dir / "deps"

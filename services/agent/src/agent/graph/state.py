@@ -110,6 +110,9 @@ class AgentState(TypedDict, total=False):
     # Skill 粘性（2026-08-26）：前端记录上一轮命中的 skill（skill_matched 事件），
     # 本轮未命中新 skill 且属追问/修改类输入时继承，防「太丑了重做」裸生成。
     last_skill_id: str | None
+    # Skill 强钉（2026-08-28）：用户经 `/` 指令手动指定的 skill —— 优先级最高，
+    # intent_node 见到它直接跳过 SkillRouter（物理排除低优先级命中，控制输入空间）。
+    pinned_skill_id: str | None
 
     # ---- 任务级工作目录（2026-08-26）----
     # 一个聊天页签 = 一个任务文件夹：task_id = 前端页签唯一标识（映射持久化），
@@ -213,8 +216,9 @@ def empty_state(prompt: str) -> dict:
         "repair_attempt": 0,
         "needs_human_intervention": False,
         "dual_rules_addon": "",
-        # Skill 粘性 + 任务级工作目录（2026-08-26）
+        # Skill 粘性 + 强钉 + 任务级工作目录（2026-08-26 / 2026-08-28）
         "last_skill_id": None,
+        "pinned_skill_id": None,
         "task_id": None,
         "task_title": None,
     }

@@ -132,9 +132,7 @@ class TestInputValidation:
     def test_create_merge_requires_data(self, office_file: Path, tmp_path: Path):
         from agent.builtin.office import builtin_office_create
 
-        result = builtin_office_create(
-            path=str(tmp_path / "out.docx"), template=str(office_file)
-        )
+        result = builtin_office_create(path=str(tmp_path / "out.docx"), template=str(office_file))
         assert not result.ok and result.error == "empty_data"
 
 
@@ -153,9 +151,7 @@ class TestGracefulDegradation:
         from agent.builtin.office import builtin_office_edit
 
         _deny_officecli(monkeypatch)
-        result = builtin_office_edit(
-            path=str(office_file), op="set", props={"text": "x"}
-        )
+        result = builtin_office_edit(path=str(office_file), op="set", props={"text": "x"})
         assert not result.ok and result.error == "officecli_not_installed"
         assert result.risk_level == "medium"
 

@@ -17,10 +17,9 @@
 from __future__ import annotations
 
 import pytest
-from langgraph.graph.message import add_messages
-
 from agent.llm.prompts import format_history_brief, normalize_message
 from agent.llm.router import _compact_messages, _conversation_summary
+from langgraph.graph.message import add_messages
 
 # 典型跨轮场景：system 摘要 + 上轮问答 + 本轮「继续」
 _RAW_HISTORY = [

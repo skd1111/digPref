@@ -21,6 +21,23 @@ class PreviewPathNotAllowedError(RuntimeError):
     """项目根不在 preview_allowed_paths 白名单内。"""
 
 
+# 运行时追加的白名单根目录（BUGFIX #175）：用户在预览按钮确认后由
+# SessionManager 写入（持久化在 preview.db，启动时回载）。
+_RUNTIME_ROOTS: list[Path] = []
+
+
+def add_runtime_root(root: str | Path) -> None:
+    """追加运行时白名单根目录（去重，规范化）。"""
+    resolved = Path(root).expanduser().resolve(strict=False)
+    if resolved not in _RUNTIME_ROOTS:
+        _RUNTIME_ROOTS.append(resolved)
+
+
+def clear_runtime_roots() -> None:
+    """清空运行时白名单（测试用）。"""
+    _RUNTIME_ROOTS.clear()
+
+
 def resolve_allowed_roots() -> list[Path]:
     """解析白名单根目录（未配置时用默认 home 规则）。"""
     configured = list(settings.preview_allowed_paths or [])
@@ -31,9 +48,10 @@ def resolve_allowed_roots() -> list[Path]:
                 roots.append(Path(raw).expanduser().resolve(strict=False))
             except OSError:
                 continue
+        roots.extend(r for r in _RUNTIME_ROOTS if r not in roots)
         return roots
 
-    # 默认：~/.eaide/projects + home 直接子目录
+    # 默认：~/.eaide/projects + home 直接子目录 + 运行时追加根目录（#175）
     home = Path.home().resolve(strict=False)
     defaults: list[Path] = [home / ".eaide" / "projects"]
     try:
@@ -42,6 +60,7 @@ def resolve_allowed_roots() -> list[Path]:
                 defaults.append(child)
     except OSError:
         pass
+    defaults.extend(r for r in _RUNTIME_ROOTS if r not in defaults)
     return defaults
 
 
@@ -62,8 +81,8 @@ def validate_project_path(project_root: str | Path) -> Path:
             continue
     raise PreviewPathNotAllowedError(
         f"项目路径不在预览白名单内: {resolved}。"
-        f"请在配置 preview_allowed_paths 中加入该目录"
-        f"（默认仅允许 ~/.eaide/projects 与用户 home 直接子目录）。"
+        f"请在预览按钮弹窗中确认加入白名单，或在配置 preview_allowed_paths "
+        f"中加入该目录（默认仅允许 ~/.eaide/projects 与用户 home 直接子目录）。"
     )
 
 

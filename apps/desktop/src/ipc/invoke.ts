@@ -272,6 +272,46 @@ export const ipc = {
       messageCount: number;
     }>("chat_compress_history", { body }),
 
+  /** Phase 19 V0 自进化：用户 👍/👎 反馈（👎 触发后端反思）。 */
+  evolutionFeedback: (body: {
+    sessionId: string;
+    messageId: string;
+    rating: 'up' | 'down';
+    correction?: string;
+  }) =>
+    invoke<{ ok: boolean; reflected: boolean; task_signature: string }>(
+      'evolution_feedback',
+      { body },
+    ),
+
+  /** Phase 19 V0：经验库列表（设置页面板）。 */
+  evolutionExperiences: () =>
+    invoke<{
+      ok: boolean;
+      items: Array<{
+        id: number;
+        insight: string;
+        tags: string[];
+        applies_to: string;
+        attribution: string;
+        hit_count: number;
+        score: number;
+        status: 'active' | 'disabled';
+        ts: string;
+      }>;
+    }>('evolution_experiences'),
+
+  /** Phase 19 V0：经验启停切换（后端按当前态翻转）。 */
+  evolutionExperienceToggle: (experienceId: number) =>
+    invoke<{ ok: boolean; id: number; status: 'active' | 'disabled' }>(
+      'evolution_experience_toggle',
+      { experienceId },
+    ),
+
+  /** Phase 19 V0：删除经验（人工干预）。 */
+  evolutionExperienceDelete: (experienceId: number) =>
+    invoke<{ ok: boolean; id: number }>('evolution_experience_delete', { experienceId }),
+
   listAssets: () => invoke<unknown[]>("asset_list"),
   addAsset: (asset: Record<string, unknown>) =>
     invoke<Record<string, unknown>>("asset_add", { asset }),
@@ -2011,12 +2051,15 @@ export const ipc = {
     entryFile?: string;
     framework?: PreviewFramework;
     port?: number;
+    /** BUGFIX #175：白名单拒绝后用户确认加入，带 true 重试 */
+    allowPath?: boolean;
   }) =>
     invoke<PreviewSession>("preview_start", {
       projectPath: body.projectPath,
       entryFile: body.entryFile,
       framework: body.framework,
       port: body.port,
+      allowPath: body.allowPath,
     }),
 
   /** POST /preview/stop/{session_id} —— 停止预览会话 */

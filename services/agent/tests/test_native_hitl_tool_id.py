@@ -194,9 +194,7 @@ def test_resume_appends_tool_message_with_model_id():
 
 
 def test_reject_tool_message_uses_model_id():
-    backend = _StubBackend(
-        [{"content": "好的，已取消。", "tool_calls": []}]
-    )
+    backend = _StubBackend([{"content": "好的，已取消。", "tool_calls": []}])
     catalog = _StubCatalog([])  # 拒绝不执行任何调用
     loop = DynamicToolLoop(_StubLLM(backend), catalog)
 
