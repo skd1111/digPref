@@ -1,6 +1,6 @@
 {
   "name": "@eaide/desktop",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Enterprise AI IDE — Tauri 2.0 desktop shell (React + TS)",
   "type": "module",
