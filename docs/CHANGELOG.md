@@ -5,6 +5,12 @@
 
 ## 2026-08-31
 
+### v2.122 — Phase 19 代码评审修复：后台任务生命周期 + 落库脱敏 + 状态机一致性（BUGFIX #178 / #179）
+
+- **背景**：Phase 19 自进化模块交付后专项代码评审，共 8 个问题（2 重要 + 6 建议），本次全部清零。
+- **改动**：① 收尾后台任务持强引用（[stream.py](../services/agent/src/agent/graph/stream.py) `_EVOLUTION_BG_TASKS`，防 asyncio Task 被 GC 静默回收）；② 影子实验 `db_path` 全链路透传（`_replay_requests` / `_record_run`）；③ 新增 `scrub_dsn()`（[schema.py](../services/agent/src/agent/skills/schema.py)），轨迹 `reason` / `answer_digest` / `rewritten_query` 落库前脱敏；④ 自动采纳与手动 apply 共用 `_demote_other_actives` 保证同 skill 单 active；⑤ 反思按 `source_session` 去重；⑥ 蒸馏去重纳入 `approved` 状态；⑦ `_FAIL_MARKERS` 改整句硬失败文案防误判；⑧ 经验检索热路径按绝对路径缓存建表标志。
+- **验证**：新增回归 7 条，连同存量共 66 条全绿；ruff / mypy --strict（evolution 包）零错误。台账见 BUGFIX_LOG_2.md #178 / #179。
+
 ### v2.121 — 意图识别四层增强：语义路由深化 + 槽位硬校验 + 上下文记忆 + 动态 Few-Shot 闭环（含进程内 ONNX 向量模型）
 
 - **背景**：意图识别是全部下游路由的第一道闸门，参考 Semantic Router / Instructor / LlamaIndex 动态示例选择器 / Mem0 思路，在不新增外部服务的前提下把误触率降下来、把长尾准确率提上去。纯自实现，不引 DSPy/Instructor/rank_bm25。
