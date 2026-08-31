@@ -176,8 +176,7 @@ async def harden_by_run(run_id: str) -> None:
     try:
         async with _use_db() as conn:
             cursor = await conn.execute(
-                "SELECT query_text FROM intent_examples WHERE run_id=? "
-                "ORDER BY id DESC LIMIT 1",
+                "SELECT query_text FROM intent_examples WHERE run_id=? ORDER BY id DESC LIMIT 1",
                 (run_id,),
             )
             row = await cursor.fetchone()
@@ -226,9 +225,7 @@ async def retrieve_examples(text: str, top_k: int = _FEW_SHOT_TOP_K) -> list[dic
         score = _cosine(qvec, vec)
         if status == "positive":
             score += 0.02  # 用户点赞过的小幅加权
-        scored.append(
-            (score, {"query_text": str(query_text), "intent_category": str(category)})
-        )
+        scored.append((score, {"query_text": str(query_text), "intent_category": str(category)}))
     scored.sort(key=lambda item: item[0], reverse=True)
     return [item for _, item in scored[:top_k]]
 

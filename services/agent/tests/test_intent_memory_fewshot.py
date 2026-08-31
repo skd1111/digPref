@@ -63,9 +63,7 @@ class TestExamples:
 
     async def test_only_entity_keys_stored(self, fake_embed):
         """红线：实体只存键名，不存参数明文。"""
-        await im.record_example(
-            "r1", "查询订单表", "data_query", ["target_table", "data_source"]
-        )
+        await im.record_example("r1", "查询订单表", "data_query", ["target_table", "data_source"])
         import aiosqlite
 
         async with aiosqlite.connect(im._db_path()) as conn:
@@ -111,9 +109,7 @@ class TestHardSamples:
             async def embed_batch(self, texts):
                 return [self._vec(t) for t in texts]
 
-        routes = (
-            Route(name="db_query", utterances=("查询订单表",), analysis={"intent": "query"}),
-        )
+        routes = (Route(name="db_query", utterances=("查询订单表",), analysis={"intent": "query"}),)
         router = SemanticIntentRouter(routes, embedding=_Emb())
         out = await router.route("查询订单表但上次执行错了")
         assert out is None  # 动态负样本拦截

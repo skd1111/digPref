@@ -236,9 +236,7 @@ async def intent_node(state: AgentState, llm: LMRouter) -> dict:
                 )
 
                 raw_entities = analysis.get("entities")
-                entity_keys = (
-                    list(raw_entities.keys()) if isinstance(raw_entities, dict) else []
-                )
+                entity_keys = list(raw_entities.keys()) if isinstance(raw_entities, dict) else []
                 _spawn_background(
                     record_example(
                         run_id,

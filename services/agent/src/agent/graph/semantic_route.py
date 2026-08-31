@@ -213,8 +213,7 @@ def _cosine(a: list[float], b: list[float]) -> float:
 def _routes_fingerprint(routes: tuple[Route, ...], model: str) -> str:
     """示例句 + 负样本 + 模型名的指纹 —— 任一变化即缓存失效。"""
     payload = json.dumps(
-        [model]
-        + [[r.name, list(r.utterances), list(r.hard_negatives)] for r in routes],
+        [model] + [[r.name, list(r.utterances), list(r.hard_negatives)] for r in routes],
         ensure_ascii=False,
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
@@ -244,9 +243,7 @@ def _tokenize(text: str) -> list[str]:
     return tokens
 
 
-def _bm25_route_scores(
-    query_tokens: list[str], routes: tuple[Route, ...]
-) -> dict[str, float]:
+def _bm25_route_scores(query_tokens: list[str], routes: tuple[Route, ...]) -> dict[str, float]:
     """每个路由的 BM25 分 = 其示例句中的最高分（语料 = 全部正样本句）。"""
     if not query_tokens:
         return {}
@@ -519,8 +516,7 @@ class SemanticIntentRouter:
             fused: dict[str, float] = {}
             for name in pos_best:
                 fused[name] = (
-                    pos_best[name] * (1 - weight)
-                    + (bm25_scores.get(name, 0.0) / bm25_max) * weight
+                    pos_best[name] * (1 - weight) + (bm25_scores.get(name, 0.0) / bm25_max) * weight
                 )
             fused_best_name = max(fused, key=lambda n: fused[n])
             fused_best_score = fused[fused_best_name]

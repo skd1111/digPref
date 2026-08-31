@@ -59,9 +59,7 @@ class _FakeEmbedding:
             return [1.0, 0.0, 0.0, 0.0, 0.0]
         if any(k in text for k in ("几号", "几点", "农历", "星期", "日期", "时间")):
             return [0.0, 1.0, 0.0, 0.0, 0.0]
-        if any(
-            k in text for k in ("删", "清空", "连上", "连接", "登录", "SSH", "重启", "服务器")
-        ):
+        if any(k in text for k in ("删", "清空", "连上", "连接", "登录", "SSH", "重启", "服务器")):
             return [0.0, 0.0, 0.0, 1.0, 0.0]
         if any(k in text for k in ("查询", "查一下", "订单表", "用户表")):
             return [0.0, 0.0, 1.0, 0.0, 0.0]

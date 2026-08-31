@@ -221,9 +221,7 @@ class TestDynamicNegatives:
     async def test_feedback_hard_sample_blocks_route(self, monkeypatch):
         """闭环反馈困难样本与查询同向量 → 全局拦截。"""
         monkeypatch.setattr(settings, "semantic_route_enabled", True)
-        routes = (
-            Route(name="db_query", utterances=("查询订单表",), analysis={"intent": "query"}),
-        )
+        routes = (Route(name="db_query", utterances=("查询订单表",), analysis={"intent": "query"}),)
         hard_text = "查询订单表但上次执行错了"
         mapping = {
             "查询订单表": [0.0, 0.0, 1.0, 0.0],
@@ -245,9 +243,7 @@ class TestDynamicNegatives:
             raise RuntimeError("db down")
 
         monkeypatch.setattr(sr, "_load_hard_samples", _broken)
-        routes = (
-            Route(name="db_query", utterances=("查询订单表",), analysis={"intent": "query"}),
-        )
+        routes = (Route(name="db_query", utterances=("查询订单表",), analysis={"intent": "query"}),)
         mapping = {"查询订单表": [0.0, 0.0, 1.0, 0.0]}
         out = await _router(routes, mapping).route("查询订单表")
         assert out is not None

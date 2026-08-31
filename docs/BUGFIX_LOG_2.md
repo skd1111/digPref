@@ -969,6 +969,31 @@ text 落库前脱敏与校验层用同一套形态定义，避免两处各自维
 
 ---
 
+### #181 提交前漏跑 `ruff format --check`，CI lint-py 红灯（#181）
+
+| 字段 | 内容 |
+|---|---|
+| **是否修复** | 已修复 |
+| **修复时间** | 2026-08-31 |
+| **发现方式** | 推送后 CI（run 33371091666，lint-py / ruff format --check） |
+| **涉及文件** | 意图增强 7 个新增/改动文件（intent_memory / intent / semantic_route / types 等） |
+
+**现象**
+
+v2.121 提交后 CI lint-py 失败：7 个文件不符合 `ruff format` 排版（行折叠/括号换行）。
+本地验证只跑了 `ruff check`，漏了 Makefile lint-py 的第二步 `ruff format --check`。
+
+**修复**
+
+`ruff format` 统一格式化 7 文件，`format --check .` 全仓绿 + 受影响 61 用例复跑全过后补提交推送。
+
+**教训**
+
+text 提交前验证清单必须与 Makefile `lint-py` 完全对齐（check + format --check 两步），
+只跑其一等于把另一半留给 CI 踩雷。
+
+---
+
 ### 待跟进：工具编排预算 24 轮上限
 
 > **2026-08-27 更新**：本条最初写于 #163 修复时，当时推测「24 轮不够用」。

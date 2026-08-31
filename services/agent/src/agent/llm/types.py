@@ -91,6 +91,7 @@ class IntentAnalysisSchema(BaseModel):
     risk_level: str = "low"
     reason: str = ""
 
+
 _INTENT_CATEGORIES = (
     "chat",
     "knowledge_qa",
