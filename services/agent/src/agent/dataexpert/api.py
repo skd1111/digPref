@@ -611,9 +611,11 @@ async def export_data(fmt: str, req: ExportRequest) -> dict:
     output_path: str | None = (req.output_path or "").strip() or None
     if output_path is not None:
         p = Path(output_path)
-        if ".." in p.parts or not p.name:
+        # 反斜杠在 Linux 不是分隔符，`..\\x` 会被当普通文件名绕过检查 ——
+        # 用归一化形态补一道校验；透传保留原值，不改 Windows 路径分隔符语义。
+        normalized = Path(output_path.replace("\\", "/"))
+        if ".." in p.parts or ".." in normalized.parts or not p.name:
             raise HTTPException(status_code=400, detail="非法导出路径")
-        output_path = str(p)
 
     if fmt == "excel":
         from agent.dataexpert.export.excel import export_excel

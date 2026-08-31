@@ -676,7 +676,9 @@ class TestSessionManager:
 
         _allow_project_path(monkeypatch, tmp_path)
         monkeypatch.setattr(settings, "preview_db_path", str(tmp_path / "preview.db"))
-        _write_package_json(tmp_path, {})
+        # 空依赖会被判为 HTML 框架（#176 静态服务，不走 spawner）；
+        # 本用例验的是 Vite 子进程崩溃重启，必须给 Vite 系框架
+        _write_package_json(tmp_path, {"vue": "^3.4"})
         procs = [FakeProcess(lines=[], exit_code=1), FakeProcess()]
 
         def factory():
@@ -958,7 +960,8 @@ class TestPreviewAPI:
         body = resp.json()
         assert body["framework"] == "vue"
         assert body["status"] == "running"
-        assert body["port"] == 5173
+        # 只断言落在分配区间：CI runner 上 5173 可能被占用，避让机制选下一端口（如 5174）
+        assert 5173 <= body["port"] <= 5176
         sid = body["id"]
         info = c.get(f"/preview/info/{sid}")
         assert info.status_code == 200

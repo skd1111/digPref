@@ -160,9 +160,10 @@ def test_export_to_user_chosen_path(client, tmp_path):
 
 
 def test_export_invalid_path_400(client):
-    """路径含 ..（穿越）→ 400 拒绝。"""
-    r = client.post(
-        "/data/export/csv",
-        json={"columns": ["a"], "rows": [[1]], "output_path": "..\\evil.csv"},
-    )
-    assert r.status_code == 400
+    """路径含 ..（穿越）→ 400 拒绝；反斜杠/正斜杠两种写法都要拦（跨平台）。"""
+    for evil in ("..\\evil.csv", "../evil.csv"):
+        r = client.post(
+            "/data/export/csv",
+            json={"columns": ["a"], "rows": [[1]], "output_path": evil},
+        )
+        assert r.status_code == 400, f"穿越未被拒绝: {evil!r}"

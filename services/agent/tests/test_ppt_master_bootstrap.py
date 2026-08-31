@@ -6,11 +6,16 @@
 
 from __future__ import annotations
 
+import sys
 import zipfile
 from pathlib import Path
 
 import agent.ppt_master_bootstrap as bm
 import pytest
+
+# 捆绑 Python 可执行文件名随平台变化（win32=python.exe，其他=python3），
+# fixture 必须造平台对应名字，否则 Linux CI 上 resolve 永远落空。
+_PY_NAME = "python.exe" if sys.platform == "win32" else "python3"
 
 _PTH_DEFAULT = "python312.zip\n.\n\n# Uncomment to run site.main() automatically\n#import site\n"
 
@@ -27,7 +32,7 @@ def vendor_root(tmp_path: Path) -> Path:
     """伪安装目录：vendor/python + vendor/ppt-master/deps。"""
     py_dir = tmp_path / "vendor" / "python"
     py_dir.mkdir(parents=True)
-    (py_dir / "python.exe").write_bytes(b"MZ fake")
+    (py_dir / _PY_NAME).write_bytes(b"MZ fake")
     (py_dir / "python312._pth").write_text(_PTH_DEFAULT, encoding="utf-8")
 
     skill = tmp_path / "vendor" / "ppt-master"
@@ -47,7 +52,7 @@ def _reset_ensured():
 class TestResolve:
     def test_resolve_bundled_python(self, vendor_root: Path):
         got = bm.resolve_bundled_python([vendor_root])
-        assert got is not None and got.name == "python.exe"
+        assert got is not None and got.name == _PY_NAME
         assert got.parent == vendor_root / "vendor" / "python"
 
     def test_resolve_skill_dir_requires_skill_md(self, vendor_root: Path, tmp_path: Path):
