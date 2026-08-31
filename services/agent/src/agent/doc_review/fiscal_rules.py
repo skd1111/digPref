@@ -311,8 +311,8 @@ async def _semantic_scores(
 class FiscalTaxRuleProvider:
     """从财税法规素材库按混合检索挑选相关规则注入审核提示词。
 
-    embedding 客户端可注入（测试替身）；缺省时按 settings.local_embedding_base_url
-    懒构建本地客户端，未配置则全程纯关键词。
+    embedding 客户端可注入（测试替身）；缺省时走统一入口（进程内 ONNX 优先，
+    显式配置走外置 HTTP），模型不可用时全程纯关键词。
     """
 
     def __init__(self, *, embedding: Any | None = None) -> None:
@@ -321,15 +321,9 @@ class FiscalTaxRuleProvider:
     def _get_embedding_client(self) -> Any | None:
         if self._embedding is not None:
             return self._embedding
-        if not settings.local_embedding_base_url:
-            return None
-        from agent.llm.embedding import LocalEmbeddingClient
+        from agent.llm.embedding import build_default_embedding_client
 
-        self._embedding = LocalEmbeddingClient(
-            base_url=settings.local_embedding_base_url,
-            model=settings.local_embedding_model or "bge-small-zh-v1.5",
-            dimensions=settings.local_embedding_dim,
-        )
+        self._embedding = build_default_embedding_client()
         return self._embedding
 
     async def search(self, sample_text: str) -> dict[RiskType, list[PolicyRule]]:
@@ -360,11 +354,14 @@ class FiscalTaxRuleProvider:
 
         w = settings.doc_review_fiscal_sem_weight
         min_score = settings.doc_review_fiscal_min_score
+        sem_min = settings.doc_review_fiscal_sem_min
         scored: list[tuple[_RuleCandidate, float]] = []
         for c, k, s in zip(candidates, kw, sem if sem is not None else [0.0] * len(candidates)):
             score = ((1.0 - w) * k + w * s) if sem is not None else k
-            # 关键词命中始终入选（不退化旧行为）；语义通道只负责扩召回（走阈值）
-            if k > 0 or (sem is not None and score >= min_score):
+            # 关键词命中始终入选（不退化旧行为）；语义通道只负责扩召回：
+            # 需同时过独立语义下限（挡无关文本基线余弦）与融合分阈值。
+            sem_ok = sem is not None and s >= sem_min and score >= min_score
+            if k > 0 or sem_ok:
                 scored.append((c, score))
         scored.sort(key=lambda x: x[1], reverse=True)
         logger.info(

@@ -21,8 +21,12 @@ _evolution_event_queue: deque[tuple[str, dict[str, Any]]] = deque(maxlen=1000)
 
 # 事件通道名常量（与 sse_bridge.rs::channel + events.ts::EVT 同步）
 EVT_EVOLUTION_INSIGHT_CREATED: str = "evolution_insight_created"
+EVT_SKILL_DRAFT_READY: str = "skill_draft_ready"
+EVT_EVOLUTION_EXPERIMENT_DONE: str = "evolution_experiment_done"
 
-_VALID_KINDS = frozenset({EVT_EVOLUTION_INSIGHT_CREATED})
+_VALID_KINDS = frozenset(
+    {EVT_EVOLUTION_INSIGHT_CREATED, EVT_SKILL_DRAFT_READY, EVT_EVOLUTION_EXPERIMENT_DONE}
+)
 
 
 def emit_evolution_event(kind: str, payload: dict[str, Any]) -> None:

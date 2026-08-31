@@ -514,7 +514,15 @@ class PrivateLLMClient:
         from agent.llm.types import IntentAnalysis  # 避免循环导入
         from agent.observability.cot_log import cot as cot_log
 
-        msgs: list[dict] = [{"role": "system", "content": load_prompt("intent_router")}]
+        # 动态 Few-Shot（2026-08-31）：案例库检索相似历史成功案例拼入 system，
+        # 检索故障/空库静默回退基础模板（不影响主链路）
+        try:
+            from agent.graph.intent_memory import compose_intent_system_prompt
+
+            system_prompt = await compose_intent_system_prompt(text)
+        except Exception:
+            system_prompt = load_prompt("intent_router")
+        msgs: list[dict] = [{"role": "system", "content": system_prompt}]
         for h in (history or [])[-4:]:
             parsed = normalize_message(h)
             if parsed is None:

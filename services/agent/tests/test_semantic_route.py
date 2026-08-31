@@ -25,12 +25,14 @@ from agent.graph.semantic_route import (
 
 
 class _FakeEmbedding:
-    """2 维玩具向量空间：闲聊 → (1,0)，时间 → (0,1)，无关 → (-1,0)。
+    """5 维玩具向量空间：闲聊 → e1，时间 → e2，DB 查询 → e3，删除/远程 → e4，
+    未知 → e5（与各路由轴正交，余弦 0 → 必未命中，且不触发负样本拦截）。
+    V2（2026-08-31）：新增 db_query / db_drop / ssh_execute 预置路由后相应扩维。
 
     embed_calls 计数用于验证缓存命中后不重复批量向量化。
     """
 
-    model = "fake-2d"
+    model = "fake-4d"
 
     def __init__(self) -> None:
         self.embed_calls = 0
@@ -54,10 +56,16 @@ class _FakeEmbedding:
                 "拜",
             )
         ):
-            return [1.0, 0.0]
+            return [1.0, 0.0, 0.0, 0.0, 0.0]
         if any(k in text for k in ("几号", "几点", "农历", "星期", "日期", "时间")):
-            return [0.0, 1.0]
-        return [-1.0, 0.0]  # 无关文本 → 负半轴，与所有路由向量都不相似
+            return [0.0, 1.0, 0.0, 0.0, 0.0]
+        if any(
+            k in text for k in ("删", "清空", "连上", "连接", "登录", "SSH", "重启", "服务器")
+        ):
+            return [0.0, 0.0, 0.0, 1.0, 0.0]
+        if any(k in text for k in ("查询", "查一下", "订单表", "用户表")):
+            return [0.0, 0.0, 1.0, 0.0, 0.0]
+        return [0.0, 0.0, 0.0, 0.0, 1.0]  # 未知文本 → 独占轴，与所有路由向量余弦 0
 
     async def health_check(self) -> bool:
         return self.healthy
@@ -108,10 +116,15 @@ class TestSemanticRoute:
         assert out["need_tool"] is True
 
     async def test_miss_returns_none(self, monkeypatch):
+        """未知向量轴命中不了任何路由；即使关键词与负样本重叠也被拦截。"""
         monkeypatch.setattr(settings, "semantic_route_enabled", True)
         fake = _FakeEmbedding()
-        out = await _router(fake).route("帮我查询订单系统的库存数据并生成报表")
+        out = await _router(fake).route("帮我分析这份合同的法律风险并出具审查意见")
         assert out is None
+        # 含 DB 关键词但更像「编写脚本」负样本 → 负样本拦截回退（BM25 也抬不起来）
+        fake2 = _FakeEmbedding()
+        out2 = await _router(fake2).route("写个查询库存的脚本先别执行")
+        assert out2 is None
 
     async def test_disabled_skips_embedding(self, monkeypatch):
         monkeypatch.setattr(settings, "semantic_route_enabled", False)

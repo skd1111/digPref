@@ -164,6 +164,10 @@ export const EVT = {
   // Phase 19 V0 —— 自进化闭环 SSE 三处同步（CLAUDE.md §4）
   /** 失败反思产出新经验（含 experience_id + insight + attribution）；经验库页据此刷新 */
   AGENT_EVOLUTION_INSIGHT_CREATED: "agent://evolution_insight_created",
+  /** Phase 19 V1：技能蒸馏草稿待审（含 draft_id + slug + name）；技能页草稿区据此刷新 */
+  AGENT_SKILL_DRAFT_READY: "agent://skill_draft_ready",
+  /** Phase 19 V1.5：Prompt 影子优化实验完成（含 gain / significant / version_id）；实验面板据此刷新 */
+  AGENT_EVOLUTION_EXPERIMENT_DONE: "agent://evolution_experiment_done",
 
   // ---- Phase 2F+ V1.5: logviewer Tauri Events (Rust → frontend) ----
   /** 索引进度更新（bytes_scanned / file_size / pct） */

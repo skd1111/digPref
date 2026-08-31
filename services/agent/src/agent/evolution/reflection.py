@@ -86,6 +86,19 @@ async def run_reflection(
     """
     if not settings.evolution_enabled:
         return None
+    # 同会话（run）去重：失败轨迹收尾会反思一次，用户随后对同一轨迹 👎
+    # 又触发一次 —— 两条几乎相同的经验没有价值，已有产出即跳过（避免
+    # 白跑一次本地 LLM，也避免经验库堆重复条目）。
+    session_id = str(trajectory.get("session_id") or "")
+    if session_id:
+        try:
+            if await storage.has_experience_for_session(session_id, db_path=db_path):
+                logger.info(
+                    "[evolution] reflection skipped: experience exists session=%s", session_id
+                )
+                return None
+        except Exception as exc:
+            logger.warning("[evolution] reflection dedup check failed: %s", exc)
     context = _build_failure_context(trajectory)
     if not context:
         return None

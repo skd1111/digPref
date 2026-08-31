@@ -9,6 +9,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { ipc } from '@/ipc/invoke';
 import { EVT } from '@/ipc/events';
+import { PromptOptPanel } from '@/components/evolution/PromptOptPanel';
 
 type Experience = {
   id: number;
@@ -22,6 +23,16 @@ type Experience = {
   ts: string;
 };
 
+type EvolutionStats = {
+  signals_total: number;
+  user_signals: number;
+  user_up: number;
+  env_fail: number;
+  judge_avg: number | null;
+  experiences_active: number;
+  drafts_pending: number;
+};
+
 const ATTRIBUTION_LABEL: Record<string, string> = {
   prompt: '指令不清',
   tool: '工具问题',
@@ -32,13 +43,18 @@ const ATTRIBUTION_LABEL: Record<string, string> = {
 
 export function EvolutionPanel(): JSX.Element {
   const [items, setItems] = useState<Experience[]>([]);
+  const [stats, setStats] = useState<EvolutionStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   const reload = useCallback(async (): Promise<void> => {
     try {
-      const res = await ipc.evolutionExperiences();
+      const [res, statsRes] = await Promise.all([
+        ipc.evolutionExperiences(),
+        ipc.evolutionStats().catch(() => null),
+      ]);
       setItems(res.items ?? []);
+      setStats(statsRes);
       setError('');
     } catch (e) {
       setError(String(e));
@@ -94,6 +110,40 @@ export function EvolutionPanel(): JSX.Element {
           style={{ borderColor: '#fca5a5', backgroundColor: '#fef2f2', color: '#dc2626' }}
         >
           {error}
+        </div>
+      )}
+
+      {/* 进化看板（V1）：信号分布 / 经验数 / 待审草稿 / Judge 均分 */}
+      {stats !== null && (
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+          {[
+            { label: '评测信号', value: String(stats.signals_total) },
+            {
+              label: '用户反馈',
+              value: `${stats.user_up} 👍 / ${stats.user_signals - stats.user_up} 👎`,
+            },
+            {
+              label: 'Judge 均分',
+              value: stats.judge_avg !== null ? stats.judge_avg.toFixed(2) : '—',
+            },
+            {
+              label: '待审草稿',
+              value: String(stats.drafts_pending),
+            },
+          ].map((card) => (
+            <div
+              key={card.label}
+              className="rounded border px-3 py-2"
+              style={{ borderColor: '#e7e5e4', backgroundColor: '#f9fafb' }}
+            >
+              <div className="text-[10px]" style={{ color: '#9ca3af' }}>
+                {card.label}
+              </div>
+              <div className="text-ui font-semibold" style={{ color: '#1f1f1f' }}>
+                {card.value}
+              </div>
+            </div>
+          ))}
         </div>
       )}
 
@@ -164,6 +214,11 @@ export function EvolutionPanel(): JSX.Element {
           ))}
         </ul>
       )}
+
+      {/* Phase 19 V1.5：Few-shot 影子优化实验 */}
+      <div className="pt-2">
+        <PromptOptPanel />
+      </div>
     </div>
   );
 }

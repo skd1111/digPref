@@ -11,6 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
 Intent = Literal["query", "mutate", "orchestrate", "chitchat"]
 TaskKind = Literal[
     "intent",
@@ -50,12 +52,44 @@ TaskKind = Literal[
     "history_compress",
     # Phase 19 V0：失败轨迹反思（输入含用户任务内容 → 本地红线）
     "reflection",
+    # Phase 19 V1：技能蒸馏 / 主对话终答 Judge（输入含用户内容 → 本地红线）
+    "skill_distill",
+    "answer_judge",
+    # Phase 19 V1.5：Few-shot 影子优化（候选生成 + 影子回放均含用户历史 → 本地红线）
+    "prompt_optimize",
     # mock 模式标记（非真实任务，不走 LLM 调度）
     "mock_mode",
 ]
 
 
 # ---- 结构化意图分析（意图识别重构 2026-08-06）-------------------------------
+
+
+class IntentAnalysisSchema(BaseModel):
+    """LLM 意图分析输出的 Pydantic 硬校验层（2026-08-31）。
+
+    参考 Instructor/Outlines 思路：用 Schema 强制约束字段类型与枚举，
+    替代纯正则/容错解析。校验失败时 from_raw 回退既有宽容降级逻辑，
+    行为向后兼容；未知字段丢弃（extra="ignore"）。
+
+    注：intent / intent_category / risk_level 不在此层枚举报错——
+    非法值的映射/兜底规则（_CATEGORY_TO_INTENT 等）由 from_raw 统一处理，
+    两层职责分离，避免合法新细分类型被硬校验误杀。
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    rewritten_query: str = ""
+    intent: str = ""
+    intent_category: str = ""
+    confidence: float = Field(default=0.5)
+    entities: dict[str, Any] = Field(default_factory=dict)
+    missing_fields: list[str] = Field(default_factory=list)
+    need_tool: bool = False
+    need_clarification: bool = False
+    clarification_message: str = ""
+    risk_level: str = "low"
+    reason: str = ""
 
 _INTENT_CATEGORIES = (
     "chat",
@@ -115,30 +149,38 @@ class IntentAnalysis:
     def from_raw(
         cls, raw: dict[str, Any], *, fallback_text: str = "", backend: str = ""
     ) -> IntentAnalysis:
-        """宽容解析 LLM JSON；非法字段丢弃、缺失字段用安全默认值。"""
-        intent = raw.get("intent")
-        category = str(raw.get("intent_category") or "")
+        """宽容解析 LLM JSON；非法字段丢弃、缺失字段用安全默认值。
+
+        2026-08-31：先经 IntentAnalysisSchema 硬校验（类型/结构强制）；
+        校验失败（如 confidence 为非法字符串）回退原始 dict 宽容处理。
+        """
+        try:
+            data: dict[str, Any] = IntentAnalysisSchema.model_validate(raw).model_dump()
+        except (ValidationError, ValueError, TypeError):
+            data = raw if isinstance(raw, dict) else {}
+        intent = data.get("intent")
+        category = str(data.get("intent_category") or "")
         if intent not in ("query", "mutate", "orchestrate", "chitchat"):
             intent = _CATEGORY_TO_INTENT.get(category, "query")
         if category not in _INTENT_CATEGORIES:
             category = "knowledge_qa"
-        raw_entities = raw.get("entities")
+        raw_entities = data.get("entities")
         entities: dict[str, Any] = raw_entities if isinstance(raw_entities, dict) else {}
-        missing = raw.get("missing_fields")
-        confidence_raw = raw.get("confidence")
+        missing = data.get("missing_fields")
+        confidence_raw = data.get("confidence")
         try:
             confidence = (
                 max(0.0, min(1.0, float(confidence_raw))) if confidence_raw is not None else 0.5
             )
         except (TypeError, ValueError):
             confidence = 0.5
-        risk = str(raw.get("risk_level") or "low")
+        risk = str(data.get("risk_level") or "low")
         if risk not in ("low", "medium", "high", "critical"):
             risk = "low"
-        need_clarification = bool(raw.get("need_clarification"))
+        need_clarification = bool(data.get("need_clarification"))
         return cls(
             intent=intent,
-            rewritten_query=str(raw.get("rewritten_query") or fallback_text).strip()
+            rewritten_query=str(data.get("rewritten_query") or fallback_text).strip()
             or fallback_text,
             intent_category=category,
             confidence=confidence,
@@ -146,11 +188,11 @@ class IntentAnalysis:
             missing_fields=[str(f) for f in missing if str(f).strip()]
             if isinstance(missing, list)
             else [],
-            need_tool=bool(raw.get("need_tool", intent in ("query", "mutate", "orchestrate"))),
+            need_tool=bool(data.get("need_tool", intent in ("query", "mutate", "orchestrate"))),
             need_clarification=need_clarification,
-            clarification_message=str(raw.get("clarification_message") or "").strip(),
+            clarification_message=str(data.get("clarification_message") or "").strip(),
             risk_level=risk,
-            reason=str(raw.get("reason") or ""),
+            reason=str(data.get("reason") or ""),
             backend=backend,
         )
 

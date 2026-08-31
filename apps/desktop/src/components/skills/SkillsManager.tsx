@@ -1,10 +1,12 @@
 /**
  * SkillsManager —— Phase 2D Skill 管理主面板。
- * 双 Tab：技能列表 + 导入/导出。列表卡片网格，含搜索 + 启用/禁用。
+ * 三 Tab：技能列表 + 待审草稿（Phase 19 V1 自进化蒸馏）+ 导入/导出。
+ * 列表卡片网格，含搜索 + 启用/禁用。
  */
 import { useMemo, useState } from 'react';
 import { useSkillsStore } from '@/store/skillsStore';
 import { SkillCard } from './SkillCard';
+import { SkillDraftsPanel, usePendingDraftCount } from './SkillDraftsPanel';
 
 export function SkillsManager(): JSX.Element {
   const skills = useSkillsStore((s) => s.skills);
@@ -16,10 +18,11 @@ export function SkillsManager(): JSX.Element {
   const toggleEnabled = useSkillsStore((s) => s.toggleEnabled);
   const importSkill = useSkillsStore((s) => s.importSkill);
 
-  const [tab, setTab] = useState<'list' | 'import'>('list');
+  const [tab, setTab] = useState<'list' | 'drafts' | 'import'>('list');
   const [search, setSearch] = useState('');
   const [showNewDialog, setShowNewDialog] = useState(false);
   const [newJson, setNewJson] = useState('');
+  const pendingDrafts = usePendingDraftCount();
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim();
@@ -115,8 +118,12 @@ export function SkillsManager(): JSX.Element {
         {(
           [
             { id: 'list', label: `技能列表 (${filtered.length})` },
+            {
+              id: 'drafts',
+              label: pendingDrafts > 0 ? `待审草稿 (${pendingDrafts})` : '待审草稿',
+            },
             { id: 'import', label: '导入 / 导出' },
-          ] as Array<{ id: 'list' | 'import'; label: string }>
+          ] as Array<{ id: 'list' | 'drafts' | 'import'; label: string }>
         ).map((t) => {
           const active = t.id === tab;
           return (
@@ -137,7 +144,9 @@ export function SkillsManager(): JSX.Element {
       </div>
 
       <div className="flex-1 overflow-auto p-4">
-        {tab === 'list' ? (
+        {tab === 'drafts' ? (
+          <SkillDraftsPanel />
+        ) : tab === 'list' ? (
           filtered.length === 0 ? (
             <div className="flex h-full items-center justify-center text-2xs" style={{ color: '#616161' }}>
               {search ? '无匹配技能' : '暂无技能，点 [+ 新建] 或 [📥 导入] 开始'}

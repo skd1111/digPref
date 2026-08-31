@@ -21,22 +21,22 @@ import logging
 from typing import Any
 
 from agent.config import settings
-from agent.evolution import reflection, storage
+from agent.evolution import judge, reflection, skill_distiller, storage
 from agent.evolution.signature import compute_task_signature, tool_fingerprint
+from agent.skills.schema import scrub_dsn
 
 logger = logging.getLogger(__name__)
 
 # 终答失败文案特征（与 tools/loop.py / responder.py 的硬失败文案同源；
-# 只用于启发式判定，新增失败文案时同步维护）
+# 用整句短语而非裸短词，避免成功回答含「重试」等字样被误判。
+# 新增失败文案时同步维护）
 _FAIL_MARKERS = (
-    "重试",  # 工具重试耗尽
-    "修复上限",  # Auto-Repair 耗尽
-    "自动重试",  # repair 达上限
-    "无法完成",  # 工具编排放弃
-    "暂时无法",  # 编排不可用
-    "没有可用的候选工具",
-    "已被用户停止",
-    "人工检查错误详情",
+    "任务已被用户停止",  # 协作式取消（tools/loop.py）
+    "我暂时无法完成这个任务",  # 工具编排不可用 / 放弃（tools/loop.py 两种变体）
+    "没有可用的候选工具",  # 编排无候选（tools/loop.py）
+    "已达修复上限",  # Auto-Repair 耗尽（tools/loop.py）
+    "次后仍然失败",  # 工具重试耗尽（responder.py 硬失败文案）
+    "本次任务已取消",  # 用户拒绝写操作（responder.py 硬失败文案）
 )
 
 _ANSWER_DIGEST_CHARS = 300
@@ -100,14 +100,16 @@ async def record_run_outcome(
             intent = {
                 "intent": analysis.get("intent"),
                 "intent_category": analysis.get("intent_category"),
-                "rewritten_query": str(analysis.get("rewritten_query") or "")[:200],
+                # 改写句源于用户原文，落库前同样过脱敏（防粘贴连接串残留）
+                "rewritten_query": scrub_dsn(str(analysis.get("rewritten_query") or ""))[:200],
             }
         category = str(intent.get("intent_category") or "")
         skill_id = str(state.get("active_skill_id") or "")
         tool_names = _extract_tool_names(state)
         signature = compute_task_signature(category, skill_id, tool_names)
         outcome = _judge_outcome(state)
-        digest = str(state.get("final_answer") or "")[:_ANSWER_DIGEST_CHARS]
+        # 终答摘要可能包含查询出的数据行 → 落库前过 DSN / 凭证形态扫描（红线 §8）
+        digest = scrub_dsn(str(state.get("final_answer") or ""))[:_ANSWER_DIGEST_CHARS]
 
         await storage.record_trajectory(
             session_id=run_id,
@@ -123,7 +125,8 @@ async def record_run_outcome(
             task_signature=signature,
             source="env",
             score=1.0 if outcome == "success" else 0.0,
-            reason=str(user_prompt or "")[:120],
+            # 用户提示词可能粘贴连接串/口令 → 落库前脱敏（红线 §8）
+            reason=scrub_dsn(str(user_prompt or ""))[:120],
         )
         if outcome == "fail":
             # 失败即反思（Reflexion 式）：后台提炼教训入经验库
@@ -138,5 +141,15 @@ async def record_run_outcome(
                     "answer_digest": digest,
                 }
             )
+        else:
+            # V1 成功路径：① 抽样 Judge 评测终答（自评测信号源）；
+            # ② 同签名多次成功后蒸馏技能草稿（两者均 best-effort）
+            await judge.maybe_judge_answer(
+                run_id=run_id,
+                task_signature=signature,
+                user_prompt=user_prompt,
+                final_answer=str(state.get("final_answer") or ""),
+            )
+            await skill_distiller.maybe_distill_for_signature(signature)
     except Exception as exc:
         logger.warning("[evolution] trajectory record failed run=%s: %s", run_id, exc)

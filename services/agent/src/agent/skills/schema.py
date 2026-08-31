@@ -89,3 +89,21 @@ def validate_no_dsn(data: dict) -> list[str]:
 
     check("", data)
     return violations
+
+
+# 落库前脱敏用：与 _DSN_PATTERNS 同源，但把整段 DSN（含 user:pass@host 段）
+# 直接替换掉，而不是仅检测（进化轨迹的摘要文本可能混入用户粘贴的连接串）
+_DSN_SCRUB_RE = re.compile(
+    r"(?:jdbc:[a-z]+|mysql|postgres(?:ql)?|mongodb|redis|oracle|sqlserver|mariadb)://\S+",
+    re.IGNORECASE,
+)
+# user:password@host 形态凭证（不匹配普通 email —— 要求 @ 前有冒号密码段）
+_CRED_SCRUB_RE = re.compile(r"\b[A-Za-z][A-Za-z0-9_]*:[^@\s:]+@[A-Za-z0-9.\-]+")
+
+
+def scrub_dsn(text: str) -> str:
+    """把文本中的 DSN / 凭证形态整段替换为占位符（落库前脱敏用）。"""
+    if not text:
+        return text
+    out = _DSN_SCRUB_RE.sub("[REDACTED_DSN]", text)
+    return _CRED_SCRUB_RE.sub("[REDACTED_CRED]", out)

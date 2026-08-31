@@ -48,6 +48,10 @@ dependencies = [
     # extras 按办公格式按需：docx/pdf/pptx/xls/xlsx；html/csv/json/epub 在基础包内；
     # 不用 [all]（含 azure / pydub / youtube 等重依赖）
     "markitdown[docx,pdf,pptx,xls,xlsx]>=0.1",
+    # 进程内向量模型（2026-08-31）：bge-small-zh-v1.5 ONNX 量化版，
+    # 语义路由 / Few-Shot 检索 / KB 向量化共用；纯 CPU 推理无 CUDA 依赖
+    "onnxruntime>=1.17",
+    "tokenizers>=0.19",
 ]
 
 [project.optional-dependencies]

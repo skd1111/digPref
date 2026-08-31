@@ -312,6 +312,89 @@ export const ipc = {
   evolutionExperienceDelete: (experienceId: number) =>
     invoke<{ ok: boolean; id: number }>('evolution_experience_delete', { experienceId }),
 
+  /** Phase 19 V1：技能蒸馏草稿列表（待审）。 */
+  evolutionSkillDrafts: () =>
+    invoke<{
+      ok: boolean;
+      items: Array<{
+        id: number;
+        slug: string;
+        name: string;
+        yaml_text: string;
+        task_signature: string;
+        status: string;
+        ts: string;
+      }>;
+    }>('evolution_skill_drafts'),
+
+  /** Phase 19 V1：草稿审核通过（后端写入 skills/ 并启用）。 */
+  evolutionSkillDraftApprove: (draftId: number) =>
+    invoke<{ ok: boolean; id: number; skill_id: string; path: string }>(
+      'evolution_skill_draft_approve',
+      { draftId },
+    ),
+
+  /** Phase 19 V1：草稿拒绝。 */
+  evolutionSkillDraftReject: (draftId: number) =>
+    invoke<{ ok: boolean; id: number; status: string }>('evolution_skill_draft_reject', {
+      draftId,
+    }),
+
+  /** Phase 19 V1：进化看板统计。 */
+  evolutionStats: () =>
+    invoke<{
+      ok: boolean;
+      signals_total: number;
+      user_signals: number;
+      user_up: number;
+      env_fail: number;
+      judge_avg: number | null;
+      experiences_active: number;
+      drafts_pending: number;
+    }>('evolution_stats'),
+
+  /** Phase 19 V1.5：运行 Few-shot 影子优化实验（离线回放，同步返回结果）。 */
+  evolutionPromptOptRun: (body: { skillId: string; taskSignature?: string }) =>
+    invoke<{
+      ok: boolean;
+      skill_id: string;
+      old_avg: number;
+      new_avg: number;
+      gain: number;
+      significant: boolean;
+      version_id: number | null;
+      auto_adopted: boolean;
+    }>('evolution_prompt_opt_run', { body }),
+
+  /** Phase 19 V1.5：Prompt 版本列表（可按 skill 过滤）。 */
+  evolutionPromptVersions: (skillId?: string) =>
+    invoke<{
+      ok: boolean;
+      items: Array<{
+        id: number;
+        skill_id: string;
+        version: number;
+        few_shot: Array<{ role: string; content: string }>;
+        gain: number | null;
+        status: 'candidate' | 'active' | 'rolled_back';
+        ts: string;
+      }>;
+    }>('evolution_prompt_versions', { ...(skillId != null ? { skillId } : {}) }),
+
+  /** Phase 19 V1.5：采纳 Prompt 版本（写回技能 few-shot）。 */
+  evolutionPromptVersionApply: (versionId: number) =>
+    invoke<{ ok: boolean; id: number; skill_id: string; status: string }>(
+      'evolution_prompt_version_apply',
+      { versionId },
+    ),
+
+  /** Phase 19 V1.5：一键回滚到上一版本。 */
+  evolutionPromptVersionRollback: (versionId: number) =>
+    invoke<{ ok: boolean; id: number; skill_id: string; rolled_back_to: number }>(
+      'evolution_prompt_version_rollback',
+      { versionId },
+    ),
+
   listAssets: () => invoke<unknown[]>("asset_list"),
   addAsset: (asset: Record<string, unknown>) =>
     invoke<Record<string, unknown>>("asset_add", { asset }),

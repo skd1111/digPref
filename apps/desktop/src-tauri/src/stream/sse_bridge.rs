@@ -149,7 +149,11 @@ pub mod channel {
 
     // Phase 19 V0 自进化闭环 —— SSE 三处同步（CLAUDE.md §4）
     // evolution_insight_created：失败反思产出新经验（前端经验库页刷新）
+    // skill_draft_ready（V1）：技能蒸馏草稿待审（前端技能页草稿区刷新）
     pub const EVOLUTION_INSIGHT_CREATED: &str = "agent://evolution_insight_created";
+    pub const SKILL_DRAFT_READY: &str = "agent://skill_draft_ready";
+    // evolution_experiment_done（V1.5）：Prompt 影子优化实验完成（前端实验面板刷新）
+    pub const EVOLUTION_EXPERIMENT_DONE: &str = "agent://evolution_experiment_done";
 }
 
 
@@ -535,6 +539,8 @@ fn map_event_to_channel(event_name: &str) -> &'static str {
         "file_write_preview" => channel::FILE_WRITE_PREVIEW,
         // Phase 19 V0：自进化闭环 SSE 三处同步（CLAUDE.md §4）
         "evolution_insight_created" => channel::EVOLUTION_INSIGHT_CREATED,
+        "skill_draft_ready"         => channel::SKILL_DRAFT_READY,   // Phase 19 V1
+        "evolution_experiment_done" => channel::EVOLUTION_EXPERIMENT_DONE,   // Phase 19 V1.5
         _             => channel::LOG,
     }
 }

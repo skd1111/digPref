@@ -13,12 +13,20 @@ import { fireEvent, render, waitFor } from '@testing-library/react';
 const evolutionExperiences = vi.fn();
 const evolutionExperienceToggle = vi.fn();
 const evolutionExperienceDelete = vi.fn();
+const evolutionStats = vi.fn();
 
 vi.mock('@/ipc/invoke', () => ({
   ipc: {
     evolutionExperiences: (...args: unknown[]) => evolutionExperiences(...args),
     evolutionExperienceToggle: (...args: unknown[]) => evolutionExperienceToggle(...args),
     evolutionExperienceDelete: (...args: unknown[]) => evolutionExperienceDelete(...args),
+    evolutionStats: (...args: unknown[]) => evolutionStats(...args),
+    // 内嵌 PromptOptPanel（V1.5）依赖的方法：返回空列表，不干扰面板用例
+    evolutionPromptVersions: () => Promise.resolve({ ok: true, items: [] }),
+    evolutionPromptOptRun: () => Promise.resolve({ ok: true }),
+    evolutionPromptVersionApply: () => Promise.resolve({ ok: true }),
+    evolutionPromptVersionRollback: () => Promise.resolve({ ok: true }),
+    skillsList: () => Promise.resolve({ skills: [] }),
   },
 }));
 
@@ -39,9 +47,20 @@ function seedItems(items: unknown[]): void {
   evolutionExperiences.mockClear();
   evolutionExperienceToggle.mockClear();
   evolutionExperienceDelete.mockClear();
+  evolutionStats.mockClear();
   evolutionExperiences.mockResolvedValue({ ok: true, items });
   evolutionExperienceToggle.mockResolvedValue({ ok: true, id: 1, status: 'disabled' });
   evolutionExperienceDelete.mockResolvedValue({ ok: true, id: 1 });
+  evolutionStats.mockResolvedValue({
+    ok: true,
+    signals_total: 12,
+    user_signals: 3,
+    user_up: 2,
+    env_fail: 4,
+    judge_avg: 4.2,
+    experiences_active: 5,
+    drafts_pending: 1,
+  });
 }
 
 describe('EvolutionPanel（Phase 19 V0）', () => {
@@ -105,5 +124,34 @@ describe('EvolutionPanel（Phase 19 V0）', () => {
     expect(handler).toBeTruthy();
     handler?.({ payload: { experience_id: 9 } });
     await waitFor(() => expect(evolutionExperiences).toHaveBeenCalledTimes(2));
+  });
+
+  it('展示进化看板统计卡片（V1）', async () => {
+    seedItems([]);
+    const { getByText } = render(<EvolutionPanel />);
+    await waitFor(() => expect(getByText('评测信号')).toBeTruthy());
+    expect(getByText('12')).toBeTruthy(); // signals_total
+    expect(getByText('2 👍 / 1 👎')).toBeTruthy();
+    expect(getByText('4.20')).toBeTruthy(); // judge_avg
+  });
+
+  it('统计接口失败时静默降级（列表照常展示）', async () => {
+    seedItems([
+      {
+        id: 1,
+        insight: '经验仍可见',
+        tags: [],
+        applies_to: '',
+        attribution: 'env',
+        hit_count: 0,
+        score: 0.5,
+        status: 'active',
+        ts: '2026-08-31T00:00:00',
+      },
+    ]);
+    evolutionStats.mockRejectedValue(new Error('agent offline'));
+    const { getByText, queryByText } = render(<EvolutionPanel />);
+    await waitFor(() => expect(getByText('经验仍可见')).toBeTruthy());
+    expect(queryByText('评测信号')).toBeNull();
   });
 });

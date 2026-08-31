@@ -158,6 +158,16 @@ pub fn run() {
             commands::agent::evolution_experiences,
             commands::agent::evolution_experience_toggle,
             commands::agent::evolution_experience_delete,
+            // Phase 19 V1：技能草稿审核 + 进化看板统计
+            commands::agent::evolution_skill_drafts,
+            commands::agent::evolution_skill_draft_approve,
+            commands::agent::evolution_skill_draft_reject,
+            commands::agent::evolution_stats,
+            // Phase 19 V1.5：Prompt 影子优化实验 + 版本采纳/回滚
+            commands::agent::evolution_prompt_opt_run,
+            commands::agent::evolution_prompt_versions,
+            commands::agent::evolution_prompt_version_apply,
+            commands::agent::evolution_prompt_version_rollback,
             commands::agent::agent_active_runs,
             commands::agent::agent_restart,
             commands::agent::agent_autonomy_confirm,

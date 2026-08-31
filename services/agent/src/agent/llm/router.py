@@ -591,6 +591,13 @@ _LOCAL_ONLY_TASKS: frozenset[TaskKind] = frozenset(
         # Phase 19 V0 (2026-08-31)：失败轨迹反思——输入含用户任务内容 /
         # 工具失败详情（可能含 PII / 敏感业务描述）→ 本地优先，不可用才降级
         "reflection",
+        # Phase 19 V1 (2026-08-31)：技能蒸馏与主对话终答 Judge——输入含用户
+        # 请求 / 回答原文与成功轨迹摘要 → 本地优先，不可用才降级
+        "skill_distill",
+        "answer_judge",
+        # Phase 19 V1.5 (2026-08-31)：Few-shot 影子优化——候选生成与影子回放
+        # 均接触用户历史请求 / 失败反馈 → 本地优先，不可用才降级
+        "prompt_optimize",
     }
 )
 

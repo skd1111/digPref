@@ -33,6 +33,11 @@ def _data_pairs():
         ('knowledge-base', 'knowledge-base'),
         # NL2SQL 业务字典种子 YAML（运营术语→编码映射；运行时 cwd 优先，缺失回退 _MEIPASS）
         ('config/biz_dict', 'config/biz_dict'),
+        # 进程内向量模型（2026-08-31，~23MB）：bge-small-zh-v1.5 ONNX 量化版，
+        # 意图语义路由 / Few-Shot 检索 / KB 向量化共用；运行时路径解析同
+        # knowledge-base 策略（cwd > _MEIPASS > 仓库根）。未入 git 时自动跳过，
+        # 语义路由静默降级回退 LLM 分析，不阻断启动。
+        ('model/bge-small-zh-v1.5-onnx', 'model/bge-small-zh-v1.5-onnx'),
         # 内网数据库驱动 wheel（未入 git；CI / macOS 构建缺失时跳过，
         # 对应 DB 驱动走 PyPI 安装的 asyncpg/aiomysql 等）
         ('config/driver', 'config/driver'),
@@ -55,7 +60,7 @@ a = Analysis(
     pathex=['services/agent/src'],
     binaries=[],
     datas=_data_pairs(),
-    hiddenimports=['uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.auto', 'uvicorn.protocols', 'uvicorn.protocols.http', 'uvicorn.lifespan', 'starlette', 'fastapi', 'httpx', 'pydantic', 'pydantic_settings', 'langgraph', 'mcp', 'aiohttp'],
+    hiddenimports=['uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.auto', 'uvicorn.protocols', 'uvicorn.protocols.http', 'uvicorn.lifespan', 'starlette', 'fastapi', 'httpx', 'pydantic', 'pydantic_settings', 'langgraph', 'mcp', 'aiohttp', 'onnxruntime', 'tokenizers'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

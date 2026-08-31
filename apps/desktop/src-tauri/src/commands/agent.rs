@@ -198,6 +198,93 @@ pub async fn evolution_experience_delete(
         .await
 }
 
+/// Phase 19 V1：技能蒸馏草稿列表（技能页待审草稿区）。
+#[tauri::command]
+pub async fn evolution_skill_drafts(state: State<'_, AppState>) -> AppResult<serde_json::Value> {
+    state.agent_get("/evolution/skill-drafts").await
+}
+
+/// Phase 19 V1：草稿审核通过（人工闸门：后端写入 skills/ 并启用）。
+#[tauri::command]
+pub async fn evolution_skill_draft_approve(
+    draft_id: i64,
+    state: State<'_, AppState>,
+) -> AppResult<serde_json::Value> {
+    state
+        .agent_post(
+            &format!("/evolution/skill-drafts/{}/approve", draft_id),
+            serde_json::json!({}),
+        )
+        .await
+}
+
+/// Phase 19 V1：草稿拒绝。
+#[tauri::command]
+pub async fn evolution_skill_draft_reject(
+    draft_id: i64,
+    state: State<'_, AppState>,
+) -> AppResult<serde_json::Value> {
+    state
+        .agent_post(
+            &format!("/evolution/skill-drafts/{}/reject", draft_id),
+            serde_json::json!({}),
+        )
+        .await
+}
+
+/// Phase 19 V1：进化看板统计（信号分布 / 经验数 / 草稿数 / Judge 均分）。
+#[tauri::command]
+pub async fn evolution_stats(state: State<'_, AppState>) -> AppResult<serde_json::Value> {
+    state.agent_get("/evolution/stats").await
+}
+
+/// Phase 19 V1.5：运行 Few-shot 影子优化实验（离线回放，同步返回结果）。
+#[tauri::command]
+pub async fn evolution_prompt_opt_run(
+    body: serde_json::Value,
+    state: State<'_, AppState>,
+) -> AppResult<serde_json::Value> {
+    state.agent_post("/evolution/prompt-optimization/run", body).await
+}
+
+/// Phase 19 V1.5：Prompt 版本列表（可按 skill 过滤）。
+#[tauri::command]
+pub async fn evolution_prompt_versions(
+    skill_id: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<serde_json::Value> {
+    let query = skill_id.filter(|s| !s.is_empty()).map(|s| format!("?skill_id={}", s)).unwrap_or_default();
+    state.agent_get(&format!("/evolution/prompt-versions{}", query)).await
+}
+
+/// Phase 19 V1.5：采纳 Prompt 版本（写回技能 few-shot）。
+#[tauri::command]
+pub async fn evolution_prompt_version_apply(
+    version_id: i64,
+    state: State<'_, AppState>,
+) -> AppResult<serde_json::Value> {
+    state
+        .agent_post(
+            &format!("/evolution/prompt-versions/{}/apply", version_id),
+            serde_json::json!({}),
+        )
+        .await
+}
+
+/// Phase 19 V1.5：一键回滚到上一版本。
+#[tauri::command]
+pub async fn evolution_prompt_version_rollback(
+    version_id: i64,
+    state: State<'_, AppState>,
+) -> AppResult<serde_json::Value> {
+    state
+        .agent_post(
+            &format!("/evolution/prompt-versions/{}/rollback", version_id),
+            serde_json::json!({}),
+        )
+        .await
+}
+
 /// 诊断用：当前有多少个活跃的 SSE 流？
 #[tauri::command]
 pub async fn agent_active_runs(state: State<'_, AppState>) -> AppResult<usize> {

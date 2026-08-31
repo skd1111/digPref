@@ -93,9 +93,13 @@ class Settings(BaseSettings):
     # 视觉模型（Moondream2，截图理解）
     local_vision_base_url: str | None = None
     local_vision_model: str | None = None
-    # Embedding 模型（bge-small-zh，外部 KB 检索用）
+    # Embedding 模型（意图语义路由 / Few-Shot 检索 / KB 向量化共用）
+    # 进程内 ONNX 优先（bge-small-zh-v1.5 量化版，随安装包分发，纯 CPU）；
+    # 显式配置 local_embedding_base_url 时改走外置 OpenAI 兼容端点。
     local_embedding_base_url: str | None = None
     local_embedding_model: str | None = None
+    # 进程内向量模型目录（含 tokenizer.json 与 onnx/model_quantized.onnx）
+    local_embedding_onnx_dir: str = "model/bge-small-zh-v1.5-onnx"
 
     # ---- Phase 4 V1 本地知识库 ----
     # 知识库 SQLite 路径（相对路径 → 测试 chdir 到 tmp_path 时自动隔离）
@@ -103,14 +107,22 @@ class Settings(BaseSettings):
     # RAG 检索节点是否接入主图（START → intent → rag_retrieve → planner）
     # 默认 True；测试可设 EAIDE_RAG_ENABLED=false 跳过 rag_retrieve
     rag_enabled: bool = True
-    # 默认 embedding 维度（bge-small-zh-v1.5 = 384）
-    local_embedding_dim: int = Field(default=384, ge=64, le=4096)
+    # 默认 embedding 维度（bge-small-zh-v1.5 实测 512 维；仅零向量兜底用）
+    local_embedding_dim: int = Field(default=512, ge=64, le=4096)
 
     # ---- 意图向量快速路由（semantic-router 模式，2026-08-07）----
-    # 总开关：命中预置 Route 时零 LLM 直出意图分析；未命中/不可用静默回退原链路
-    semantic_route_enabled: bool = False
+    # 总开关：命中预置 Route 时零 LLM 直出意图分析；未命中/不可用静默回退原链路。
+    # 2026-08-31 起默认开启（进程内 ONNX 向量模型；模型文件缺失时静默回退，
+    # 不影响主链路）
+    semantic_route_enabled: bool = True
     # 余弦相似度命中阈值（低于此值视为未命中，回退 LLM 分析）
     semantic_route_threshold: float = Field(default=0.78, ge=0.5, le=1.0)
+    # V2（2026-08-31）：困难负样本拦截裕度——负样本分 >= 正样本分 - margin 即拦截
+    semantic_route_negative_margin: float = Field(default=0.02, ge=0.0, le=0.5)
+    # V2：BM25 混合检索权重（0 = 纯向量；无关键词信号时自动保持纯向量）
+    semantic_route_hybrid_weight: float = Field(default=0.35, ge=0.0, le=0.9)
+    # V2：高风险路由（删库/远程执行类）默认命中阈值，高于普通路由
+    semantic_route_high_risk_threshold: float = Field(default=0.85, ge=0.5, le=1.0)
 
     # ---- Phase 13 DSpark 推测解码 ----
     # 策略 yaml 路径（不存在 / 解析失败 → 落回 DEFAULT_POLICIES）
@@ -184,6 +196,10 @@ class Settings(BaseSettings):
     doc_review_fiscal_sem_weight: float = Field(default=0.5, ge=0.0, le=1.0)
     # 混合检索最低得分阈值（低于该分的章节不注入，避免无关规则干扰）
     doc_review_fiscal_min_score: float = Field(default=0.10, ge=0.0, le=1.0)
+    # 语义通道独立下限（2026-08-31）：无关键词命中时，余弦低于该值不入选。
+    # BGE 对无关中文对的基线余弦 ~0.3、真相关 ≥0.6，取 0.4 隔开两段；
+    # 进程内向量模型默认启用后靠它挡住「闲聊文档注入财税规则」的误召回。
+    doc_review_fiscal_sem_min: float = Field(default=0.40, ge=0.0, le=1.0)
 
     # ---- Phase 7 V0 数据专家模式 ----
     # 数据专家 SQLite 路径（与 audit / router / knowledge / ssh 等 db 物理隔离）
@@ -283,6 +299,11 @@ class Settings(BaseSettings):
     # 经验注入：单次检索条数上限 + 注入片段字符上限（防挤占上下文）
     evolution_experience_top_k: int = Field(default=3, ge=1, le=10)
     evolution_experience_max_chars: int = Field(default=1200, ge=200, le=4000)
+    # Phase 19 V1：技能蒸馏触发门槛（同签名成功次数；草稿永不自动启用）
+    skill_draft_min_successes: int = Field(default=3, ge=2, le=20)
+    # Phase 19 V1.5：Prompt 影子优化——采纳最小得分增益（1-5 制）与自动采纳开关（默认人工确认）
+    prompt_optimize_gain_threshold: float = Field(default=0.5, ge=0.0, le=2.0)
+    evolution_prompt_auto_adopt: bool = False
 
 
 settings = Settings()

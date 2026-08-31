@@ -38,6 +38,7 @@ import { ExpertTeamSelector } from '@/components/chat/ExpertTeamSelector';
 import { SlashMenu } from '@/components/chat/SlashMenu';
 import { CHAT_RETRY_EVENT, CHAT_SEND_EVENT } from '@/components/chat/ChatMessage';
 import { useUIStore } from '@/store/uiStore';
+import { useDataStore } from '@/store/dataStore';
 import { useCodeNavStore } from '@/store/codeNavStore';
 import { useBiznavStore } from '@/store/biznavStore';
 import { useExpertTeamStore } from '@/store/expertTeamStore';
@@ -545,8 +546,20 @@ export function ChatInput(): JSX.Element {
         // 注入 intent/decompose prompt，消除「连接」这类模糊动词的场景歧义
         // （如当前页签就是「内网模型接入配置」时，「连接」= 写入接入配置）；
         // tabId（2026-08-25）：会话级审批豁免（「此后都按此执行」）的作用域键，
-        // 豁免只在当前页签生效，切新会话不复用
-        pageContext: { page: { workMode, tabTitle: activeTab?.title ?? '', tabId: activeTab?.id ?? '' } },
+        // 豁免只在当前页签生效，切新会话不复用；
+        // activeEntity（2026-08-31）：数据工作台当前选中的表——「删掉最后一条」
+        // 这类短句可直接锁定目标实体，免 LLM 幻觉或再次追问（协议支持
+        // kind=table/terminal/file，当前仅数据工作台接入）
+        pageContext: {
+          page: {
+            workMode,
+            tabTitle: activeTab?.title ?? '',
+            tabId: activeTab?.id ?? '',
+            activeEntity: useDataStore.getState().selectedTable
+              ? { kind: 'table', name: useDataStore.getState().selectedTable }
+              : null,
+          },
+        },
         // Skill 粘性（2026-08-26）：上一轮命中的 skill，追问/修改轮由后端继承，
         // 防「太丑了重做」脱离设计规范的裸生成；`/` 指令选中时优先用该项（2026-08-28）
         lastSkillId: pendingSkillId ?? chatState.lastSkillId ?? null,

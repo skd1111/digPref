@@ -19,7 +19,6 @@ import logging
 import math
 from typing import Any
 
-from agent.config import settings
 from agent.dataexpert.models import TableSchema
 
 logger = logging.getLogger(__name__)
@@ -29,21 +28,15 @@ MAX_TABLES = 5
 
 
 def build_embedding_client() -> Any | None:
-    """按 settings 懒构建本地 embedding 客户端；未配置返 None（调用方退化关键字）。
+    """按统一入口懒构建本地 embedding 客户端（进程内 ONNX 优先，显式配置走 HTTP）。
 
     与 FiscalTaxRuleProvider 同模式（doc_review/fiscal_rules.py）：
-    本地 embedding 服务不可达时 LocalEmbeddingClient 会返零向量，
-    由调用方检查 any(vec) 后退化 —— 功能不中断。
+    模型不可用时客户端 health_check 返 False / 返零向量，
+    由调用方检查后退化关键字 —— 功能不中断。
     """
-    if not settings.local_embedding_base_url:
-        return None
-    from agent.llm.embedding import LocalEmbeddingClient
+    from agent.llm.embedding import build_default_embedding_client
 
-    return LocalEmbeddingClient(
-        base_url=settings.local_embedding_base_url,
-        model=settings.local_embedding_model or "bge-small-zh-v1.5",
-        dimensions=settings.local_embedding_dim,
-    )
+    return build_default_embedding_client()
 
 
 async def select_tables(

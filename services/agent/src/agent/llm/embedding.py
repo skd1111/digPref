@@ -1,6 +1,8 @@
 """LocalEmbeddingClient —— 本地 Embedding 模型客户端。
 
 Phase 4 V0：为外部 KB 检索提供向量化能力。
+2026-08-31：新增统一构建入口 —— 进程内 ONNX 向量模型优先（随安装包分发，
+纯 CPU 无外部服务依赖），显式配置 base_url 时改走外置 OpenAI 兼容端点。
 """
 
 from __future__ import annotations
@@ -11,6 +13,30 @@ from typing import Any
 import httpx
 
 logger = logging.getLogger("agent.llm.embedding")
+
+# 本地向量模型默认名（model/bge-small-zh-v1.5-onnx 下的量化 ONNX 模型）
+DEFAULT_EMBEDDING_MODEL = "bge-small-zh-v1.5"
+
+
+def build_default_embedding_client() -> Any | None:
+    """构建默认向量客户端（接口一致：embed / embed_batch / health_check）。
+
+    优先级：
+        1. settings.local_embedding_base_url → 外置 OpenAI 兼容端点（HTTP）
+        2. 进程内 ONNX（bge-small-zh-v1.5 量化版）——模型文件缺失时
+           客户端 health_check 返 False，调用方静默回退（零向量契约）。
+    """
+    from agent.config import settings
+
+    if settings.local_embedding_base_url:
+        return LocalEmbeddingClient(
+            base_url=settings.local_embedding_base_url,
+            model=settings.local_embedding_model or DEFAULT_EMBEDDING_MODEL,
+            dimensions=settings.local_embedding_dim,
+        )
+    from agent.llm.onnx_embedding import get_onnx_embedding_client
+
+    return get_onnx_embedding_client()
 
 
 class LocalEmbeddingUnavailableError(Exception):

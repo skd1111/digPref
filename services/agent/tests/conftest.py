@@ -42,6 +42,17 @@ def _isolate(monkeypatch, tmp_path):
     # 动态工具循环：测试默认走既有 planner → tool_runner 路径
     # （loop 相关测试用 monkeypatch.setattr(settings, "tool_loop_enabled", True) 单独开启）
     monkeypatch.setattr(settings, "tool_loop_enabled", False)
+    # 语义路由（2026-08-31 默认开启）：测试默认关闭，避免真实进程内向量模型
+    # 干扰断言；专项测试自行 setattr(True) + 注入伪 embedding。
+    monkeypatch.setattr(settings, "semantic_route_enabled", False)
+    try:
+        from agent.graph.semantic_route import reset_semantic_router
+        from agent.llm.onnx_embedding import reset_onnx_embedding_client
+
+        reset_semantic_router()
+        reset_onnx_embedding_client()
+    except Exception:
+        pass
     # 禁用 Redis —— 测试走进程内 dict fallback
     monkeypatch.delenv("EAIDE_REDIS_URL", raising=False)
     # 禁用内网 LLM —— 测试只用 mock

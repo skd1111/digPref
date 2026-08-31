@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
-from typing import TYPE_CHECKING
+from collections.abc import Coroutine
+from typing import TYPE_CHECKING, Any
 
 from agent.graph.state import AgentState, record_trace
 from agent.llm.router import LMRouter
@@ -45,6 +47,15 @@ _FOLLOWUP_CUES = (
 )
 # 粘性生效的输入长度上限：长输入大概率是新任务，不继承旧 skill（关键词层会重新判）
 _FOLLOWUP_MAX_LEN = 120
+
+# 成功路由回写的 fire-and-forget 任务集（防 GC；RUF006）
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+
+def _spawn_background(coro: Coroutine[Any, Any, None]) -> None:
+    task = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
 def _looks_like_followup(prompt: str) -> bool:
@@ -158,6 +169,21 @@ async def intent_node(state: AgentState, llm: LMRouter) -> dict:
         from agent.graph.state import format_page_context
 
         page_line = format_page_context(state.get("page_context"))
+        # 操作链路短期记忆（2026-08-31）：追问/修改类短句注入同任务页签的
+        # 近期意图链路，让「换个参数再跑一次」继承上一轮的意图框架。
+        if _looks_like_followup(prompt):
+            try:
+                from agent.graph.intent_memory import recent_chain
+
+                chain = await recent_chain(str(state.get("task_id") or "default"))
+                if chain:
+                    page_line = (
+                        (page_line + "；" if page_line else "")
+                        + "前几轮操作："
+                        + " → ".join(chain[-3:])
+                    )
+            except Exception:  # 记忆读取故障不影响分析，静默跳过
+                pass
         try:
             analysis = await llm.analyze_intent(
                 prompt, state.get("messages"), page_context=page_line
@@ -165,6 +191,17 @@ async def intent_node(state: AgentState, llm: LMRouter) -> dict:
         except TypeError:
             # 注入替身不支持 page_context 参数 → 去掉参数再调（向后兼容）
             analysis = await llm.analyze_intent(prompt, state.get("messages"))
+
+    # 结构化槽位校验（2026-08-31）：必填实体缺失且高风险 → 代码层强制追问，
+    # 绝不放行猜测执行；语义路由直出（_route 标记）为预置结果跳过。
+    if isinstance(analysis, dict) and "_route" not in analysis:
+        try:
+            from agent.llm.intent_slots import validate_slots
+
+            analysis = validate_slots(analysis)
+        except Exception as exc:  # 校验故障不影响主链路，回退原结果
+            cot_log("intent.slot_guard.error", run_id=run_id, error=repr(exc))
+
     if isinstance(analysis, dict) and analysis.get("intent"):
         intent = analysis["intent"]
         cot_log(
@@ -182,6 +219,41 @@ async def intent_node(state: AgentState, llm: LMRouter) -> dict:
             entities=analysis.get("entities"),
             missing_fields=analysis.get("missing_fields"),
         )
+        # 成功路由回写（2026-08-31）：Few-Shot 案例库 + 操作链路记忆（fire-and-
+        # forget；只存实体键名，参数明文不落库）。语义路由直出（_route）与
+        # plain/mock 降级结果不入库。
+        if "_route" not in analysis and str(analysis.get("backend") or "") not in (
+            "plain",
+            "empty",
+            "mock",
+            "",
+        ):
+            try:
+                from agent.graph.intent_memory import (
+                    record_example,
+                    record_recent,
+                    summarize_analysis,
+                )
+
+                raw_entities = analysis.get("entities")
+                entity_keys = (
+                    list(raw_entities.keys()) if isinstance(raw_entities, dict) else []
+                )
+                _spawn_background(
+                    record_example(
+                        run_id,
+                        str(analysis.get("rewritten_query") or prompt),
+                        str(analysis.get("intent_category") or ""),
+                        entity_keys,
+                    )
+                )
+                _spawn_background(
+                    record_recent(
+                        str(state.get("task_id") or "default"), summarize_analysis(analysis)
+                    )
+                )
+            except Exception:  # 回写故障绝不影响主链路
+                pass
     else:
         intent = await llm.classify_intent(prompt)
         analysis = None

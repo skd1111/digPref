@@ -242,6 +242,9 @@ def format_page_context(page_context: Any) -> str:
 
     输入形如 {"page": {"workMode": "operator", "tabTitle": "内网模型接入配置"}}；
     非法/空输入返空串（调用方判空后决定是否注入）。
+    活跃实体（2026-08-31）：page.activeEntity = {kind, name}（如当前正查看的
+    表/终端/文件），压成「当前正查看数据表 order_main」——「删掉最后一条」
+    这类短句可直接锁定目标实体，免 LLM 幻觉或再次追问。
     """
     if not isinstance(page_context, dict):
         return ""
@@ -258,6 +261,13 @@ def format_page_context(page_context: Any) -> str:
         parts.append(f"页面路由 {route[:60]}")
     if work_mode:
         parts.append(f"模式 {work_mode}")
+    entity = page.get("activeEntity")
+    if isinstance(entity, dict):
+        kind = str(entity.get("kind") or "").strip()
+        name = str(entity.get("name") or "").strip()
+        kind_text = {"table": "数据表", "terminal": "终端会话", "file": "文件"}.get(kind, kind)
+        if name and kind_text:
+            parts.append(f"当前正查看{kind_text} {name[:60]}")
     return "、".join(parts)
 
 

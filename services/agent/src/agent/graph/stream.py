@@ -126,7 +126,11 @@ _CHANNEL_BY_KIND = {
     "file_write_preview": "agent://file_write_preview",
     # Phase 19 V0：自进化闭环 SSE 三处同步（CLAUDE.md §4）
     # evolution_insight_created：失败反思产出新经验（前端经验库页刷新）
+    # Phase 19 V1：skill_draft_ready 技能蒸馏草稿待审（前端技能页草稿区刷新）
+    # Phase 19 V1.5：evolution_experiment_done Prompt 优化实验完成（前端实验面板刷新）
     "evolution_insight_created": "agent://evolution_insight_created",
+    "skill_draft_ready": "agent://skill_draft_ready",
+    "evolution_experiment_done": "agent://evolution_experiment_done",
 }
 
 
@@ -152,6 +156,11 @@ _MAX_SILENCE_SEC = 600.0
 # 细粒度事件（shell_chunk / tool_progress）也不能被卡到节点结束才下发，
 # wait_for 超时改用小间隔轮询，心跳仍按 15s 节奏。
 _EVENT_POLL_INTERVAL_SEC = 0.4
+
+# Phase 19 V0：收尾后台任务强引用集合 —— 事件循环对 create_task 产物只持弱引用，
+# 轨迹抽取/反思任务挂起在 I/O 上时可能被 GC 回收导致进化链路静默丢失；
+# 与 evolution/api.py 的 _BACKGROUND_TASKS 同范式，完成后 discard。
+_EVOLUTION_BG_TASKS: set[asyncio.Task[Any]] = set()
 
 
 # ---- 协作式取消旗标（执行过程可视化）--------------------------------------
@@ -429,13 +438,15 @@ async def stream_graph_events(
             try:
                 from agent.evolution.trajectory import record_run_outcome
 
-                asyncio.get_running_loop().create_task(
+                task = asyncio.get_running_loop().create_task(
                     record_run_outcome(
                         run_id=run_id,
                         user_prompt=prompt,
                         state=dict(last_values),
                     )
                 )
+                _EVOLUTION_BG_TASKS.add(task)
+                task.add_done_callback(_EVOLUTION_BG_TASKS.discard)
             except Exception:
                 pass  # best-effort：进化失败绝不影响主链路
         yield _sse_event(

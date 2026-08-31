@@ -18,6 +18,7 @@ import pytest
 from agent.config import settings
 from agent.evolution import events, memory, reflection, signature, storage, trajectory
 from agent.evolution.api import router as evolution_router
+from agent.skills.schema import scrub_dsn
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -180,6 +181,16 @@ class TestReflection:
         exp = await reflection.run_reflection({"session_id": "r", "outcome": "fail"})
         assert exp is None
 
+    @pytest.mark.asyncio
+    async def test_reflection_dedup_per_session(self):
+        """同会话已产出经验 → 第二次反思跳过（不重复入库，也不白跑 LLM）。"""
+        await storage.insert_experience(insight="已有教训", tags=[], source_session="run-dup")
+        exp = await reflection.run_reflection(
+            {"session_id": "run-dup", "outcome": "fail", "answer_digest": "x"}
+        )
+        assert exp is None
+        assert len(await storage.list_experiences()) == 1
+
 
 # ---- 经验注入（extra_rules 通道） --------------------------------------------
 
@@ -206,6 +217,18 @@ class TestMemoryInjection:
 
     def test_addon_empty_without_experiences(self):
         assert memory.experience_addon({}) == ""
+
+    @pytest.mark.asyncio
+    async def test_retrieval_cached_schema_still_works(self, tmp_path):
+        """建表标志缓存后检索照常；库文件被删后返空兜底且缓存自清。"""
+        dbp = str(tmp_path / "evo.db")
+        await storage.insert_experience(insight="缓存路径也要能查到", tags=[], db_path=dbp)
+        got1 = storage.retrieve_experiences_sync("a", "", db_path=dbp)
+        got2 = storage.retrieve_experiences_sync(
+            "a", "", db_path=dbp
+        )  # 命中缓存路径（不再执行 DDL）
+        assert [e["insight"] for e in got1] == ["缓存路径也要能查到"]
+        assert [e["insight"] for e in got2] == ["缓存路径也要能查到"]
 
 
 # ---- 轨迹钩子 ----------------------------------------------------------------
@@ -265,6 +288,51 @@ class TestTrajectoryHook:
             run_id="run-x", user_prompt="x", state={"final_answer": "ok"}
         )
         assert await storage.latest_trajectory_by_session("run-x") is None
+
+    @pytest.mark.asyncio
+    async def test_scrub_dsn_redacts_patterns(self):
+        """DSN / 凭证形态整段脱敏；普通文本不误伤。"""
+        out = scrub_dsn("连 mysql://root:secret@db.internal:3306/x 查一下")
+        assert "root" not in out and "secret" not in out
+        assert "[REDACTED_DSN]" in out
+        assert scrub_dsn("jdbc:oracle://u:p@h/db") == "[REDACTED_DSN]"
+        assert "[REDACTED_CRED]" in scrub_dsn("用 admin:pa55@10.0.0.1 登录")
+        assert scrub_dsn("普通文本 mail@x.com 不被误伤") == "普通文本 mail@x.com 不被误伤"
+        assert scrub_dsn("") == ""
+
+    @pytest.mark.asyncio
+    async def test_outcome_markers_no_false_positive(self):
+        """成功回答含「重试」字样不误判失败；整句硬失败文案才判失败。"""
+        state_ok = {"final_answer": "已按您的要求重试成功，共处理 3 条记录。", "trace": []}
+        assert trajectory._judge_outcome(state_ok) == "success"
+        state_fail = {"final_answer": "工具 db.query 在自动重试 2 次后仍然失败。", "trace": []}
+        assert trajectory._judge_outcome(state_fail) == "fail"
+
+    @pytest.mark.asyncio
+    async def test_persisted_texts_scrubbed(self):
+        """提示词 / 终答摘要里的连接串落库前脱敏（红线 §8）。"""
+        await trajectory.record_run_outcome(
+            run_id="run-scrub",
+            user_prompt="连 mysql://root:secret@db:3306/x 查数据",
+            state={
+                "final_answer": "结果是 jdbc:postgresql://u:p@h/d 里的 42 条",
+                "trace": [],
+            },
+        )
+        latest = await storage.latest_trajectory_by_session("run-scrub")
+        assert latest is not None
+        assert "secret" not in latest["answer_digest"]
+        assert "[REDACTED_DSN]" in latest["answer_digest"]
+        conn = __import__("sqlite3").connect(settings.evolution_db_path)
+        try:
+            row = conn.execute(
+                "SELECT reason FROM evaluation_signals WHERE session_id = ?",
+                ("run-scrub",),
+            ).fetchone()
+        finally:
+            conn.close()
+        assert row is not None
+        assert "secret" not in str(row[0]) and "[REDACTED_DSN]" in str(row[0])
 
 
 # ---- API ---------------------------------------------------------------------

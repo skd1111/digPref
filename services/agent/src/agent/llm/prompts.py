@@ -23,7 +23,8 @@ PROMPT_VERSIONS: dict[str, str] = {
     "summarise": "v1.0.1",
     "intent": "v1.0.0",
     # v1.0.1 (2026-08-14): 新增 model_onboard / conn_test 细分类型 + 操作类 few-shot
-    "intent_router": "v1.0.1",
+    # v1.0.2 (2026-08-31): 动态 Few-Shot 注入纪律（参考历史案例段仅参考不照搬）
+    "intent_router": "v1.0.2",
     "planner": "v1.0.0",
     "repair": "v1.0.0",
     "judge": "v1.0.0",

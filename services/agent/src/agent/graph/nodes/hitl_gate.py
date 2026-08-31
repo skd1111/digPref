@@ -96,6 +96,17 @@ async def hitl_gate_node(state: AgentState, llm: Any | None = None) -> dict:
                     reason=f"用户选择「此后都按此执行」：{kind}（scope={scope}）",
                 )
                 decision = "approve"
+            # 意图闭环反馈（2026-08-31）：用户拒绝审批 → 原始查询登记困难样本，
+            # 供语义路由动态负样本拦截同类误触发（仅用户显式拒绝；超时守卫不算）。
+            if decision == "reject":
+                try:
+                    from agent.graph.intent_memory import add_hard_sample
+
+                    await add_hard_sample(
+                        str(state.get("user_prompt") or "")[:500], source="hitl_reject"
+                    )
+                except Exception:  # 回流故障不影响审批主流程
+                    pass
             # 决策已到达 → 清理并返回
             await cleanup_approval(existing_id)
             return {

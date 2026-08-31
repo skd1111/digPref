@@ -674,7 +674,9 @@ class TestLocalOnlyTasksV1:
         # v2.87 (2026-08-13) Phase 7 MetricResolver 抽象层新增 metric_resolve → 17
         # (2026-08-17) 会话历史压缩 history_compress 入本地红线 → 18
         # Phase 19 V0 (2026-08-31) 自进化失败反思 reflection 入本地红线 → 19
-        assert len(_LOCAL_ONLY_TASKS) == 19, f"got {_LOCAL_ONLY_TASKS}"
+        # Phase 19 V1 (2026-08-31) skill_distill + answer_judge 入本地红线 → 21
+        # Phase 19 V1.5 (2026-08-31) prompt_optimize 影子优化入本地红线 → 22
+        assert len(_LOCAL_ONLY_TASKS) == 22, f"got {_LOCAL_ONLY_TASKS}"
 
 
 # ---- stream.py SSE 三处同步 ----------------------------------------------------

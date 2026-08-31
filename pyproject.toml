@@ -56,7 +56,8 @@ shared-protocol = { workspace = true }
 [tool.ruff]
 line-length = 100
 target-version = "py310"
-extend-exclude = ["**/migrations/**", "**/.venv/**"]
+# *.spec 是 PyInstaller DSL（Analysis/PYZ/EXE 为注入名），不纳入 lint
+extend-exclude = ["**/migrations/**", "**/.venv/**", "*.spec"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "ASYNC", "RUF"]
@@ -139,6 +140,8 @@ module = [
     "docling.*",
     "pyarrow",
     "pyarrow.*",
+    "tokenizers",
+    "onnxruntime",
 ]
 ignore_missing_imports = true
 
