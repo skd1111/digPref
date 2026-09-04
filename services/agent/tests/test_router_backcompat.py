@@ -37,7 +37,17 @@ def test_public_api_signatures_frozen():
         "repair_call": ["self", "original", "error", "history"],
         # history（BUGFIX #135）：新增可选参数（带默认值，不破坏既有调用方），
         # 终答链恢复跨轮上下文；红线是既有参数名不可变，新增可选参数合法。
-        "summarise": ["self", "intent", "user_prompt", "plan", "results", "history"],
+        # rag_context（根因修复 2026-09-04）：同理新增可选参数，把知识库召回
+        # 注入终答 prompt；router 侧按后端能力探测透传，旧后端不受影响。
+        "summarise": [
+            "self",
+            "intent",
+            "user_prompt",
+            "plan",
+            "results",
+            "history",
+            "rag_context",
+        ],
     }
     for method, expected in sig.items():
         params = list(inspect.signature(getattr(LMRouter, method)).parameters)

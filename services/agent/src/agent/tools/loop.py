@@ -16,6 +16,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
+import time
 from typing import Any
 
 from agent.config import settings
@@ -180,6 +182,68 @@ def _stagnant_ask_directive(n: int) -> str:
         "1) 简述已尝试过什么、卡在哪一步；2) 明确列出需要用户补充的东西"
         "（如素材文件路径、目标与结构要求、缺失的环境依赖等），一次问全并给出示例。"
         "禁止再发起工具调用，禁止输出空洞的「请补充关键信息」。"
+    )
+
+
+# ---- 发散刹车（根因修复 2026-09-04）----------------------------------
+# 背景：用户问「找一下对公转账汇兑的规章制度」，知识库 bm25=80 已命中，
+# 但召回未注入作答 → 模型进工具循环后用 shell 跨盘符 dir C:/D:/E:/F:、glob、
+# find 到处翻找，每轮命令都不同 → 现有「连续完全相同」的重复熔断与「零成功」
+# 的停滞熔断都拦不住（它们每轮都 ok=True 且指纹在变），24 轮预算慢慢烧、
+# 看上去就是卡死。这里专门统计「只读文件探测」类发散扫描，超阈先强制收敛、再硬停。
+_FS_PROBE_TOOLS = frozenset(
+    {"glob", "find", "list_dir", "grep", "search_files", "tree", "builtin_list_dir", "builtin_find"}
+)
+# shell 里的目录/搜索类命令（发散扫描特征）；不管 read_file（coding 任务读文件是合法的）
+_FS_SHELL_CMD_RE = re.compile(
+    r"^\s*(?:dir|ls|get-childitem|gci|tree|find|grep|rg|where|pwd|cd|echo\s+%cd%)\b",
+    re.IGNORECASE,
+)
+_SHELL_TOOL_NAMES = frozenset({"shell", "builtin_shell", "run_command", "execute", "run_shell"})
+
+
+def _is_fs_probe(name: str, args: dict) -> bool:
+    """是否为「只读文件系统探测/搜索」调用（发散扫描的特征，不含读文件内容）。"""
+    n = (name or "").lower()
+    if n in _FS_PROBE_TOOLS:
+        return True
+    if n in _SHELL_TOOL_NAMES:
+        cmd = str(args.get("command") or "")
+        if not cmd:
+            argv = args.get("argv")
+            if isinstance(argv, (list, tuple)):
+                cmd = " ".join(str(a) for a in argv)
+        return bool(_FS_SHELL_CMD_RE.match(cmd.strip()))
+    return False
+
+
+def _fs_probe_target(name: str, args: dict) -> str:
+    """探测目标（路径/模式）——用于统计不同目标的发散度。"""
+    for key in ("path", "base_dir", "pattern", "command", "argv", "dir", "target"):
+        val = args.get(key)
+        if val:
+            if isinstance(val, (list, tuple)):
+                return " ".join(str(v) for v in val)
+            return str(val)
+    return str(name or "")
+
+
+def _fs_divergence_directive(n: int, distinct: int) -> str:
+    """发散扫描达软阈后注入的强制收敛指令。"""
+    return (
+        f"【系统强制指令】你已发起 {n} 次文件系统探测（涉及 {distinct} 个不同路径/盘符）仍未收敛。"
+        "立即停止用 dir/ls/glob/find 全盘翻找。若上方已给出【本地知识库检索结果】，"
+        "直接据此作答并标注来源；若已有工具结果足以回答，立即输出 FINAL_ANSWER；"
+        "若确实找不到，直接告知用户未找到并询问文档位置，绝不再扫描其他盘符/目录。"
+    )
+
+
+def _fs_divergence_msg(n: int, distinct: int) -> str:
+    """发散扫描硬停终答。"""
+    return (
+        f"检测到在文件系统里发散式翻找（共 {n} 次目录/搜索探测，涉及 {distinct} 个不同路径），"
+        "已停止以避免空转。若你要找的是制度/文档类内容，它们应在【知识库】里——"
+        "请确认相关文档已上传到知识库，或直接告诉我文档的具体位置/项目名，我再定向查找。"
     )
 
 
@@ -862,6 +926,13 @@ class DynamicToolLoop:
             skill_addon = _active_skill_addon(merged)
             if skill_addon:
                 system += "\n\n" + skill_addon
+            # 知识库召回注入（根因修复 2026-09-04）：rag_retrieve 的召回此前从不进
+            # native 循环 → 模型看不到库里已有的资料，转而用 shell 全盘翻找。
+            rag_addon = str(merged.get("system_prompt_addon") or "").strip()
+            if rag_addon:
+                from agent.llm.prompts import format_rag_block
+
+                system += "\n\n" + format_rag_block(rag_addon).strip()
             # 当前时间注入（BUGFIX #113）：native 循环的 FINAL_ANSWER 由模型
             # 直接透传给用户不经 summarise，不注入时间基准时会凭记忆编造日期
             # （用户问「今天几号」答「10月10日」）。纪律见 _NATIVE_SYSTEM_PROMPT §7。
@@ -947,7 +1018,34 @@ class DynamicToolLoop:
         stagnant_asked = False  # 达阈后是否已给过强制追问轮（BUGFIX #182）
         # 重复调用熔断（BUGFIX #165）：按执行顺序记录调用指纹，末尾连续相同即空转
         call_fingerprints: list[str] = []
+        # 发散刹车（根因修复 2026-09-04）：统计只读文件探测次数与不同目标数
+        fs_probe_count = 0
+        fs_probe_targets: set[str] = set()
+        fs_divergence_asked = False
+        fs_soft_limit = int(getattr(settings, "tool_loop_fs_probe_soft_limit", 6))
+        fs_hard_limit = int(getattr(settings, "tool_loop_fs_probe_hard_limit", 12))
+        # 墙钟超时（根因修复 2026-09-04）：云端每轮往返可能长达百秒，24 轮累计
+        # 可达十几分钟 → 用户感知为死机。单 run 超墙钟即收敛，不再空烧预算。
+        wall_clock_limit = float(getattr(settings, "tool_loop_wall_clock_sec", 240.0))
+        loop_started = time.monotonic()
         for _ in range(self._max_turns):
+            # 墙钟超时刹车：超限时用已有上下文收敛作答，不再发起新一轮
+            if wall_clock_limit > 0 and (time.monotonic() - loop_started) > wall_clock_limit:
+                return _emit(
+                    self._done(
+                        final_answer=_budget_exhausted_msg(turn),
+                        tool_turn_count=turn,
+                        tool_results=tool_results,
+                        trace=[
+                            record_trace(
+                                "tool_orchestrator",
+                                "fail",
+                                reason="wall_clock_timeout",
+                                mode="native",
+                            )
+                        ],
+                    )
+                )
             # 协作式取消（执行过程可视化）：native 循环内每轮边界也查旗标，
             # 命中返 None → 调用方 run() 顶部旗标检查已先走短路（此时 state 未变，
             # 下一轮循环入口重新判定）；这里直接返终答更直接。
@@ -1193,6 +1291,51 @@ class DynamicToolLoop:
                                 repeats=repeats,
                             )
                         ],
+                    )
+                )
+
+            # 发散刹车（根因修复 2026-09-04）：累计只读文件探测；跨盘符/多路径
+            # 发散扫描（每轮命令都不同、都 ok）绕过了重复/停滞熔断，这里单独拦。
+            for _c, _ in executed_pairs:
+                _cname = str(_c.get("name") or "")
+                _cargs = _c.get("arguments") if isinstance(_c.get("arguments"), dict) else {}
+                if _is_fs_probe(_cname, _cargs):
+                    fs_probe_count += 1
+                    fs_probe_targets.add(_fs_probe_target(_cname, _cargs)[:120])
+            distinct_targets = len(fs_probe_targets)
+            if fs_hard_limit > 0 and fs_probe_count >= fs_hard_limit:
+                return _emit(
+                    self._done(
+                        final_answer=_fs_divergence_msg(fs_probe_count, distinct_targets),
+                        tool_turn_count=turn,
+                        tool_results=tool_results,
+                        trace=[
+                            record_trace(
+                                "tool_orchestrator",
+                                "fail",
+                                reason="fs_divergence",
+                                mode="native",
+                                probes=fs_probe_count,
+                            )
+                        ],
+                    )
+                )
+            if fs_soft_limit > 0 and fs_probe_count >= fs_soft_limit and not fs_divergence_asked:
+                # 达软阈不直接停：注入强制收敛指令，给模型一次据库/据已有结果作答的机会
+                fs_divergence_asked = True
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": _fs_divergence_directive(fs_probe_count, distinct_targets),
+                    }
+                )
+                op_traces.append(
+                    record_trace(
+                        "tool_orchestrator",
+                        "running",
+                        reason="fs_divergence_force_converge",
+                        mode="native",
+                        probes=fs_probe_count,
                     )
                 )
 

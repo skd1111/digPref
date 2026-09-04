@@ -5,6 +5,13 @@
 
 ## 2026-09-04
 
+### v2.134 — macOS 日志/数据根修复 + 设置页「一键导出全部日志」（BUGFIX #193）
+
+- **背景**：用户反馈 macOS 版文档审核报 `doc_review generate_review failed: cloud: not configured; private: not configured`，且按 About 页写的 Windows 路径找不到任何日志文件。排查确认两症状同源：Rust 数据根 `get_app_data_dir()` 返回只读 .app 包内目录（`/Applications/EAIDE.app/Contents/MacOS/`），所有写操作（日志/audit.sqlite/llm-config.json）被 Gatekeeper 拒绝且被 `let _ =` 静默吞掉；而 Python 子进程 cwd 早已重定向到 `~/Library/Application Support/eaide/`，两路数据根不一致。LLM not configured 本身是 macOS 全新安装未配后端（router.db 不跨平台迁移），属用户侧配置，但「找不到日志」让用户无法自助排查。
+- **改动**：① **macOS 数据根对齐**：[agent_manager.rs](../apps/desktop/src-tauri/src/agent_manager.rs) `get_app_data_dir()` 增加 `#[cfg(target_os="macos")]` 分支强制返回 `~/Library/Application Support/eaide/`（与 `agent_runtime_dir()` 一致），Windows/Linux 不变。② **新增导出命令**：新文件 [commands/logs.rs](../apps/desktop/src-tauri/src/commands/logs.rs) `export_all_logs(dest_path)`，收集 `<data>/logs/` 下 eaide.log/crash.log（rust/）+ agent.log/cot.log/orchestrator-*.jsonl（python/）+ 数据根散落 *.log（other/），用新增 `zip` crate（deflate）打包到用户 `save()` 选定路径，zip 内附 MANIFEST.txt（每来源 OK/MISSING/错误原因 + 平台 + 数据根）；单文件失败不阻断；**不**导出可能含密钥的配置文件；zip 创建放 `spawn_blocking`。注册进 [mod.rs](../apps/desktop/src-tauri/src/commands/mod.rs)/[lib.rs](../apps/desktop/src-tauri/src/lib.rs)。③ **前端**：[invoke.ts](../apps/desktop/src/ipc/invoke.ts) 新增 `exportAllLogs`；[AboutSettingPanel.tsx](../apps/desktop/src/views/settings/AboutSettingPanel.tsx) 用 `platform()` 动态展示三平台真实日志路径（替换硬编码 Windows 路径）+ 「📦 一键导出全部日志」按钮（save 对话框 → 导出 → 内联成功/失败提示）。
+- **影响**：macOS 上 Rust 与 Python 共用同一可写数据根，日志/数据库/配置集中落 `~/Library/Application Support/eaide/`；用户可一键打包全部日志发给支持人员（zip 含 MANIFEST 清单）。Windows/Linux 行为不变。LLM not configured 仍需用户在「设置→模型管理」添加并启用后端（非代码问题）。
+- **验证**：Rust `cargo check --lib` 零错零警、`cargo test --lib logs::` 1 例通过（真实建 zip + 回读含 MANIFEST.txt）；前端新增 [aboutLogExport.test.tsx](../apps/desktop/tests/aboutLogExport.test.tsx) 6 例全绿、全量 vitest 61 文件/389 用例全绿、`tsc --noEmit` 无错。详见 [BUGFIX_LOG_2 #193](BUGFIX_LOG_2.md)。
+
 ### v2.133 — 知识库/审核六项增强：依据可点预览 + 大模型验证总开关 + 参数落库热生效 + 复制即用 + 应用内 PDF 预览 + 扫描件 OCR
 
 - **背景**：用户连续提出六项围绕本地知识库/文档审核的诉求：① 看风险点时点「依据」直接打开原文件预览，已上传知识库列表也可点击预览；② 文档审核的大模型知识库验证做成可选，未启用就只走本地混合检索；③ 上传的源文件与向量都要持久化，换机复制即用；④ RAG 参数集中到设置、不放配置文件、保存重新生效；⑤（追问 PDF 支持后）应用内 PDF 预览；⑥ 扫描件 PDF 调模型识别内容（chat 也可经意图/工具触发 OCR，审核侧仅扫描件 PDF 才 OCR）。

@@ -878,6 +878,25 @@ fn write_log(file_name: &str, msg: &str) {
 }
 
 pub(crate) fn get_app_data_dir() -> PathBuf {
+    // BUGFIX #193（macOS）：.app 包内目录（Contents/MacOS/）在 /Applications 下只读，
+    // Gatekeeper 签名验证后任何写操作都会被系统拒绝。此前 Rust 侧日志（eaide.log /
+    // crash.log）、audit.sqlite、systems.yaml、compile.json、llm-config.json 全部静默
+    // 写失败（代码里 `let _ =` 吞掉了所有 IO 错误），导致 macOS 上「找不到日志文件」。
+    // 修复：macOS 强制落到 ~/Library/Application Support/eaide/，与 agent_runtime_dir()
+    // （Python 子进程 cwd）对齐，两侧共用同一数据根，日志/数据库/配置集中可查。
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            let dir = PathBuf::from(home)
+                .join("Library")
+                .join("Application Support")
+                .join("eaide");
+            let _ = std::fs::create_dir_all(&dir);
+            return dir;
+        }
+        // HOME 不可用时兜底走通用逻辑（极少见，例如 launchd 以特殊用户拉起）
+    }
+
     // 用户要求：所有运行时文件都在安装目录内（不用 %LOCALAPPDATA%）。
     // 优先 exe 所在目录（= 安装目录）；拿不到时回退用户目录兼容开发场景。
     if let Ok(exe) = std::env::current_exe() {

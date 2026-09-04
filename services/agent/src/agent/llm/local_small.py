@@ -221,6 +221,7 @@ class LocalSmallLLMClient:
         plan: list[dict],
         results: list[dict],
         history: list | None = None,
+        rag_context: str = "",
     ) -> tuple[str, list[str]]:
         """端侧不做 summarise —— 直接返回占位，让 fallback 链切到 Ollama。"""
         raise LocalSmallUnavailableError("summarise not supported on local_small")

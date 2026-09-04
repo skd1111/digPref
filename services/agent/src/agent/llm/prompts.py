@@ -156,6 +156,26 @@ def normalize_message(msg: object) -> tuple[str, str] | None:
     return role, text
 
 
+def format_rag_block(rag_context: str | None) -> str:
+    """把 RAG 检索到的「知识库参考」片段包装成注入终答 prompt 的段落。
+
+    背景（根因修复 2026-09-04）：聊天链路 rag_retrieve 检索到的召回此前只写入
+    ``state.system_prompt_addon``，却从未被 summarise / 终答链路读取——模型作答时
+    根本看不到知识库内容，于是「BM25 命中 80 条却弹 A/B/C 澄清」「跑去 shell
+    翻全盘自己找文档」。这里把召回片段作为一等上下文注入终答 prompt，并附
+    据库作答 + 溯源纪律。空片段返 ""（调用方据此决定是否注入段落）。
+    """
+    text = (rag_context or "").strip()
+    if not text:
+        return ""
+    return (
+        "本地知识库检索结果（若与问题相关，必须优先依据下列资料作答，并按资料中的"
+        "编号标注来源，禁止编造不存在的条款/页码/文件名；资料确实不足以回答时如实"
+        "说明并询问用户，绝不要用 shell/dir/glob/find 等文件系统命令去别处翻找）：\n\n"
+        f"{text}\n\n"
+    )
+
+
 def format_history_brief(
     history: list | None,
     *,

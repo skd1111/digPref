@@ -678,11 +678,14 @@ class PrivateLLMClient:
         plan: list[dict],
         results: list[dict],
         history: list | None = None,
+        rag_context: str = "",
     ) -> tuple[str, list[str]]:
         """汇总工具执行结果，生成自然语言终答。
 
         失败时返回原始结果的文字描述。
         """
+        from agent.llm.prompts import format_rag_block
+
         sys_prompt = (
             load_prompt("system") + "\n\n" + load_prompt("summarise") + "\n\n" + FINAL_ANSWER_STYLE
         )
@@ -691,6 +694,9 @@ class PrivateLLMClient:
         # 会话历史简报（BUGFIX #135）：终答此前只看见当轮 user_prompt，
         # 跨轮追问模型会反问「没有明确任务指令」；拼入最近几轮原文恢复连贯。
         history_brief = format_history_brief(history)
+        # 知识库召回注入（根因修复 2026-09-04）：rag_retrieve 检索到的召回
+        # 此前从未进入终答 prompt，导致“命中却不用”。空召回时返 "" 不注入。
+        rag_block = format_rag_block(rag_context)
         try:
             result = await self._chat_json_with_retry(
                 [
@@ -705,6 +711,7 @@ class PrivateLLMClient:
                                 if history_brief
                                 else ""
                             )
+                            + rag_block
                             + (
                                 # 当前时间注入（BUGFIX #112）：模型对「今天」无可靠感知，
                                 # 不注入会凭训练知识编造日期；summarise.md §5.1 以此为唯一基准。

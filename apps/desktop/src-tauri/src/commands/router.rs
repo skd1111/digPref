@@ -34,6 +34,9 @@ fn agent_url(_state: &AppState, path: &str) -> String {
 ///
 /// 超时（默认 30s）后返回 `ready=false` + 错误信息，前端展示遮罩 + 重试按钮。
 /// 这条命令阻塞到就绪或超时——解决 EAIDE 启动比 Agent 快的竞态。
+///
+/// 探测顺序是「先探测再 sleep」：Agent 已在跑时（复用上一个进程 / 前端启动
+/// 闸门二次调用）立刻返回，不白等 500ms —— 否则每次开窗都会看到半秒的模糊遮罩。
 #[tauri::command]
 pub async fn agent_wait_ready(
     timeout_s: Option<f64>,
@@ -44,8 +47,10 @@ pub async fn agent_wait_ready(
     let client = reqwest::Client::new();
     let started = std::time::Instant::now();
     let deadline = std::time::Duration::from_secs_f64(timeout);
-    let mut last_err: Option<String> = None;
-    while started.elapsed() < deadline {
+    // loop 保证至少跑一轮，且除「成功直接 return」外每轮都写入 last_err，
+    // 所以不给初值（给了会触发 clippy unused_assignments）。
+    let mut last_err: Option<String>;
+    loop {
         match client
             .get(&health_url)
             .timeout(std::time::Duration::from_secs(1))
@@ -65,6 +70,9 @@ pub async fn agent_wait_ready(
             Err(e) => {
                 last_err = Some(format!("{}: {}", e, e));
             }
+        }
+        if started.elapsed() >= deadline {
+            break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }

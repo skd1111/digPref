@@ -31,7 +31,11 @@ interface DocReviewState {
   selectedDocId: string | null;
   detail: DocDetail | null;
   findings: DocFinding[];
+  /** 真正在跑分析（后端有进行中的 run）；驱动遮罩/模糊化/进度轮询 */
   analyzing: boolean;
+  /** 正在读取后端已持久化的文档详情（切换/打开文档的加载态）。
+   *  与 analyzing 严格区分：读取已完成文档的结果绝不是「重新分析」 */
+  loading: boolean;
   error: string | null;
   /** 正在导入的文件名（null = 空闲）。doc 需经 Word/WPS COM 转换，可达 120s，UI 必须展示进度动效 */
   importingFile: string | null;
@@ -61,6 +65,7 @@ export const useDocReviewStore = create<DocReviewState>((set, get) => ({
   detail: null,
   findings: [],
   analyzing: false,
+  loading: false,
   error: null,
   analysisSummary: null,
   progress: null,
@@ -102,6 +107,7 @@ export const useDocReviewStore = create<DocReviewState>((set, get) => ({
           detail: null,
           findings: [],
           analyzing: false,
+          loading: false,
           analysisSummary: null,
           progress: null,
         });
@@ -117,39 +123,53 @@ export const useDocReviewStore = create<DocReviewState>((set, get) => ({
   },
 
   open: async (docId) => {
+    // 切换/打开文档 = 读取后端已持久化的分析结果，绝不重新触发分析。
+    // 读取详情的 GET 会因逐条 finding 附加知识库依据（RAG）而耗时数秒，
+    // 期间用 loading 态展示「加载中」，不能误置 analyzing 让 UI 显示「正在分析」。
     set({
       selectedDocId: docId,
-      analyzing: true,
+      detail: null,
+      findings: [],
+      loading: true,
+      analyzing: false,
       error: null,
       analysisSummary: null,
       progress: null,
     });
     try {
       const detail = await ipc.docReviewGet(docId);
-      set({ detail, findings: detail.findings });
-      // 导入后不自动分析（由列表"分析"按钮手动触发）；
-      // 仅当后端已有进行中的 run 时续接进度轮询
-      if (
+      // 仅当后端确有进行中的 run 时才算「在分析」，续接进度轮询；
+      // done / failed / none 都是已落库的终态，直接展示持久化结果。
+      const inProgress =
         detail.status === "queued" ||
         detail.status === "classifying" ||
-        detail.status === "analyzing"
-      ) {
+        detail.status === "analyzing";
+      set({ detail, findings: detail.findings, loading: false, analyzing: inProgress });
+      if (inProgress) {
         await get().pollStatus(docId);
       }
     } catch (err) {
-      set({ error: err instanceof Error ? err.message : String(err) });
-    } finally {
-      set({ analyzing: false });
+      set({
+        error: err instanceof Error ? err.message : String(err),
+        loading: false,
+        analyzing: false,
+      });
     }
   },
 
   analyzeDoc: async (docId) => {
-    set({ selectedDocId: docId, analysisSummary: null, error: null, progress: null });
+    set({
+      selectedDocId: docId,
+      loading: true,
+      analysisSummary: null,
+      error: null,
+      progress: null,
+    });
     try {
       const detail = await ipc.docReviewGet(docId);
-      set({ detail, findings: detail.findings });
+      set({ detail, findings: detail.findings, loading: false });
     } catch (err) {
-      set({ error: err instanceof Error ? err.message : String(err) });
+      set({ error: err instanceof Error ? err.message : String(err), loading: false });
       return;
     }
     await get().analyze(docId);

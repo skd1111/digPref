@@ -52,8 +52,14 @@ pub async fn doc_review(args: Value) -> AppResult<Value> {
     };
 
     let url = format!("{}{}", base_url, path);
+    // get/findings 会触发后端为每条 finding 各做一次 RAG 检索（kb_refs），大文档可达数十秒；
+    // 这两个 op 用长超时兜底，其余轻量 op 仍用短超时，以便 Agent 掉线时快速失败。
+    let timeout_secs = match op {
+        "get" | "findings" => 90,
+        _ => 15,
+    };
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(timeout_secs))
         .build()
         .map_err(|e| AppError::Config(format!("reqwest client: {}", e)))?;
     let req = match method {

@@ -305,3 +305,26 @@
   transition: background-color 0.15s, color 0.15s;
 }
 .md-code-copy:hover { background-color: #333333; color: #e0e0e0; }
+
+/* ---- Agent 启动闸门（2026-09-04）-------------------------------------------
+   Agent(:8765) 未就绪期间，AgentReadyGate 给 body 挂 .agent-booting：
+   #root 整棵子树模糊 + 禁点禁选，避免用户在启动空窗期乱点触发一堆
+   connection refused 错误。遮罩卡片走 createPortal 挂在 body 下（不在 #root 里），
+   所以自身不受 filter 影响、保持清晰可交互。 */
+body.agent-booting {
+  overflow: hidden;
+}
+body.agent-booting #root {
+  filter: blur(6px) saturate(0.85);
+  pointer-events: none;
+  user-select: none;
+  /* 模糊期间不给过渡动画，避免刚开窗时看到一帧清晰界面 */
+  transition: none;
+}
+/* 遮罩卡片的加载环（AgentReadyGate 的 booting 态） */
+.agent-boot-spin {
+  animation: agent-boot-spin 1.1s linear infinite;
+}
+@keyframes agent-boot-spin {
+  to { transform: rotate(360deg); }
+}

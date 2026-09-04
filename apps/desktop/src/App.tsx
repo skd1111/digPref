@@ -11,6 +11,7 @@ import { useAgentStream } from "@/hooks/useAgentStream";
 import { useAgentHealth } from "@/hooks/useAgentHealth";
 import { PreviewEventBridge } from "@/components/preview/PreviewEventBridge";
 import { OfficePreviewPanel } from "@/components/office/OfficePreviewPanel";
+import { AgentReadyGate } from "@/components/chrome/AgentReadyGate";
 
 // ---- ErrorBoundary（防止渲染异常导致白屏）-----------------------------------
 
@@ -73,6 +74,9 @@ export function App(): JSX.Element {
       <RouterProvider router={router} />
       {/* V9 Office 预览浮层（文件树右键 / 聊天产物卡片触发） */}
       <OfficePreviewPanel />
+      {/* Agent 启动闸门：未就绪前整屏模糊 + 禁点（portal 到 body，不受模糊影响），
+          就绪瞬间自动放行 —— 消除「窗口已开但 Agent 还没起」的空窗期乱点 */}
+      <AgentReadyGate />
     </ErrorBoundary>
   );
 }

@@ -83,6 +83,71 @@ def _is_time_query(prompt: str) -> bool:
     return any(k in text for k in _TIME_QUERY_KEYWORDS)
 
 
+# 知识库/文档类查询关键词（RAG 优先作答的门控之一，2026-09-04）——
+# 与 rag_retrieve._RAG_TRIGGER_KEYWORDS 同源语义：命中说明这是查制度/文档/规范
+# 的知识型问题，知识库是其权威来源，不应退化到 shell 翻文件系统。
+_KB_DOC_KEYWORDS: tuple[str, ...] = (
+    "知识库",
+    "文档",
+    "制度",
+    "规范",
+    "规定",
+    "政策",
+    "条款",
+    "规章",
+    "合规",
+    "办法",
+    "流程",
+    "标准",
+    "法规",
+    "资料",
+    "手册",
+    "指引",
+)
+
+
+def _rag_has_relevant_hits(state: AgentState) -> bool:
+    """RAG 是否检索到「可据以作答」的相关召回（根因修复 2026-09-04）。
+
+    判据用 BM25 词元命中（chunk.metadata.matched 非空）而非 reranker 绝对分——
+    后者是 cross-encoder logit，量纲不稳、跨模式不可比；matched 是查询词元与
+    文本块的字面重叠，正是「对公转账这种词应该查得到」的强信号（用户反馈）。
+    命中条数达 settings.rag_first_min_matched_hits 即视为知识库能作答。
+    """
+    ctx = state.get("rag_context")
+    results = list(getattr(ctx, "results", None) or [])
+    if not results:
+        return False
+    min_hits = int(getattr(settings, "rag_first_min_matched_hits", 1))
+    matched_hits = 0
+    for r in results[:8]:
+        meta = getattr(getattr(r, "chunk", None), "metadata", None) or {}
+        if meta.get("matched"):
+            matched_hits += 1
+            if matched_hits >= min_hits:
+                return True
+    return False
+
+
+def _is_knowledge_doc_query(state: AgentState, analysis: dict) -> bool:
+    """是否为「文档/制度类知识库查询」——RAG 优先作答只作用于这类问题。
+
+    排除项（避免误伤真需要工具的查询）：
+    - 已被工具型语义路由命中（db_query / ssh_execute / time_query，带 _route 标记）；
+    - intent_category 非 data_query；
+    - 既无 doc_type 实体、文本也不含知识库/文档类关键词（如「查询订单表」）。
+    """
+    if "_route" in analysis:
+        return False
+    if str(analysis.get("intent_category") or "") != "data_query":
+        return False
+    entities = analysis.get("entities") if isinstance(analysis.get("entities"), dict) else {}
+    if str(entities.get("doc_type") or "").strip():
+        return True
+    text = str(state.get("rewritten_query") or state.get("user_prompt") or "")
+    return any(k in text for k in _KB_DOC_KEYWORDS)
+
+
 async def decompose_node(
     state: AgentState,
     llm: LMRouter,
@@ -473,6 +538,42 @@ def _intent_analysis_fast_path(state: AgentState) -> dict | None:
 
     if confidence < 0.6:
         return None  # 低置信度 → 交给编排决策器 LLM 复核
+
+    # RAG 优先作答（根因修复 2026-09-04）：文档/制度类查询且知识库已 BM25
+    # 命中相关资料 → 直接据库作答（MAIN_AGENT），不进工具循环用 shell 翻文件系统。
+    # 背景：用户问「找一下对公转账汇兑的规章制度」，bm25=80 命中却因召回未注入
+    # 而弹 A/B/C 澄清、继而 shell 全盘扫描卡死。带开关，可回退旧行为。
+    if (
+        getattr(settings, "rag_first_answer_enabled", True)
+        and analysis.get("need_tool")
+        and _is_knowledge_doc_query(state, analysis)
+        and _rag_has_relevant_hits(state)
+    ):
+        try:
+            from agent.observability.cot_log import cot as cot_log
+
+            cot_log(
+                "decompose.rag_first",
+                run_id=state.get("run_id"),
+                reason="knowledge_doc_query + rag matched hits → answer from KB",
+            )
+        except Exception:  # 日志失败不影响路由
+            pass
+        return {
+            "decompose_decision": _main_agent_decision(
+                "知识库已命中相关文档 → 据 RAG 召回直接作答（不动用文件工具）",
+            ),
+            "multi_agent": False,
+            "sub_agent_reports": [],
+            "trace": [
+                record_trace(
+                    "decompose",
+                    "ok",
+                    mode="MAIN_AGENT",
+                    reason="rag_first_answer",
+                )
+            ],
+        }
 
     # 需要工具 → 直达动态工具循环（规范 §5.2）——明确操作不需要规划：
     # 意图分析已给出明确信号时省掉编排决策器 LLM（本地模型缺席时 30s+）。

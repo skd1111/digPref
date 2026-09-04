@@ -175,6 +175,7 @@ export function DocTextViewer(): JSX.Element {
   const detail = useDocReviewStore((s) => s.detail);
   const findings = useDocReviewStore((s) => s.findings);
   const analyzing = useDocReviewStore((s) => s.analyzing);
+  const loading = useDocReviewStore((s) => s.loading);
   const progress = useDocReviewStore((s) => s.progress);
 
   // 交互节奏：分析开始后先正常预览文档 1.2s，再模糊化 + 遮罩
@@ -190,6 +191,26 @@ export function DocTextViewer(): JSX.Element {
   }, [analyzing]);
 
   if (!detail) {
+    // 读取已持久化结果中（切换文档）：轻量加载态，不是「正在分析」遮罩
+    if (loading) {
+      return (
+        <div
+          className="flex h-full flex-col items-center justify-center gap-2 text-2xs"
+          style={{ color: "#616161" }}
+        >
+          <span
+            className="animate-spin-ring rounded-full"
+            style={{
+              width: 22,
+              height: 22,
+              border: "3px solid #0e639c33",
+              borderTopColor: "#0e639c",
+            }}
+          />
+          正在加载审核结果…
+        </div>
+      );
+    }
     return (
       <div
         className="flex h-full items-center justify-center text-2xs"

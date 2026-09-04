@@ -96,6 +96,43 @@ DEFAULT_ROUTES: tuple[Route, ...] = (
             "canned_response": ("你好，我是 EAIDE 企业 AI 助理。告诉我你想查询或操作哪个系统吧。"),
         },
     ),
+    # 知识库检索/确认追问（根因修复 2026-09-04）：用户对上一轮澄清回复
+    # 「知识库里没有吗」这类短句，语义偏闲聊/追问，旧路由未覆盖 → 未过阈回退
+    # 云端 LLM，被强行改写成 data_query + need_tool=true → decompose 判 TOOL_ONLY
+    # → 跑去 shell 全盘扫描卡死。此路由零 LLM 直出 need_tool=False，走 RAG 召回
+    # 直接作答（rag_retrieve 会用上一轮主题改写检索词），不动用任何文件工具。
+    Route(
+        name="kb_lookup",
+        utterances=(
+            "知识库里没有吗",
+            "库里没有吗",
+            "知识库有没有",
+            "知识库里查一下",
+            "从知识库里找",
+            "在知识库里搜一下",
+            "文档里查不到吗",
+            "内部资料里有没有",
+            "帮我在知识库里查",
+            "知识库里有相关规定吗",
+            "查一下内部文档",
+            "从内部资料找找",
+        ),
+        hard_negatives=(
+            "帮我写一个查询知识库的脚本",
+            "知识库检索接口总是超时怎么优化",
+            "清空知识库里的全部文档",
+            "把知识库删除",
+        ),
+        analysis={
+            "intent": "query",
+            "intent_category": "data_query",
+            "need_tool": False,
+            "need_clarification": False,
+            "risk_level": "low",
+            "confidence": 0.85,
+            "reason": "语义路由命中：知识库检索/确认追问（走 RAG 召回直接作答，不动用文件工具）",
+        },
+    ),
     Route(
         name="time_query",
         utterances=(

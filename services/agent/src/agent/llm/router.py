@@ -26,6 +26,7 @@ Phase 4 V0 升级：端侧模型 + 推理模式
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import os
@@ -805,21 +806,43 @@ _STREAM_OUTPUT_OVERRIDE = (
 )
 
 
+def _rag_kwarg(backend: Any, rag_context: str) -> dict:
+    """向后兼容地向 backend.summarise 透传 rag_context（根因修复 2026-09-04）。
+
+    只有后端 summarise 显式接受 rag_context（或 **kwargs）且召回非空时才传；
+    否则优雅跳过（旧后端/测试替身不因新参数而崩，仅少了知识库注入）。
+    与本仓 intent_node 对可选 kwarg 的兼容策略一致。
+    """
+    if not rag_context:
+        return {}
+    try:
+        params = inspect.signature(backend.summarise).parameters
+    except (TypeError, ValueError):  # 内置/不可内省 → 保守不传
+        return {}
+    if "rag_context" in params:
+        return {"rag_context": rag_context}
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return {"rag_context": rag_context}
+    return {}
+
+
 def build_summarise_messages(
     intent: Intent,
     user_prompt: str,
     plan: list[dict],
     results: list[dict],
     history: list | None = None,
+    rag_context: str = "",
 ) -> list[dict]:
     """流式终答的消息拼装：上下文与各后端 summarise 完全一致，输出改纯文本。
 
     同源：system.md + summarise.md + FINAL_ANSWER_STYLE（规则层）、BUGFIX #112
-    当前时间注入、#135 历史简报；差异：末尾追加覆盖 Strict JSON 的输出指令
+    当前时间注入、#135 历史简报、知识库召回注入（根因修复 2026-09-04）；
+    差异：末尾追加覆盖 Strict JSON 的输出指令
     （逐字流式与 JSON 信封不兼容，sources 由 V1 取舍为空）。
     """
     from agent.dual.prompt_loader import FINAL_ANSWER_STYLE
-    from agent.llm.prompts import load_prompt
+    from agent.llm.prompts import format_rag_block, load_prompt
 
     sys_prompt = (
         load_prompt("system")
@@ -832,6 +855,7 @@ def build_summarise_messages(
     results_brief = json.dumps(results, ensure_ascii=False, indent=2, default=str)
     plan_brief = json.dumps(plan, ensure_ascii=False, indent=2, default=str)
     history_brief = format_history_brief(history)
+    rag_block = format_rag_block(rag_context)
     user_content = (
         f"Intent: {intent}\n"
         f"User question: {user_prompt}\n\n"
@@ -840,6 +864,7 @@ def build_summarise_messages(
             if history_brief
             else ""
         )
+        + rag_block
         + (
             # 当前时间注入（BUGFIX #112）：与各后端 summarise 同源同语义
             f"Current time: {current_time_text()}\n\n"
@@ -1633,6 +1658,7 @@ class LMRouter:
         plan: list[dict],
         results: list[dict],
         history: list | None = None,
+        rag_context: str = "",
     ) -> tuple[str, list[str]]:
         """Return (final_answer, sources_referenced).
 
@@ -1657,6 +1683,7 @@ class LMRouter:
                 plan=plan,
                 results=results,
                 history=history,
+                rag_context=rag_context,
             )
         # Phase 17 V0: L1 精确缓存 —— 相同请求直接返回，跳过整条降级链。
         # 红线：含写工具的 plan 不查不写（_plan_contains_write）。
@@ -1670,6 +1697,7 @@ class LMRouter:
                 plan=plan,
                 results=results,
                 history_brief=history_brief,
+                rag_context=rag_context,
             )
             cached = _L1_RESPONSE_CACHE.get(cache_key)
             if cached is not None:
@@ -1727,6 +1755,7 @@ class LMRouter:
                     plan=plan,
                     results=results,
                     history=history,
+                    **_rag_kwarg(backend, rag_context),
                 )
                 if cache_key is not None:
                     _L1_RESPONSE_CACHE.put(
@@ -1755,6 +1784,7 @@ class LMRouter:
         plan: list[dict],
         results: list[dict],
         history: list | None = None,
+        rag_context: str = "",
         on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> tuple[str, list[str]]:
         """流式终答（2026-09-03 回答逐字流式）：逐 token 调 on_delta，返回 (全文, sources)。
@@ -1787,6 +1817,7 @@ class LMRouter:
                 plan=plan,
                 results=results,
                 history=history,
+                rag_context=rag_context,
             )
             await _emit(answer)
             return answer, sources
@@ -1804,6 +1835,7 @@ class LMRouter:
                 plan=plan,
                 results=results,
                 history_brief=history_brief,
+                rag_context=rag_context,
             )
             cached = _L1_RESPONSE_CACHE.get(cache_key)
             if cached is not None:
@@ -1818,7 +1850,9 @@ class LMRouter:
                     logger.warning("l1_response_cache_corrupt_drop task=summarise_stream")
 
         # 流式候选链（与 summarise 同源：会话 override → private → ollama → cloud）
-        messages = build_summarise_messages(intent, user_prompt, plan, results, history)
+        messages = build_summarise_messages(
+            intent, user_prompt, plan, results, history, rag_context
+        )
         candidates: list[tuple[str, Any]] = []
         try:
             override = await self._build_override_client()
@@ -1874,6 +1908,7 @@ class LMRouter:
             plan=plan,
             results=results,
             history=history,
+            rag_context=rag_context,
         )
 
     async def decompose(

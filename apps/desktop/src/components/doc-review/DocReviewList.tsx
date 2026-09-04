@@ -22,6 +22,7 @@ export function DocReviewList(): JSX.Element {
   const open = useDocReviewStore((s) => s.open);
   const remove = useDocReviewStore((s) => s.remove);
   const analyzing = useDocReviewStore((s) => s.analyzing);
+  const loading = useDocReviewStore((s) => s.loading);
   const analyzeDoc = useDocReviewStore((s) => s.analyzeDoc);
 
   useEffect(() => {
@@ -128,6 +129,10 @@ export function DocReviewList(): JSX.Element {
                     style={{ color: selected ? "#dcdcaa" : "#b25c1a" }}
                   >
                     分析中…
+                  </span>
+                ) : loading && selected ? (
+                  <span className="text-2xs" style={{ color: "#dcdcaa" }}>
+                    加载中…
                   </span>
                 ) : (
                   <button

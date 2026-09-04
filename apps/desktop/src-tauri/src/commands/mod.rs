@@ -28,3 +28,4 @@ pub mod datadict;      // Phase 2H 数据字典
 pub mod expert_teams;  // 专家团资产（设置页维护 + 运营模式自动注入）
 pub mod compile;       // 文件树右键编译（2026-08-19）
 pub mod office;        // V9 Office 预览（OfficeCLI 渲染，2026-08-25）
+pub mod logs;          // BUGFIX #193：设置页「一键导出全部日志」（2026-09-04）

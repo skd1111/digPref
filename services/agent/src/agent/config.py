@@ -133,6 +133,11 @@ class Settings(BaseSettings):
     rag_max_file_mb: int = Field(default=50, ge=1, le=500)
     # 冷启动预加载（lifespan 后台预热 embedding / reranker / FTS5，best-effort）
     rag_preload_on_startup: bool = True
+    # RAG 优先作答（根因修复 2026-09-04）：文档/制度类查询且知识库已 BM25 命中
+    # 相关资料时，decompose 直接走 MAIN_AGENT 据召回作答，不进工具循环用 shell 翻文件系统。
+    rag_first_answer_enabled: bool = True
+    # 判定“知识库能作答”所需的最少 BM25 词元命中条数（matched 非空的召回数）。
+    rag_first_min_matched_hits: int = Field(default=1, ge=1, le=20)
 
     # ---- ONNX Reranker（cross-encoder 重排，2026-09-03）----
     # 混合检索召回 Top-N 后，用 bge-reranker ONNX 交叉编码器深度打分重排取 Top-K；
@@ -227,6 +232,10 @@ class Settings(BaseSettings):
     doc_review_chunk_overlap: int = Field(default=200, ge=0, le=2000)
     # 分析并发度：风险维度×分块 单元的 LLM 并发调用数（限流防云端 429）
     doc_review_analyze_concurrency: int = Field(default=3, ge=1, le=8)
+    # kb_refs 依据检索并发度：读取详情时对每条 finding 各做一次混合检索，串行会随
+    # finding 数线性放大（实测 16 条≈32s）超过前端 client 超时；此处检索不走 LLM，
+    # 只受 CPU(reranker)/SQLite 约束，并发压缩总耗时
+    doc_review_kb_refs_concurrency: int = Field(default=4, ge=1, le=16)
     # 文档审核 LLM 路由链（按序降级）：cloud / private —— 两者要求相同，都只取
     # 「模型管理」注册表里已启用的后端（router.db.llm_backends，enabled_only）。
     # 云端优先：先试云端避免白等内网连接超时；云端不可用/未启用时回退已启用的内网 private。
@@ -294,6 +303,13 @@ class Settings(BaseSettings):
     # 动态工具循环最大轮次（防死循环；2026-08-25 默认 8→24：长链任务如
     # PPT 生成 10+ 步在 8 轮下必被误杀；死循环改由停滞熔断拦截，见 loop.py）
     tool_loop_max_turns: int = Field(default=24, ge=2, le=30)
+    # 发散刹车（根因修复 2026-09-04）：只读文件探测（dir/ls/glob/find/list_dir/grep）
+    # 累计达软阈先注入强制收敛指令，达硬阈直接停——专治跨盘符全盘翻找卡死。
+    tool_loop_fs_probe_soft_limit: int = Field(default=6, ge=1, le=100)
+    tool_loop_fs_probe_hard_limit: int = Field(default=12, ge=2, le=200)
+    # 单 run 工具循环墙钟超时（秒）：云端每轮往返可达百秒，24 轮累计十几分钟
+    # → 用户感知死机；超墙钟即用已有上下文收敛作答。<=0 关闭该刹车。
+    tool_loop_wall_clock_sec: float = Field(default=240.0, ge=0.0, le=3600.0)
 
     # 回答逐字流式（2026-09-03）：responder 终答路径（summarise 家族）逐 token
     # 下发 answer_delta SSE 事件；false 时回退整段 message 下发（非流式 summarise）。

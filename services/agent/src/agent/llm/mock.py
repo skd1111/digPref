@@ -82,6 +82,7 @@ class MockLLMClient:
         plan: list[dict],
         results: list[dict],
         history: list | None = None,
+        rag_context: str = "",
     ) -> tuple[str, list[str]]:
         # 模仿真实 LLM 一些延迟，方便看 UI
         await _sleep_async(0.3)

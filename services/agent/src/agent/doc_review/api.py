@@ -56,17 +56,23 @@ async def _attach_kb_refs(findings: list[dict[str, Any]]) -> list[dict[str, Any]
 
         retriever = get_default_retriever()
         kb_storage = get_kb_storage()
-        for item in findings:
+        # 每条 finding 各做一次混合检索。串行会随 finding 数线性放大（实测 16 条≈32s），
+        # 读取详情的 GET 会超过前端 Rust client 超时、被误报成「分析失败」；改为受限并发
+        # （reranker 走 asyncio.to_thread、检索不阻塞事件循环），把总耗时压到接近单次检索。
+        sem = asyncio.Semaphore(max(1, settings.doc_review_kb_refs_concurrency))
+
+        async def _attach_one(item: dict[str, Any]) -> int:
             query = " ".join(
                 str(item.get(k, "") or "") for k in ("title", "description", "evidence_text")
             ).strip()
             if not query:
-                continue
-            try:
-                ctx = await retriever.retrieve(query, top_k=3)
-            except Exception:
-                logger.debug("doc_review kb_refs rag retrieve failed", exc_info=True)
-                continue
+                return 0
+            async with sem:
+                try:
+                    ctx = await retriever.retrieve(query, top_k=3)
+                except Exception:
+                    logger.debug("doc_review kb_refs rag retrieve failed", exc_info=True)
+                    return 0
             refs: list[dict[str, Any]] = []
             for r in ctx.results:
                 meta = getattr(r.chunk, "metadata", {}) or {}
@@ -80,7 +86,10 @@ async def _attach_kb_refs(findings: list[dict[str, Any]]) -> list[dict[str, Any]
                     }
                 )
             item["kb_refs"] = refs
-            refs_total += len(refs)
+            return len(refs)
+
+        # gather 保留提交顺序，且每条 item 就地写入自己的 kb_refs —— finding↔依据不会错位
+        refs_total = sum(await asyncio.gather(*(_attach_one(it) for it in findings)))
     except Exception as exc:
         logger.warning("doc_review kb_refs (rag) attach failed: %s", exc)
     logger.info(

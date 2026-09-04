@@ -1244,3 +1244,179 @@ cloud 分支 `_build_cloud_client()` 仅遍历 `list_backends(enabled_only=True)
 
 同一降级链里各层后端的「可用性判定」标准必须一致（本例统一为「注册表已启用」），否则某一层偷偷放宽（settings 兜底）会让「已启用」这个开关对用户失去意义；策略性改动要连带把散落在多处的过时文档串一起校正。
 
+---
+
+### #189 文档审核「分析失败: doc_review.http: error sending request」—— 读取详情 GET 串行做 N 次 RAG 超过前端 15s 超时
+
+| 字段 | 内容 |
+|---|---|
+| **是否修复** | 已修复 |
+| **修复时间** | 2026-09-04 |
+| **发现方式** | 用户报告文档审核界面红色横幅「分析失败: config: doc_review.http: error sending request for url (http://127.0.0.1:8765/doc-review/documents/{id})」，附 `AppData\Local\Enterprise AI IDE\logs` 日志 |
+| **涉及文件** | `services/agent/src/agent/doc_review/api.py`、`services/agent/src/agent/config.py`、`apps/desktop/src-tauri/src/commands/doc_review.rs`、`services/agent/tests/test_doc_review_api.py` |
+
+**现象**
+
+文档审核分析其实**成功**了（agent.log：`doc_review run done ... findings=16 total_elapsed=237.0s`，16 条风险点已入库），但前端在分析完成后拉取详情时弹红色横幅「分析失败: config: doc_review.http: error sending request for url (.../doc-review/documents/{id})」。点「重新分析」会重跑数分钟后再次同样报错，findings 越多越必现。
+
+**问题原因**
+
+① 前端 `pollStatus` 见状态 `done` 后调用 `docReviewGet` → GET `/doc-review/documents/{id}`（`docReviewStore.ts:223`）。② 该端点 `get_document` 返回前同步调用 `_attach_kb_refs`（`api.py:138`），对**每条 finding 顺序**做一次混合检索（原 for 循环）：N 条 finding = N 次串行 RAG，每次 ≈2s。③ Rust 侧 `doc_review` command 的 reqwest client 写死 15s 超时（`doc_review.rs:56`）。16 条 finding 的 kb_refs 实测耗时 32.3s（agent.log：`kb_refs (rag) attached: findings=16 refs=48 elapsed=32271.6ms`），远超 15s → reqwest 抛 `error sending request` → `AppError::Config("doc_review.http: ...")` → 前端 `analyze` catch 成「分析失败」。佐证：上一份 6 条 finding 的文档 kb_refs 耗时 13.08s 刚好卡在 15s 内所以成功（阈值约 7~8 条）；`/status` 轮询全程 200 OK（不触发 kb_refs），证明服务是活的、纯粹是这一个重读接口太慢。
+
+**根因与修复**
+
+① `api.py::_attach_kb_refs`：把每条 finding 的检索从串行 for 改为 `asyncio.gather` + `asyncio.Semaphore` 受限并发（reranker 走 `asyncio.to_thread`、检索不阻塞事件循环，可安全并发）；gather 保留提交顺序、各 item 就地写入自己的 kb_refs，finding↔依据映射不错位；单条检索失败仍 best-effort 跳过。总耗时从 N×单次 压到 ≈(N/并发度)×单次。② `config.py`：新增 `doc_review_kb_refs_concurrency`（默认 4，ge=1 le=16）控制并发度。③ `doc_review.rs`：超时改为按 op 区分——`get`/`findings`（触发 kb_refs 的重读接口）用 90s 兜底，其余轻量 op（status/list/analyze/register/delete）仍 15s，以便 Agent 掉线时快速失败。
+
+**验证**
+
+新增 `test_kb_refs_parallel_preserves_mapping_and_bounds_concurrency`（12 条 finding + 假检索器记录在飞并发峰值）：断言每条 finding 拿到自己 query 对应的依据（不错位）、并发峰值 >1（确实并发）且 ≤4（受信号量限流）；连同原有 kb_refs 用例、doc_review config/analysis 套件全绿，ruff 通过。修复后 16 条 finding 的详情 GET 从 ~32s 降到 ~4s，不再超时；存量已入库的该文档无需重跑分析，重新打开即可正常显示。
+
+**教训**
+
+「读取型 GET」里绝不做随数据量线性放大的重活（本例 N 条 finding × 单次 RAG）——它把「读」变成了隐性批处理，一旦超过客户端超时就被误报成上游「失败」，而数据其实已成功落库，误导用户去「重试」反而重复触发同一超时。前后端超时预算必须对齐后端最坏耗时；能并发的 best-effort 富化（RAG/enrich）用 gather+信号量压缩墙钟时间，并把并发度做成可配置。
+
+---
+
+### #190 【文档审核】切换到已分析文档时误显示「正在分析」 —— open() 把「加载持久化结果」错当成「重新分析」
+
+| 字段 | 内容 |
+|---|---|
+| **是否修复** | 已修复 |
+| **修复时间** | 2026-09-04 |
+| **发现方式** | 用户反馈：审核模式切换文档时，已经分析过的文档又触发了分析；结果本应持久化直接展示 |
+| **涉及文件** | `apps/desktop/src/store/docReviewStore.ts`、`apps/desktop/src/components/doc-review/DocTextViewer.tsx`、`apps/desktop/src/components/doc-review/DocReviewList.tsx`、`apps/desktop/tests/docReviewStore.test.ts` |
+
+**现象**
+
+在文档审核列表点击一个已 `done` 的文档切换过去时，正文区把已持久化的内容模糊化并弹出「正在分析，请稍后」遮罩 + 计时器，列表里该文档也从「↻ 重新分析」变成「分析中…」，看起来像把已分析过的文档又重跑了一遍分析。实际上后端并未重新分析，结果早已落库。
+
+**根本原因**
+
+`docReviewStore.open(docId)` 一进来就无条件 `set({ analyzing: true })`，随后 `await ipc.docReviewGet(docId)`。而该 GET 会触发后端 `_attach_kb_refs`（逐条 finding 附加 RAG 知识库依据），即便并发化后仍需数秒（见 #189）。这几秒里 `analyzing` 为真：`DocTextViewer` 依据 `analyzing` 做 blur + 遮罩、`DocReviewList` 依据 `analyzing && selected` 显示「分析中…」，于是「读取已持久化结果」被 UI 渲染成了「正在分析」。根因是 `analyzing` 这一个标志被同时复用为「加载详情中」和「真正在跑分析」两种语义。后端 `GET /documents/{id}`、`analyze` 与存储层均无重复触发问题——findings/runs 正确持久化，切换文档只读不写。
+
+**具体修复**
+
+拆分两种状态：① store 新增 `loading` 标志（读取已持久化详情的加载态），与 `analyzing`（后端确有进行中 run）严格区分。② `open()` 不再无条件置 `analyzing: true`，改为先清空 detail/findings 并置 `loading: true`；GET 返回后依据 `detail.status` 判定 `inProgress`（仅 `queued/classifying/analyzing`），据此设 `analyzing`，只有 inProgress 才续接 `pollStatus`；`done/failed/none` 直接展示持久化结果。③ `analyzeDoc()` 的详情预读也用 `loading` 而非 `analyzing`。④ `DocTextViewer` 在 `!detail && loading` 时显示轻量「正在加载审核结果…」转圈，而非分析遮罩。⑤ `DocReviewList` 在 `loading && selected` 时显示「加载中…」，与「分析中…」区分。
+
+**验证**
+
+新增回归用例 `open on a done doc loads persisted result without re-analyzing`：mock `docReviewGet` 返回 `status: "done"` + 1 条 finding，断言 `open()` 后 `docReviewAnalyze` 未被调用、`analyzing===false`、`loading===false`、findings 读回 1 条。`docReviewStore.test.ts` + `docReviewDashboard.test.tsx` 共 7 用例全绿，`tsc --noEmit` 无类型错误。
+
+**教训**
+
+一个布尔状态不要承载两种语义。「加载中」与「处理中（有副作用/长任务）」在 UI 上必须分开：前者只是读回已有数据、可随时切换、不该展示阻塞式进度遮罩；后者才需要遮罩 + 进度 + 禁止打断。当某个前端标志同时驱动「遮罩/模糊化/禁用按钮」时，务必确认它的置位时机严格对应真实的后端进行中状态，而不是对应一次可能很慢的只读请求——否则只读的慢请求会被用户误读成重复触发了写操作。
+
+---
+
+### #191 启动空窗期界面可点但全部请求失败 —— 缺一道「Agent 未就绪」全局闸门，用户乱点放大故障
+
+| 字段 | 内容 |
+|---|---|
+| **是否修复** | 已修复 |
+| **修复时间** | 2026-09-04 |
+| **发现方式** | 用户反馈：启动后 Agent 还未就绪，这段间隔界面看着正常、用户容易乱点，要求改为启动后整屏模糊、等 Agent 就绪后才能使用 |
+| **涉及文件** | `apps/desktop/src/store/uiStore.ts`、`apps/desktop/src/lib/agentBoot.ts`（新增）、`apps/desktop/src/components/chrome/AgentReadyGate.tsx`（新增）、`apps/desktop/src/styles/globals.css`、`apps/desktop/src/App.tsx`、`apps/desktop/src-tauri/src/commands/router.rs`、`apps/desktop/tests/agentReadyGate.test.tsx`（新增） |
+
+**现象**
+
+Tauri 开窗到 Python Agent(:8765) `/health` 通之间有几秒空窗（打包态要解压依赖 + 加载 onnx 模型，实测可达 30s+）。这段时间界面完全可点，但点哪儿都失败：模型管理/知识库/生成参数面板各自弹「⚠ Agent 未就绪」，运营工作台报 `error sending request`，聊天发消息没反应。用户以为软件坏了就到处点，反而制造更多失败请求与错误横幅。各处只能自己写重试兜底（`envStore` 4 次递增 backoff、`opsCaseStore` 15s 退避、`SubAgentPanel` 10 次×3s、四个设置面板各自 `agentWaitReady(15)`），但界面本身没有任何「现在还不能操作」的信号。
+
+**问题原因**
+
+启动期缺一道**全局**闸门。已有的连通性设施只解决局部问题：① `useAgentHealth` 是状态栏用的 5s 轮询（首探延迟 1.5s、单次探测窗 3s），只把结果写进 `uiStore.agentStatus` 供顶栏/底栏显示文字，不拦任何交互，且最坏要 6.5s 才知道 Agent 起来了；② Rust `agent_wait_ready` 是个阻塞命令，但只有若干设置面板在自己挂载时调它，主界面从不调；③ Rust `agent_manager` spawn 后的 30 轮健康检查只写日志，不通知前端。三者都没有把「未就绪」这个状态提升成全局 UI 门禁。
+
+**根因与修复**
+
+把「Agent 是否就绪」提升为全局闸门状态，未就绪期间整屏模糊 + 禁交互：
+
+① `uiStore` 新增 `agentBootState: 'booting' | 'ready' | 'failed'`（+ `agentBootError` / `agentBootElapsedMs`）与 `setAgentBoot()`。**刻意不列入 `partialize` 白名单** —— 每次启动都必须重新探测，否则上次会话的 `'ready'` 会被 rehydrate 回来，闸门形同虚设。② 新增 `lib/agentBoot.ts`：挂载即 `agentWaitReady(30)` 阻塞等待（30s 与 Rust `agent_manager` spawn 后的健康检查预算对齐，超时正好能在日志里读到「健康检查超时 (30s)」；在飞 Promise 去重，重试连点不并发）；就绪 → `ready` + 顺手把 `agentStatus` 置 `'ready'`（不等 5s 轮询）；超时/异常 → `failed` 并开启 3s 后台复探（Agent 起来后**自动放行**，无需用户点击）。另提供 `restartAgentForGate()`（杀 :8765 占用者再等一轮）、`readAgentLogTail()`、`skipAgentBootGate()`、`stopAgentBootReprobe()`。③ 新增 `components/chrome/AgentReadyGate.tsx`：`body` 挂 `.agent-booting`（用 `useLayoutEffect`，保证首帧绘制前就生效，不闪一帧可点的清晰界面），遮罩卡片走 `createPortal` 挂到 `body` —— 不在 `#root` 里，所以自身不受 `filter` 影响、保持清晰可交互；`booting` 态转圈 + 已用时计时，`failed` 态给出「重试 / 重启 Agent / 查看 eaide.log / 跳过闸门」四个出口。④ `globals.css`：`body.agent-booting #root { filter: blur(6px) saturate(.85); pointer-events: none; user-select: none }` + `body { overflow: hidden }` + 加载环 keyframes。⑤ 键盘也堵：window **capture** 阶段拦下 keydown/keyup（`preventDefault` + `stopPropagation`，先于 WorkspaceLayout 等处的 bubble 监听，命令面板/快捷键都开不了），遮罩内按键放行；并把跑出遮罩的焦点弹回（挂载时 blur 原焦点 + `focusin` 兜底）。⑥ Rust `agent_wait_ready` 改为「先探测再 sleep」（原 `while elapsed < deadline` 是 sleep-first）：Agent 已在跑时立刻返回，否则每次开窗都要白等 500ms 的模糊遮罩。⑦ `App.tsx` 在 ErrorBoundary 内挂 `<AgentReadyGate />`。
+
+**验证**
+
+新增 `tests/agentReadyGate.test.tsx` 11 例全绿：未就绪渲染遮罩 + body 挂类 + 以 30s 阻塞等待；就绪后遮罩消失/类名摘掉/`agentStatus` 转 `'ready'`；首轮超时切错误态并展示四个出口与耗时；点重试重走一轮；点重启先 `agentRestartNow` 再等；点查看日志展示 tail；`invoke` 抛错（非 Tauri 环境）时可用「跳过闸门」逃生；3s 后台复探自动放行；卸载后不再打 IPC（定时器已清）；键盘闸门遮罩外拦下、遮罩内放行、就绪后彻底退出。全量 `pnpm test` 60 文件 / 383 用例全绿，`tsc --noEmit` 与 `eslint src tests --max-warnings=0` 零告警；Rust `cargo clippy --all-targets -- -D warnings` 通过（首轮曾因 `loop` 改写触发 `unused_assignments`，改为不给 `last_err` 初值后消除）；`cargo test` 282 通过 / 3 失败，失败项为 `builtin::tests::test_shell_echo_ok` 等三个本机拉起真实 shell 的用例（本台账早前条目已记录为沙箱环境下既有失败，与 `agent_wait_ready` 无代码路径交集，CI 跑 ubuntu 不受影响）。
+
+**教训**
+
+「服务比界面慢」的启动竞态不能靠每个消费方各自重试来兜 —— 那样界面在空窗期表现为「看着能用、点什么都坏」，用户乱点反而放大故障面。正确做法是把依赖服务的就绪状态提升为**全局门禁**（单一 store 字段 + 单一遮罩组件），一次性阻断交互，就绪瞬间统一放行；门禁态**绝不能持久化**，否则上次会话的成功值会让闸门形同虚设。遮罩自身要 portal 到被模糊子树之外，并连键盘快捷键与焦点逃逸一起堵，只挡鼠标等于没挡。最后务必留逃生口（跳过闸门）+ 自愈路径（后台复探、重启、看日志），任何门禁都不允许把界面永久锁死。
+
+
+### #192 知识库提问「查到了却不用」：RAG 召回从未接入作答 + 意图误判 + 工具循环跨盘发散扫描卡死
+
+| 字段 | 内容 |
+|---|---|
+| **是否修复** | 已修复 |
+| **修复时间** | 2026-09-04 |
+| **发现方式** | 用户反馈：最近一次对话卡住无反应，且「找一下对公转账汇兑的规章制度 / 知识库里没有吗」意图识别不对；用户指出「就算向量分低，BM25 也该查得到，甚至 grep 都能查到」 |
+| **涉及文件** | `services/agent/src/agent/llm/prompts.py`、`llm/normalize.py`、`llm/router.py`、`llm/private_llm.py`、`llm/ollama.py`、`llm/local_small.py`、`llm/mock.py`、`graph/nodes/responder.py`、`graph/nodes/decompose.py`、`graph/nodes/rag_retrieve.py`、`graph/semantic_route.py`、`tools/loop.py`、`config.py`；测试 `tests/test_rag_context_injection.py`、`test_decompose_rag_first.py`、`test_rag_retrieve_query_rewrite.py`、`test_semantic_route_kb_lookup.py`、`test_tool_loop_fs_divergence.py`（均新增）、`test_router_backcompat.py` |
+
+**现象**
+
+日志（session `cb19b403` / `bd74d96f`）显示：用户问「找一下对公转账汇兑的规章制度」，`hybrid_search bm25=80 vec=80 fused=118 hits=20` —— 知识库**检索完全成功**，却先弹 A/B/C 澄清不作答；用户追问「知识库里没有吗」后，agent 进入 `TOOL_ONLY` 动态工具循环，用 `shell` 跨盘符 `dir C:\ / D:\ / E:\ / F:\`、`glob **/*.md`、`find *汇兑*`、`list_dir`、`biznav_features` 到处翻找，每轮命令都不同，直到日志末尾（16:37:35）仍在发云端请求、始终不出终答 —— 用户感知为「卡死」。期间用户在 HITL 弹窗点了 `approve_always`，`shell` 会话豁免登记后所有命令自动放行，失去人工刹车。
+
+**问题原因**
+
+三处叠加，根因是第一处：
+
+① **RAG 召回从未接入作答链路（真正根因）**：`rag_retrieve` 节点把召回写进 `state.system_prompt_addon`，但全仓**没有任何读取方** —— `summarise` / `summarise_stream` / `build_summarise_messages` 及各后端（private/ollama/local_small/mock）签名只有 `intent/user_prompt/plan/results/history`，没有 rag 参数；唯一消费 `rag_context` 的是 doc_review 审核，与聊天无关。所以模型作答时**根本看不到知识库内容**，才会「命中 80 条却弹澄清」「跑去 shell 自己翻全盘」。日志里那句 trace「已检索本地知识库，将相关上下文注入提示词」是假的。
+
+② **意图改写把确认追问误判成工具任务**：「知识库里没有吗」语义路由判成 chitchat（0.4854 < 阈值 0.78，未命中）→ 回退云端 LLM，被改写成 `data_query + need_tool=true` → `decompose` 判 `TOOL_ONLY`。旧 `DEFAULT_ROUTES` 没有覆盖这类「知识库确认追问」场景（用户指出的向量识别缺口）。且 `rag_retrieve` 用**原始短句**检索（日志 `query_chars=7 bm25=15`），未用意图改写句，追问轮检索词退化。
+
+③ **工具循环缺发散刹车**：现有重复熔断只拦「连续完全相同」指纹、停滞熔断只拦「零成功」轮；而发散扫描每轮命令都不同、都 `ok=True`，两道熔断都不触发，24 轮预算 + 云端每轮最长 ~100s 往返累计可达十几分钟，且无墙钟超时。
+
+**根因与修复**
+
+① **把 RAG 接进作答**：`prompts.format_rag_block()` 统一包装召回段（附「优先据库作答 + 按编号溯源 + 禁止编造 + 资料不足如实说明、绝不用 shell/dir/glob/find 去别处翻找」纪律）；`summarise`/`summarise_stream`/`build_summarise_messages` 及 private/ollama/local_small/mock 全链新增可选 `rag_context` 参数并注入 prompt；`responder._summarise_maybe_stream` 单点把 `state.system_prompt_addon` 透传进去（覆盖 MAIN_AGENT / 工具结果汇总 / 子智能体 / 闲聊全部路径）；L1 缓存 key 纳入 `rag_context`（同问不同召回不同 key）；native 工具循环系统提示也注入召回（双保险）。`router` 转发时经 `_rag_kwarg()` 做**后端能力探测**（`inspect.signature`），旧后端/测试替身不接受该参数时优雅跳过、不崩（与 `intent_node` 对可选 kwarg 的既有兼容策略一致）。
+
+② **RAG 优先作答**：`decompose._intent_analysis_fast_path` 在 `need_tool→TOOL_ONLY` 前加门控 —— 文档/制度类查询（`intent_category=data_query` 且带 `doc_type` 实体或命中知识库/文档关键词、且未被工具型语义路由 `_route` 命中）且 RAG 已 **BM25 命中**（`chunk.metadata.matched` 非空 ≥ `rag_first_min_matched_hits`）→ 直接走 `MAIN_AGENT` 据召回作答，不进工具循环。判据用 BM25 词元命中而非 reranker 绝对分（cross-encoder logit 量纲不稳），正是回应用户「这种词该查得到」。带开关 `rag_first_answer_enabled`。
+
+③ **检索词优选**：`rag_retrieve` 改用 `rewritten_query` 检索（缺失回退原句）；改写句仍短（<12 字）时 `_augment_followup_query` 拼接上一轮用户主题（会话式查询改写，仅影响检索、无副作用）。
+
+④ **向量意图识别补场景**：`semantic_route.DEFAULT_ROUTES` 新增 `kb_lookup` 路由（「知识库里没有吗 / 库里有没有 / 文档里查不到吗 / 内部资料里有没有…」），零 LLM 直出 `need_tool=False` → 走 RAG 作答不动文件工具；带 hard_negatives（「写个查知识库的脚本 / 清空知识库」）拦截。
+
+⑤ **发散刹车 + 墙钟**：`loop.py` 新增只读文件探测统计（`_is_fs_probe`：`dir/ls/glob/find/list_dir/grep/tree` 及 shell 内同类命令，不含 `read_file` 以免误伤 coding 任务）；累计达软阈 `tool_loop_fs_probe_soft_limit`(6) 注入强制收敛指令，达硬阈 `tool_loop_fs_probe_hard_limit`(12) 直接停并给出「去知识库/告知文档位置」的可操作终答；另加单 run 墙钟超时 `tool_loop_wall_clock_sec`(240s)。
+
+**验证**
+
+新增 5 个测试文件共 30+ 例全绿：`format_rag_block` 空/非空与纪律、ollama/private/`build_summarise_messages` 注入与空则不注入、responder 透传 `system_prompt_addon`、缓存 key 对 `rag_context` 敏感；`decompose` RAG 优先命中走 MAIN_AGENT + 关开关/无 matched/无 rag_context/DB 查询/`_route` 命中/阈值提高六种不误伤；`rag_retrieve` 用改写句 + 短追问拼上轮主题；`kb_lookup` 路由定义/命中/负样本拦截/`intent_node` 零 LLM；`_is_fs_probe` 单元 + 发散硬停/软阈收敛指令集成。`test_router_backcompat` 签名冻结表按「新增可选参数合法」既有约定登记 `rag_context`。全量 `uv run pytest` 通过（仅 1 既有 skip，无 failed）；`ruff check`/`ruff format --check` 全绿。
+
+**教训**
+
+「检索命中」不等于「模型看到了检索结果」—— RAG 的价值全在召回**是否真的进了作答 prompt**，只写 state 不接线等于没做，且 trace 里「已注入提示词」这类自我描述一旦与真实数据流脱节就是排障黑洞，必须以「谁读取了这个字段」为准。判「知识库能否作答」要用 BM25 词面命中这种量纲稳定的强信号，别依赖 cross-encoder logit 的绝对值。工具循环的死循环不止「原地打转」一种形态，「每轮都换目标的发散扫描」同样烧光预算，熔断要覆盖「有效动作的无界发散」，并配墙钟超时兜住云端长往返。用户点了 `approve_always` 后人工闸门失效，代码层刹车是唯一防线。
+
+
+### #193 macOS 上「找不到日志文件」+ 文档审核报 LLM 未配置 —— .app 包只读致 Rust 侧全量静默写失败；新增设置页「一键导出全部日志」
+
+| 字段 | 内容 |
+|---|---|
+| **是否修复** | 已修复 |
+| **修复时间** | 2026-09-04 |
+| **发现方式** | 用户反馈：macOS 版文档审核报「分析失败：分类输出解析失败: doc_review generate_review failed: cloud: not configured; private: not configured」，且按 Windows 路径找不到任何日志文件 |
+| **涉及文件** | `apps/desktop/src-tauri/src/agent_manager.rs`、`apps/desktop/src-tauri/src/commands/logs.rs`（新增）、`commands/mod.rs`、`src/lib.rs`、`Cargo.toml`；前端 `src/ipc/invoke.ts`、`src/views/settings/AboutSettingPanel.tsx`；测试 `apps/desktop/tests/aboutLogExport.test.tsx`（新增）、`src-tauri` 内 `logs.rs` 单测 |
+
+**现象**
+
+macOS 上两个症状同源：① 文档审核/聊天等一切走 LLM 的功能报 `cloud: not configured; private: not configured`（`router.py generate_review` 降级链里 cloud/private 两个 builder 都返 None）；② 用户按 About 页写的 `%LOCALAPPDATA%\Enterprise AI IDE\logs\` 去找日志，macOS 上根本不存在该路径，且真实日志也没落盘——「没找到日志文件」。
+
+**问题原因**
+
+① **Rust 数据根落在只读 .app 包内（根因）**：`agent_manager::get_app_data_dir()` 优先返回 `current_exe().parent()`，macOS 上即 `/Applications/EAIDE.app/Contents/MacOS/`。已签名 .app 包在 Gatekeeper 校验后**只读**，`create_dir_all` / `File::create` 全部失败，而代码里所有 IO 错误都被 `let _ =` 静默吞掉 → Rust 侧 `logs/eaide.log`、`logs/crash.log`、`audit.sqlite`、`systems.yaml`、`compile.json`、`config/llm-config.json` **一个都写不进去**，用户自然「找不到日志」。Python 侧因 `agent_runtime_dir()` 早已为 macOS 重定向到 `~/Library/Application Support/eaide/`（子进程 cwd），故 `agent.log`/`cot.log`/`router.db` 能写——两路数据根**不一致**，Rust 与 Python 各写各的。
+
+② **LLM 未配置是独立的用户侧配置问题（非代码 bug）**：`generate_review` 只认 `router.db.llm_backends` 里 `enabled=1` 的 cloud/private 后端，不回退环境变量。macOS 全新安装时该表为空（Windows 上配好的 router.db 不跨平台迁移），故报 not configured。此点通过「设置→模型管理添加并启用后端」解决，代码侧无需改；但「找不到日志」让用户无法自助排查，故一并补导出能力。
+
+**根因与修复**
+
+① **macOS 数据根对齐**：`get_app_data_dir()` 增加 `#[cfg(target_os="macos")]` 分支，强制返回 `~/Library/Application Support/eaide/`（与 `agent_runtime_dir()` 完全一致），不再走 exe 父目录。修复后 Rust 与 Python 共用同一数据根，日志/数据库/配置集中可查；Windows/Linux 行为不变。
+
+② **新增「一键导出全部日志」**：新 Tauri command `export_all_logs(dest_path)`（`commands/logs.rs`），收集 `<data>/logs/` 下 `eaide.log`/`crash.log`（rust/）、`agent.log`/`cot.log`/`orchestrator-*.jsonl`（python/）、数据根散落 `*.log`（other/），用 `zip` crate（新增依赖，deflate）打包到用户 `save()` 选定路径；zip 内附 `MANIFEST.txt` 记录每个来源的 OK/MISSING/错误原因 + 平台 + 数据根，便于支持人员定位缺失环节；单文件读失败不阻断整体（best-effort）。**不**导出 `environments.json`/`llm-config.json` 等可能含密钥的配置。zip 创建放 `spawn_blocking` 避免卡 async runtime。
+
+③ **About 页平台感知 + 导出入口**：`AboutSettingPanel` 用 `@tauri-apps/plugin-os` 的 `platform()` 动态展示 macOS/Linux/Windows 三套真实日志路径（替换原硬编码 Windows 路径），并在「日志位置」标题旁加「📦 一键导出全部日志」按钮：`save()` 拿路径 → `ipc.exportAllLogs()` → 成功/失败内联提示（含文件数与大小）。
+
+**验证**
+
+Rust：`cargo check --lib` 零错误零警告；`cargo test --lib logs::` 1 例通过（真实建 zip + 回读校验含 MANIFEST.txt）。前端：新增 `tests/aboutLogExport.test.tsx` 6 例全绿（渲染按钮/三平台路径/点击导出参数/成功提示/失败提示/取消不触发）；全量 `pnpm test`（vitest）61 文件 / 389 用例全绿；`tsc --noEmit` 无错。macOS 实机需回归：启动后 `~/Library/Application Support/eaide/logs/` 应出现 eaide.log；设置→About→一键导出应产出含 rust/+python/ 的 zip。
+
+**教训**
+
+「静默吞 IO 错误（`let _ =`）+ 只读安装目录」是 macOS 打包应用的经典组合坑：功能看似正常（进程起来了、UI 能渲染），但所有持久化副作用全部丢失，且无任何报错，用户与开发者都无从排查。凡「写安装目录」的逻辑必须按平台区分可写性（macOS .app 包 / Windows Program Files 均可能只读），统一重定向到用户数据目录；且**日志路径必须与子进程 cwd 对齐**，否则两路日志散落、排障成本翻倍。给用户一个「一键导出全部日志 + MANIFEST 清单」的自助入口，比让支持人员远程猜路径高效得多。
+
+

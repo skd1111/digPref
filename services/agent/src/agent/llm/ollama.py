@@ -491,13 +491,18 @@ class OllamaClient:
         plan: list[dict],
         results: list[dict],
         history: list | None = None,
+        rag_context: str = "",
     ) -> tuple[str, list[str]]:
+        from agent.llm.prompts import format_rag_block
+
         sys_prompt = _summarise_system_prompt()
         results_brief = json.dumps(results, ensure_ascii=False, indent=2, default=str)
         plan_brief = json.dumps(plan, ensure_ascii=False, indent=2, default=str)
         # 会话历史简报（BUGFIX #135）：终答此前只看见当轮 user_prompt，
         # 跨轮追问模型会反问「没有明确任务指令」；拼入最近几轮原文恢复连贯。
         history_brief = format_history_brief(history)
+        # 知识库召回注入（根因修复 2026-09-04）：空召回时返 "" 不注入。
+        rag_block = format_rag_block(rag_context)
 
         async def _call(hint: str, last: str) -> str:
             user_content = (
@@ -508,6 +513,7 @@ class OllamaClient:
                     if history_brief
                     else ""
                 )
+                + rag_block
                 + (
                     # 当前时间注入（BUGFIX #112）：本地模型对「今天」无可靠感知，
                     # 不注入会凭训练知识编造日期；summarise.md §5.1 以此为唯一基准。

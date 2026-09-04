@@ -426,6 +426,8 @@ pub fn run() {
             // V9 Office 预览（OfficeCLI 渲染 docx/xlsx/pptx → HTML/PNG）
             commands::office::office_preview_render,
             commands::office::office_preview_stop,
+            // BUGFIX #193：设置页「一键导出全部日志」
+            commands::logs::export_all_logs,
         ])
         .run(tauri::generate_context!());
 

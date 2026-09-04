@@ -35,6 +35,23 @@ export type ActivityId =
   | 'data-dict';
 
 /**
+ * Agent 启动闸门状态（2026-09-04）。
+ *
+ * Tauri 开窗比 Python Agent(:8765) 冷启动快数秒（打包态更久），这段空窗期
+ * 用户点任何入口都会拿到 connection refused，界面像坏了一样。闸门在就绪前
+ * 整屏模糊 + 禁交互（见 components/chrome/AgentReadyGate.tsx）。
+ *
+ *   'booting' — 等待 /health 2xx 中（首轮阻塞等待，或用户点了重试/重启）
+ *   'ready'   — Agent 已就绪，闸门放行
+ *   'failed'  — 首轮超时/异常，遮罩切错误态给出重试/重启/日志/跳过入口；
+ *               后台仍每 3s 复探，Agent 起来后自动放行（无需用户操作）
+ *
+ * ★ 不持久化（未列入下方 partialize 白名单）：每次启动都必须重新探测，
+ * 否则上次会话的 'ready' 会被 rehydrate 回来，闸门形同虚设。
+ */
+export type AgentBootState = 'booting' | 'ready' | 'failed';
+
+/**
  * Phase 2H：开发模式左侧栏三态子切换。
  *   'assets'   —— 系统资产（DB / API / SSH / RPA）
  *   'files'    —— 文件列表（工程目录树，界面与右侧思维链保持现状）
@@ -50,6 +67,13 @@ interface UIState {
 
   // 状态栏：当前 Agent 状态、错误数
   agentStatus: 'idle' | 'busy' | 'error' | 'ready' | 'unknown';
+
+  // 启动闸门：Agent 就绪前整屏模糊禁点（见 AgentBootState 注释；不持久化）
+  agentBootState: AgentBootState;
+  // 首轮等待失败的原因（'failed' 态遮罩展示；booting/ready 时为 null）
+  agentBootError: string | null;
+  // 首轮等待耗时（Rust agent_wait_ready 的 elapsed_ms，诊断用）
+  agentBootElapsedMs: number | null;
   errorCount: number;
   warnCount: number;
 
@@ -124,6 +148,16 @@ interface UIState {
   toggleQuickOpen: (open?: boolean) => void;
   toggleCheatSheet: (open?: boolean) => void;
   setAgentStatus: (s: UIState['agentStatus']) => void;
+  /**
+   * 写启动闸门状态。error / elapsedMs 每次整体覆盖（省略即清空），
+   * 避免上一轮的失败原因残留到新一轮 booting。
+   * 「跳过闸门」= 显式传 state:'ready'（仅 'failed' 态遮罩上暴露该出口）。
+   */
+  setAgentBoot: (patch: {
+    state: AgentBootState;
+    error?: string | null;
+    elapsedMs?: number | null;
+  }) => void;
   setErrorCount: (n: number) => void;
   setWarnCount: (n: number) => void;
   setCursor: (line: number, col: number) => void;
@@ -152,6 +186,9 @@ export const useUIStore = create<UIState>()(
       quickOpenOpen: false,
       cheatSheetOpen: false,
       agentStatus: 'unknown',
+      agentBootState: 'booting',
+      agentBootError: null,
+      agentBootElapsedMs: null,
       errorCount: 0,
       warnCount: 0,
       cursorLine: 1,
@@ -180,6 +217,12 @@ export const useUIStore = create<UIState>()(
       toggleCheatSheet: (open) =>
         set((s) => ({ cheatSheetOpen: open ?? !s.cheatSheetOpen })),
       setAgentStatus: (s) => set({ agentStatus: s }),
+      setAgentBoot: (patch) =>
+        set({
+          agentBootState: patch.state,
+          agentBootError: patch.error ?? null,
+          agentBootElapsedMs: patch.elapsedMs ?? null,
+        }),
       setErrorCount: (n) => set({ errorCount: n }),
       setWarnCount: (n) => set({ warnCount: n }),
       setCursor: (line, col) => set({ cursorLine: line, cursorCol: col }),

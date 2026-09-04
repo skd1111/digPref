@@ -171,6 +171,15 @@ async def _summarise_maybe_stream(
     msg_id 由 stream.py 从首条 delta 种子化到终答 message 事件（#142 同 id
     原地覆盖），流式草稿与终稿收敛为同一条气泡。
     """
+    # 知识库召回注入（根因修复 2026-09-04）：rag_retrieve 检索到的召回写入
+    # state.system_prompt_addon 后，此前从未进入终答 prompt（summarise 无该参数），
+    # 导致「BM25 命中却弹澄清 / 跑去 shell 翻全盘」。在这里单点补上，覆盖
+    # MAIN_AGENT / 工具结果汇总 / 子智能体 / 闲聊 全部作答路径；调用方已显式
+    # 传入 rag_context 时不覆盖（预留定制）。
+    if "rag_context" not in kwargs:
+        addon = str(state.get("system_prompt_addon") or "").strip()
+        if addon:
+            kwargs["rag_context"] = addon
     run_id = str(state.get("run_id") or "")
     if (
         not getattr(settings, "answer_stream_enabled", True)

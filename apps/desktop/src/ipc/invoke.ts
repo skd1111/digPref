@@ -1072,6 +1072,22 @@ export const ipc = {
       hint?: string;
     }>("agent_read_log", { lines }),
 
+  /**
+   * BUGFIX #193：一键导出全部日志（Rust eaide.log/crash.log + Python agent.log/
+   * cot.log/orchestrator-*.jsonl + 数据根散落 *.log）打包成 zip 到用户选定路径。
+   * 前端先用 @tauri-apps/plugin-dialog 的 save() 拿路径，再调本命令。
+   */
+  exportAllLogs: (destPath: string) =>
+    invoke<{
+      ok: boolean;
+      path: string;
+      file_count: number;
+      total_bytes: number;
+      files: Array<{ name: string; source: string; size: number }>;
+      missing: string[];
+      data_dir: string;
+    }>("export_all_logs", { destPath }),
+
   // Phase 12 V0：多智能体 Orchestrator
   // Phase 12 V2：已移除 orchestrator_spawn —— 是否启用多智能体由 Agent
   // 编排决策器自动判断（LLM 决策 + 安全门槛），不向用户暴露手动派生入口。

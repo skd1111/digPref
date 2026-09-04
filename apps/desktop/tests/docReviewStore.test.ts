@@ -21,6 +21,7 @@ beforeEach(() => {
     detail: null,
     findings: [],
     analyzing: false,
+    loading: false,
     error: null,
   });
 });
@@ -49,5 +50,31 @@ describe("docReviewStore", () => {
     const res = await useDocReviewStore.getState().register("C:/x.xls");
     expect(res.ok).toBe(false);
     expect(res.error).toBe("bad format");
+  });
+
+  it("open on a done doc loads persisted result without re-analyzing", async () => {
+    // 已分析完成（done）的文档：切换过去只应读回持久化结果，
+    // 绝不能重新触发分析（不调 docReviewAnalyze、不置 analyzing）。
+    (ipc.docReviewGet as ReturnType<typeof vi.fn>).mockResolvedValue({
+      doc_id: "d1",
+      file_name: "a.txt",
+      format: "txt",
+      page_count: 1,
+      status: "done",
+      overall_risk_level: "high",
+      created_at: "",
+      file_path: "C:/a.txt",
+      doc_category: null,
+      risk_types: [],
+      summary: null,
+      pages: [],
+      findings: [{ finding_id: "f1", risk_level: "high" }],
+    });
+    await useDocReviewStore.getState().open("d1");
+    const s = useDocReviewStore.getState();
+    expect(ipc.docReviewAnalyze).not.toHaveBeenCalled();
+    expect(s.analyzing).toBe(false);
+    expect(s.loading).toBe(false);
+    expect(s.findings).toHaveLength(1);
   });
 });

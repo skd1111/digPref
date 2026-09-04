@@ -159,3 +159,64 @@ async def test_kb_refs_empty_when_rag_disabled(monkeypatch):
     monkeypatch.setattr(dr_api.settings, "rag_enabled", False)
     out = await dr_api._attach_kb_refs([{"title": "t", "description": "", "evidence_text": ""}])
     assert out[0]["kb_refs"] == []
+
+
+async def test_kb_refs_parallel_preserves_mapping_and_bounds_concurrency(monkeypatch):
+    """并发化后：每条 finding 拿到「自己 query」对应的依据（不错位），且并发受信号量限流。
+
+    回归 #189：读取详情 GET 曾串行做 N 次 RAG（16 条 finding≈32s）超过前端 15s 超时，
+    被误报成「分析失败」。改并发后总耗时压到接近单次检索；本用例锁死「并发但映射不错位 + 限流」。
+    """
+    import asyncio
+
+    from agent.doc_review import api as dr_api
+
+    state = {"in_flight": 0, "peak": 0}
+
+    class _FakeChunk:
+        def __init__(self, tag):
+            self.doc_id = "kb1"
+            self.content = f"content-{tag}"
+            self.metadata = {"heading_path": f"h-{tag}", "matched": [tag], "child_content": tag}
+
+    class _FakeResult:
+        def __init__(self, tag):
+            self.chunk = _FakeChunk(tag)
+            self.doc_title = f"{tag}.pdf"
+            self.citation = f"{tag}.pdf"
+
+    class _FakeCtx:
+        def __init__(self, tag):
+            self.results = [_FakeResult(tag)]
+
+    class _FakeRetriever:
+        async def retrieve(self, query, top_k=3):
+            # 制造重叠窗口：串行实现下 peak 恒为 1，并发下会升到信号量上限
+            state["in_flight"] += 1
+            state["peak"] = max(state["peak"], state["in_flight"])
+            try:
+                await asyncio.sleep(0.02)
+                return _FakeCtx(query)  # 用 query 原样回显，验证 finding↔依据不错位
+            finally:
+                state["in_flight"] -= 1
+
+    class _FakeKbStorage:
+        def resolve_file_path(self, doc_id):
+            return f"/files/{doc_id}.pdf"
+
+    monkeypatch.setattr("agent.knowledge.retriever.get_default_retriever", lambda: _FakeRetriever())
+    monkeypatch.setattr("agent.knowledge.storage.get_default_storage", lambda: _FakeKbStorage())
+    monkeypatch.setattr(dr_api.settings, "rag_enabled", True)
+    monkeypatch.setattr(dr_api.settings, "doc_review_kb_refs_concurrency", 4)
+
+    findings = [{"title": f"t{i}", "description": "", "evidence_text": ""} for i in range(12)]
+    out = await dr_api._attach_kb_refs(findings)
+
+    # 映射不错位：第 i 条 finding 的依据来自它自己的 query（title=t{i}）
+    for i, item in enumerate(out):
+        assert item["kb_refs"][0]["source"] == f"t{i}.pdf"
+        assert item["kb_refs"][0]["heading"] == f"h-t{i}"
+
+    # 确实并发（peak>1）且受信号量限流（peak<=4）
+    assert state["peak"] > 1
+    assert state["peak"] <= 4
