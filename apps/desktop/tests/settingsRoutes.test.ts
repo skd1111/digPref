@@ -23,6 +23,7 @@ const SETTINGS_SEGS = [
   'expert-teams',
   'router',
   'codenav',
+  'knowledge',
   'toolchain',
   'workspace',
   'advanced',

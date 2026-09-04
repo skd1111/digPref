@@ -243,6 +243,65 @@ class TestMockOcr:
         assert result.engine == "mock"
 
 
+# ---- RapidOCR 真实后端（用 fake 引擎，不跑真实推理）------------------
+
+
+class _FakeRapidEngine:
+    """假 RapidOCR 引擎：回固定行结果（[box, text, score]），验证解析/拼接逻辑。"""
+
+    def __call__(self, img):
+        return (
+            [
+                [[[0, 0], [10, 0], [10, 10], [0, 10]], "合同金额壹佰万", 0.98],
+                [[[0, 12], [10, 12], [10, 22], [0, 22]], "甲方：某某公司", 0.90],
+            ],
+            0.05,
+        )
+
+
+class TestRapidOcr:
+    def test_recognize_image_sync_parses_rows(self, monkeypatch):
+        import agent.image_processing.ocr as ocr_mod
+
+        monkeypatch.setattr(ocr_mod, "_RAPIDOCR_ENGINE", _FakeRapidEngine())
+        monkeypatch.setattr(ocr_mod, "_RAPIDOCR_TRIED", True)
+        text, blocks, conf = ocr_mod.recognize_image_sync("whatever.png")
+        assert "合同金额壹佰万" in text and "甲方：某某公司" in text
+        assert len(blocks) == 2 and blocks[0]["confidence"] == 0.98
+        assert 0.9 < conf < 1.0  # 平均置信度
+
+    def test_recognize_image_sync_unavailable_raises(self, monkeypatch):
+        import agent.image_processing.ocr as ocr_mod
+        from agent.image_processing.models import BackendUnavailableError
+
+        monkeypatch.setattr(ocr_mod, "_RAPIDOCR_ENGINE", None)
+        monkeypatch.setattr(ocr_mod, "_RAPIDOCR_TRIED", True)
+        with pytest.raises(BackendUnavailableError):
+            ocr_mod.recognize_image_sync("x.png")
+
+    @pytest.mark.asyncio
+    async def test_rapid_backend_ocr_ok(self, tmp_path, monkeypatch):
+        import agent.image_processing.ocr as ocr_mod
+        from agent.image_processing.models import OcrRequest
+
+        monkeypatch.setattr(ocr_mod, "_RAPIDOCR_ENGINE", _FakeRapidEngine())
+        monkeypatch.setattr(ocr_mod, "_RAPIDOCR_TRIED", True)
+        in_p = tmp_path / "in.png"
+        in_p.write_bytes(b"data" * 50)
+        backend = ocr_mod.RapidOcrBackend()
+        res = await backend.ocr(OcrRequest(input_path=str(in_p)))
+        assert res.ok and res.engine == "rapidocr"
+        assert "合同金额壹佰万" in res.text and len(res.blocks) == 2
+
+    def test_get_default_backend_prefers_rapid_when_available(self, monkeypatch):
+        import agent.image_processing.ocr as ocr_mod
+
+        monkeypatch.setattr(ocr_mod, "rapidocr_available", lambda: True)
+        assert isinstance(ocr_mod.get_default_backend(), ocr_mod.RapidOcrBackend)
+        monkeypatch.setattr(ocr_mod, "rapidocr_available", lambda: False)
+        assert isinstance(ocr_mod.get_default_backend(), ocr_mod.MockOcrBackend)
+
+
 # ---- storage 测试 --------------------------------------------------------
 
 
@@ -422,6 +481,14 @@ class TestAPI:
         reset_enhance_backend()
         reset_correct_backend()
         reset_ocr_backend()
+
+        # V0 API 接线用例恒定走 mock OCR 后端：与真实 RapidOCR 是否安装解耦。
+        # （装上 rapidocr 后 get_default_backend 会返回真实后端，对这些喂假图片的
+        # 接线用例会因真实识别失败而 ok=False，失去确定性）
+        import agent.image_processing.ocr as _ocr_mod
+
+        monkeypatch.setattr(_ocr_mod, "get_default_backend", lambda: _ocr_mod.MockOcrBackend())
+        _ocr_mod.reset_ocr_backend()
 
         db_path = tmp_path / "img_proc.db"
         monkeypatch.setattr(settings, "image_processing_db_path", str(db_path))

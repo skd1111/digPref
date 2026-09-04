@@ -85,11 +85,10 @@ export function ManualConfirmationPanel(): JSX.Element | null {
       data-testid="manual-confirmation-panel"
     >
       <div className="text-2xs font-semibold mb-1" style={{ color: '#795e26' }}>
-        ⏸ Manual 模式 · 最近路由决策（每 5s 刷新）
+        ⏸ 手动模式 · 最近路由决策（每 5s 刷新）
       </div>
       <p className="text-2xs mb-2" style={{ color: '#616161' }}>
-        Auto 模式下 LLM 路由直接执行；Manual 模式下你在下方选择 primary backend（V3 占位，
-        V3.5 接 Phase 4 Ollama 真推理）。当前显示最近 5 条 routing decision 的候选 backend。
+        手动模式下可在下方查看最近 5 条路由决策的候选模型。
       </p>
       {error && (
         <div className="text-2xs mb-2" style={{ color: '#cd3131' }}>
@@ -98,7 +97,7 @@ export function ManualConfirmationPanel(): JSX.Element | null {
       )}
       {decisions.length === 0 ? (
         <div className="text-2xs" style={{ color: '#616161' }}>
-          暂无 routing decision（请先触发一次 LLM 调用）
+          暂无路由决策（请先触发一次模型调用）
         </div>
       ) : (
         <div className="space-y-2">
@@ -119,27 +118,27 @@ function DecisionRow({ decision }: { decision: RoutingDecisionLite }): JSX.Eleme
     >
       <div className="flex items-center justify-between mb-1">
         <div className="text-2xs font-mono" style={{ color: '#0b6bcb' }}>
-          {decision.task_category ?? 'unknown'} · request={decision.request_id.slice(0, 8)}
+          {decision.task_category ?? '未知'} · 请求号={decision.request_id.slice(0, 8)}
         </div>
         <div className="text-2xs" style={{ color: '#616161' }}>
-          actual={decision.actual_backend ?? 'NONE'} · cache={decision.cache_hit ? 'hit' : 'miss'}
+          实际后端={decision.actual_backend ?? '无'} · 缓存={decision.cache_hit ? '命中' : '未命中'}
         </div>
       </div>
       <div className="text-2xs" style={{ color: '#1f1f1f' }}>
-        Fallback chain: {(decision.fallback_chain ?? []).join(' → ') || '(empty)'}
+        回退链：{(decision.fallback_chain ?? []).join(' → ') || '（空）'}
       </div>
       <div className="text-2xs" style={{ color: '#616161' }}>
-        est. cost: ${(decision.estimated_cost ?? 0).toFixed(4)}
+        预估成本：${(decision.estimated_cost ?? 0).toFixed(4)}
         {decision.fallback_used && (
-          <span style={{ color: '#795e26' }}> · fallback used</span>
+          <span style={{ color: '#795e26' }}> · 已使用回退</span>
         )}
       </div>
-      {/* V2.5-3 5 维评分可视化：显示当前 decision primary backend 的 5 维分数 */}
+      {/* 五维评分可视化：显示当前 decision primary backend 的 5 维分数 */}
       {decision.candidates && decision.candidates.length > 0 && (
         <div className="mt-2">
           <ScoringRadar
             scores={decision.candidates[0]?.scores ?? {}}
-            title={`📊 ${decision.candidates[0]?.backend ?? decision.actual_backend ?? 'unknown'} 五维评分`}
+            title={`📊 ${decision.candidates[0]?.backend ?? decision.actual_backend ?? '未知'} 五维评分`}
           />
         </div>
       )}

@@ -110,6 +110,51 @@ class Settings(BaseSettings):
     # 默认 embedding 维度（bge-small-zh-v1.5 实测 512 维；仅零向量兜底用）
     local_embedding_dim: int = Field(default=512, ge=64, le=4096)
 
+    # ---- 本地知识库混合检索 RAG（2026-09-03，审核专家 + 聊天共用）----
+    # 混合检索 = SQLite FTS5（jieba 分词 + 原生 BM25）+ sqlite-vec 向量余弦，RRF 融合；
+    # 数据（kb.db + 上传文件 + 参数 JSON）统一落 rag_kb_dir，复制即迁移。
+    # 数据根目录（空 = 自动 data_root()/knowledge；生产=安装目录/knowledge）
+    rag_kb_dir: str = ""
+    # 子块（child）分块大小（字符）与重叠比例——子块语义聚焦，只做索引/检索
+    rag_chunk_size: int = Field(default=512, ge=128, le=4096)
+    rag_chunk_overlap: float = Field(default=0.1, ge=0.0, le=0.5)
+    # 父块（parent）大小（字符）——small-to-big：命中子块后回喂父块给 LLM 补全上下文
+    rag_parent_size: int = Field(default=2000, ge=512, le=16000)
+    # 每次检索返回条数 / 各通道候选倍数（Top-k×倍数 再 RRF 融合）/ RRF 经验常数
+    rag_top_k: int = Field(default=5, ge=1, le=20)
+    rag_candidate_multiplier: int = Field(default=4, ge=1, le=10)
+    rag_rrf_k: int = Field(default=60, ge=1, le=500)
+    # 通道开关（关掉任一则单通道；两者都关或不可用则返空）
+    rag_bm25_enabled: bool = True
+    rag_vector_enabled: bool = True
+    # 标题上下文前缀（无 LLM 的 Contextual Retrieval）：把层级标题路径拼到子块开头
+    rag_contextual_prefix_enabled: bool = True
+    # 单文件上传大小上限（MB）
+    rag_max_file_mb: int = Field(default=50, ge=1, le=500)
+    # 冷启动预加载（lifespan 后台预热 embedding / reranker / FTS5，best-effort）
+    rag_preload_on_startup: bool = True
+
+    # ---- ONNX Reranker（cross-encoder 重排，2026-09-03）----
+    # 混合检索召回 Top-N 后，用 bge-reranker ONNX 交叉编码器深度打分重排取 Top-K；
+    # 量化模型随安装包分发；模型文件缺失时自动 no-op（保持 RRF 排序），功能不中断。
+    rag_rerank_enabled: bool = True
+    # 重排候选数（从融合结果取前 N 送 reranker；N = top_k × 该倍数，另有上限）
+    rag_rerank_top_n: int = Field(default=20, ge=1, le=100)
+    # 进程内重排模型目录（含 tokenizer.json 与 onnx/model_quantized.onnx）
+    local_reranker_onnx_dir: str = "model/bge-reranker-base-onnx"
+
+    # ---- LLM 增强检索阶段（可插拔 seam，默认关；依赖本地 LLM 可用，敏感素材受 local-only 红线约束）----
+    # 大模型知识库验证总开关（2026-09-03）：关闭时文档审核 / 聊天检索只走本地混合检索
+    # （FTS5 BM25 + 向量 + RRF + reranker），检索与入库全程零大模型调用；开启后下列各
+    # 增强阶段才按自己的子开关生效。总开关是硬闸：为 False 时子开关即使为 True 也不调模型。
+    rag_llm_enhance_enabled: bool = False
+    # 入库期：LLM 为每个子块生成上下文前缀（Anthropic Contextual Retrieval）
+    rag_llm_contextual_enabled: bool = False
+    # 检索期：HyDE（LLM 先生成假设性文档，用其向量检索）
+    rag_hyde_enabled: bool = False
+    # 检索期：Query Expansion（LLM/同义词扩展查询词，多路 BM25 合并）
+    rag_query_expansion_enabled: bool = False
+
     # ---- 意图向量快速路由（semantic-router 模式，2026-08-07）----
     # 总开关：命中预置 Route 时零 LLM 直出意图分析；未命中/不可用静默回退原链路。
     # 2026-08-31 起默认开启（进程内 ONNX 向量模型；模型文件缺失时静默回退，
@@ -173,8 +218,6 @@ class Settings(BaseSettings):
     # ---- 文档风险合规审核（审核专家 · 文档审核）----
     # 文档审核 SQLite 路径（与 audit_expert / preview 等 db 物理隔离）
     doc_review_db_path: str = "doc_review.db"
-    # 知识库目录（grep 式匹配引用依据；目录不存在时 findings.kb_refs 返 []）
-    doc_review_kb_dir: str = "knowledge-base"
     # 文档审核模型名（缺省取 ollama_model）
     doc_review_model: str | None = None
     # 分类阶段读取文档前 N 字符
@@ -184,22 +227,19 @@ class Settings(BaseSettings):
     doc_review_chunk_overlap: int = Field(default=200, ge=0, le=2000)
     # 分析并发度：风险维度×分块 单元的 LLM 并发调用数（限流防云端 429）
     doc_review_analyze_concurrency: int = Field(default=3, ge=1, le=8)
-    # 文档审核 LLM 路由链（按序降级）：mock / ollama / private / cloud
-    # 云端优先：本机 Ollama 常未启动、private 常未配置，先试云端避免白等连接超时；
-    # 云端不可用时再依次回退 private / ollama
-    doc_review_llm_chain: list[str] = Field(default_factory=lambda: ["cloud", "private", "ollama"])
-    # 财税规则库目录（FiscalTaxRuleProvider 的法规素材；目录不存在时退化为无规则）
-    doc_review_fiscal_dir: str = "knowledge-base/fiscal-tax"
-    # 每个风险维度最多注入的财税规则条数（控制提示词体积）
-    doc_review_fiscal_max_rules: int = Field(default=6, ge=1, le=20)
-    # 混合检索：语义向量得分权重（0 = 纯关键词；embedding 不可用时自动退化为纯关键词）
-    doc_review_fiscal_sem_weight: float = Field(default=0.5, ge=0.0, le=1.0)
-    # 混合检索最低得分阈值（低于该分的章节不注入，避免无关规则干扰）
-    doc_review_fiscal_min_score: float = Field(default=0.10, ge=0.0, le=1.0)
-    # 语义通道独立下限（2026-08-31）：无关键词命中时，余弦低于该值不入选。
-    # BGE 对无关中文对的基线余弦 ~0.3、真相关 ≥0.6，取 0.4 隔开两段；
-    # 进程内向量模型默认启用后靠它挡住「闲聊文档注入财税规则」的误召回。
-    doc_review_fiscal_sem_min: float = Field(default=0.40, ge=0.0, le=1.0)
+    # 文档审核 LLM 路由链（按序降级）：cloud / private —— 两者要求相同，都只取
+    # 「模型管理」注册表里已启用的后端（router.db.llm_backends，enabled_only）。
+    # 云端优先：先试云端避免白等内网连接超时；云端不可用/未启用时回退已启用的内网 private。
+    # 不回退 settings/env 配置、也不回退本地 ollama；两者都未启用则抛 LLMBackendError。
+    doc_review_llm_chain: list[str] = Field(default_factory=lambda: ["cloud", "private"])
+    # 扫描件 PDF OCR 回退（2026-09-04）：仅当 PDF 无文本层（pypdf 抽不到字）时，
+    # 用 pypdfium2 栅格化逐页 + RapidOCR（端侧 ONNX）识别。纯本地、数据不出域；
+    # 依赖缺失时静默退化为原「未提取到文本」报错。聊天侧 OCR 走 image_processing，与此开关无关。
+    doc_review_pdf_ocr_enabled: bool = True
+    # OCR 栅格化缩放（≈ dpi/72；2.0 ≈ 144dpi，兼顾识别率与速度）
+    doc_review_pdf_ocr_scale: float = Field(default=2.0, ge=1.0, le=6.0)
+    # 单文档最多 OCR 页数上限（防超大扫描件长时间阻塞；0 = 不限）
+    doc_review_pdf_ocr_max_pages: int = Field(default=0, ge=0, le=2000)
 
     # ---- Phase 7 V0 数据专家模式 ----
     # 数据专家 SQLite 路径（与 audit / router / knowledge / ssh 等 db 物理隔离）
@@ -254,6 +294,10 @@ class Settings(BaseSettings):
     # 动态工具循环最大轮次（防死循环；2026-08-25 默认 8→24：长链任务如
     # PPT 生成 10+ 步在 8 轮下必被误杀；死循环改由停滞熔断拦截，见 loop.py）
     tool_loop_max_turns: int = Field(default=24, ge=2, le=30)
+
+    # 回答逐字流式（2026-09-03）：responder 终答路径（summarise 家族）逐 token
+    # 下发 answer_delta SSE 事件；false 时回退整段 message 下发（非流式 summarise）。
+    answer_stream_enabled: bool = True
     # 单轮最多注册候选工具数（与提示词 MAX_SELECTED_TOOLS 一致）
     tool_loop_max_selected: int = Field(default=5, ge=1, le=20)
     # 单条工具结果注入上下文的最大字符数

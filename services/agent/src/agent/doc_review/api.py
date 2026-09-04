@@ -26,7 +26,6 @@ from agent.doc_review.events import (
 )
 from agent.doc_review.models import ParsedDocument, generate_id
 from agent.doc_review.parser import DocParseError, parse_document
-from agent.doc_review.rules import build_default_rule_provider
 from agent.doc_review.storage import DocReviewStorage, get_default_storage
 
 logger = logging.getLogger(__name__)
@@ -38,41 +37,57 @@ _background_tasks: set[asyncio.Task[Any]] = set()
 _run_progress: dict[str, float] = {}
 
 
-def _attach_kb_refs(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """为每条 finding 附加知识库引用 kb_refs（grep 式匹配，best-effort）。
+async def _attach_kb_refs(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """为每条 finding 附加「知识库依据」kb_refs —— 来源为**用户上传的本地 RAG 知识库**。
 
-    带耗时日志：用于对比"模型返回慢 vs 知识库 grep 慢"。
+    对每条 finding 用其 title/description/evidence_text 做一次混合检索，命中转成
+    kb_refs（source/heading/excerpt/matched_terms/file_path），file_path 指回上传源文件
+    供前端点击预览。未启用 RAG / 库空 / 检索异常 → kb_refs=[]（best-effort，不阻断）。
     """
-    if not findings:
+    for item in findings:
+        item.setdefault("kb_refs", [])
+    if not findings or not settings.rag_enabled:
         return findings
     t0 = time.perf_counter()
     refs_total = 0
     try:
-        from agent.doc_review.knowledge import find_kb_refs
+        from agent.knowledge.retriever import get_default_retriever
+        from agent.knowledge.storage import get_default_storage as get_kb_storage
 
+        retriever = get_default_retriever()
+        kb_storage = get_kb_storage()
         for item in findings:
+            query = " ".join(
+                str(item.get(k, "") or "") for k in ("title", "description", "evidence_text")
+            ).strip()
+            if not query:
+                continue
             try:
-                refs = find_kb_refs(
-                    risk_type=str(item.get("risk_type", "")),
-                    title=str(item.get("title", "")),
-                    description=str(item.get("description", "") or ""),
-                    evidence_text=str(item.get("evidence_text", "") or ""),
+                ctx = await retriever.retrieve(query, top_k=3)
+            except Exception:
+                logger.debug("doc_review kb_refs rag retrieve failed", exc_info=True)
+                continue
+            refs: list[dict[str, Any]] = []
+            for r in ctx.results:
+                meta = getattr(r.chunk, "metadata", {}) or {}
+                refs.append(
+                    {
+                        "source": str(r.doc_title or r.citation or ""),
+                        "heading": str(meta.get("heading_path", "") or ""),
+                        "excerpt": str(meta.get("child_content") or r.chunk.content or "")[:200],
+                        "matched_terms": list(meta.get("matched", []) or [])[:6],
+                        "file_path": kb_storage.resolve_file_path(r.chunk.doc_id),
+                    }
                 )
-                item["kb_refs"] = [r.model_dump() for r in refs]
-                refs_total += len(refs)
-            except Exception as exc:
-                logger.warning("doc_review kb_refs attach failed: %s", exc)
-                item["kb_refs"] = []
+            item["kb_refs"] = refs
+            refs_total += len(refs)
     except Exception as exc:
-        logger.warning("doc_review kb module unavailable: %s", exc)
-        for item in findings:
-            item["kb_refs"] = []
-    elapsed_ms = (time.perf_counter() - t0) * 1000
+        logger.warning("doc_review kb_refs (rag) attach failed: %s", exc)
     logger.info(
-        "doc_review kb_refs attached: findings=%d refs=%d elapsed=%.1fms",
+        "doc_review kb_refs (rag) attached: findings=%d refs=%d elapsed=%.1fms",
         len(findings),
         refs_total,
-        elapsed_ms,
+        (time.perf_counter() - t0) * 1000,
     )
     return findings
 
@@ -120,7 +135,7 @@ async def get_document(doc_id: str) -> dict[str, Any]:
     doc["doc_category"] = latest["doc_category"] if latest else None
     doc["risk_types"] = latest["risk_types"] if latest else []
     doc["summary"] = latest["summary"] if latest else None
-    doc["findings"] = _attach_kb_refs(await storage.list_findings(doc_id))
+    doc["findings"] = await _attach_kb_refs(await storage.list_findings(doc_id))
     return doc
 
 
@@ -187,20 +202,30 @@ async def _run_analysis(storage: DocReviewStorage, doc_id: str, run_id: str) -> 
                 "risk_types": risk_types,
             },
         )
-        # 检索驱动的类型自动判定：无需人工指定文档类型。
-        # 一次混合检索拿全部维度的规则；命中但分类器漏勾的维度自动补进分析
-        provider = build_default_rule_provider()
-        rules_by_type = await provider.search(parsed.full_text)
-        activated = [rt for rt in rules_by_type if rt not in classification.risk_types]
-        if activated:
-            classification.risk_types = [*classification.risk_types, *activated]
-            logger.info(
-                "doc_review risk_types auto-activated by retrieval doc_id=%s added=%s",
-                doc_id,
-                [rt.value for rt in activated],
-            )
-        rules = [rule for rt_rules in rules_by_type.values() for rule in rt_rules]
+        # 依据统一走用户上传的 RAG 知识库：rag_context 注入分析提示词 + kb_refs 读取时附加。
+        # 不再用内置财税规则库注入 {{rules}}（analyzer 对空规则渲染“（无，模型自主判断）”），
+        # 也移除基于财税检索的风险类型自动补全。
+        rules: list[Any] = []
         risk_types = [rt.value for rt in classification.risk_types]
+        # 本地知识库混合检索（审核专家 RAG）：召回参考资料注入分析提示词（best-effort）
+        rag_context = ""
+        if settings.rag_enabled:
+            try:
+                from agent.knowledge.retriever import get_default_retriever
+
+                rag_query = parsed.full_text[: settings.doc_review_classify_max_chars]
+                rag_ctx = await get_default_retriever().retrieve(
+                    rag_query, top_k=settings.rag_top_k
+                )
+                rag_context = rag_ctx.formatted_prompt or ""
+                logger.info(
+                    "doc_review rag retrieve doc_id=%s hits=%d chars=%d",
+                    doc_id,
+                    len(rag_ctx.results),
+                    len(rag_context),
+                )
+            except Exception:
+                logger.debug("doc_review rag retrieve skipped", exc_info=True)
         await storage.update_run(
             run_id,
             status="analyzing",
@@ -214,6 +239,7 @@ async def _run_analysis(storage: DocReviewStorage, doc_id: str, run_id: str) -> 
             rules=rules,
             chunk_max_chars=settings.doc_review_chunk_max_chars,
             chunk_overlap=settings.doc_review_chunk_overlap,
+            rag_context=rag_context,
             on_progress=lambda frac: _run_progress.__setitem__(run_id, 0.15 + 0.8 * frac),
         )
         logger.info(
@@ -315,7 +341,7 @@ async def list_findings(doc_id: str, run_id: str | None = None) -> dict[str, Any
         key=lambda f: {"low": 0, "medium": 1, "high": 2, "critical": 3}[f["risk_level"]],
         reverse=True,
     )
-    entries = _attach_kb_refs(entries)
+    entries = await _attach_kb_refs(entries)
     return {"doc_id": doc_id, "run_id": run_id, "count": len(entries), "findings": entries}
 
 
@@ -331,7 +357,7 @@ async def export_word(doc_id: str, mode: str = "risks_only") -> Response:
     latest = await storage.latest_run(doc_id)
     if latest is None or latest["status"] != "done":
         raise HTTPException(status_code=409, detail="分析尚未完成，无法导出")
-    findings = _attach_kb_refs(await storage.list_findings(doc_id))
+    findings = await _attach_kb_refs(await storage.list_findings(doc_id))
     try:
         from agent.doc_review.exporter import build_export_docx
 

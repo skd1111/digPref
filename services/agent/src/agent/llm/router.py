@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import time
+from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Literal
@@ -794,6 +795,65 @@ async def _local_small_plan(router: LMRouter):
     raise LLMBackendError("local_small plan proxy — 端侧只列大纲，具体执行交云端")
 
 
+# ---- 流式终答消息拼装（2026-09-03，回答逐字流式）---------------------------
+
+_STREAM_OUTPUT_OVERRIDE = (
+    "\n\n# OUTPUT (this call is streamed — overrides the Strict JSON requirement above)\n"
+    "本次调用按 token 流式直接输出正文：忽略上方 Strict JSON 输出要求，"
+    "直接输出给用户的最终回答 Markdown 正文，不要包裹 JSON、不要输出 sources 字段、"
+    "不要任何前缀说明，从第一个字符起就是答案内容。\n"
+)
+
+
+def build_summarise_messages(
+    intent: Intent,
+    user_prompt: str,
+    plan: list[dict],
+    results: list[dict],
+    history: list | None = None,
+) -> list[dict]:
+    """流式终答的消息拼装：上下文与各后端 summarise 完全一致，输出改纯文本。
+
+    同源：system.md + summarise.md + FINAL_ANSWER_STYLE（规则层）、BUGFIX #112
+    当前时间注入、#135 历史简报；差异：末尾追加覆盖 Strict JSON 的输出指令
+    （逐字流式与 JSON 信封不兼容，sources 由 V1 取舍为空）。
+    """
+    from agent.dual.prompt_loader import FINAL_ANSWER_STYLE
+    from agent.llm.prompts import load_prompt
+
+    sys_prompt = (
+        load_prompt("system")
+        + "\n\n"
+        + load_prompt("summarise")
+        + "\n\n"
+        + FINAL_ANSWER_STYLE
+        + _STREAM_OUTPUT_OVERRIDE
+    )
+    results_brief = json.dumps(results, ensure_ascii=False, indent=2, default=str)
+    plan_brief = json.dumps(plan, ensure_ascii=False, indent=2, default=str)
+    history_brief = format_history_brief(history)
+    user_content = (
+        f"Intent: {intent}\n"
+        f"User question: {user_prompt}\n\n"
+        + (
+            f"Recent conversation (当前问题可能建立在这些对话之上，保持上下文连贯):\n{history_brief}\n\n"
+            if history_brief
+            else ""
+        )
+        + (
+            # 当前时间注入（BUGFIX #112）：与各后端 summarise 同源同语义
+            f"Current time: {current_time_text()}\n\n"
+            f"Plan executed:\n{plan_brief}\n\n"
+            f"Tool results (may be truncated):\n{results_brief}\n\n"
+            "Produce the final answer."
+        )
+    )
+    return [
+        {"role": "system", "content": sys_prompt},
+        {"role": "user", "content": user_content},
+    ]
+
+
 class LMRouter:
     """多后端：mock / ollama / private，按 task kind 选取，并支持 Fallback 链。
 
@@ -1071,6 +1131,9 @@ class LMRouter:
         if kind in ("doc_classify", "doc_analyze"):
             value = _DOC_CLASSIFY_MOCK if kind == "doc_classify" else _DOC_ANALYZE_MOCK
             return _async_text(value)
+        if kind in ("kb_hyde", "kb_expand", "kb_contextual"):
+            # RAG LLM 增强阶段：mock 返空串 → 上层 seam 优雅 no-op（不伪造改写/前缀）
+            return _async_text("")
         raise ValueError(f"unknown kind: {kind}")
 
     # ---- "Raise" 包装：把客户端内部静默降级转换成异常 -----------------------
@@ -1234,9 +1297,10 @@ class LMRouter:
     async def generate_review(self, *, kind: TaskKind, prompt: str) -> str:
         """文档审核生成：按 settings.doc_review_llm_chain 顺序调用。
 
-        支持后端：mock / ollama / private / cloud。
-        private / cloud 都从「模型管理」注册表取已启用后端（router.db.llm_backends）。
-        默认链 ["cloud", "private", "ollama"]（云端优先，不可用逐级回退）；全失败抛 LLMBackendError。
+        支持后端：mock / private / cloud（ollama 分支保留供显式配置，默认链不含）。
+        private / cloud 要求相同：都只从「模型管理」注册表取**已启用**后端
+        （router.db.llm_backends，enabled_only），不回退 settings/env 配置。
+        默认链 ["cloud", "private"]（云端优先，不可用回退已启用内网）；全失败抛 LLMBackendError。
 
         ❗ 必须走 extract_chat 原始对话透传，不能用 summarise：summarise 会注入
         汇总模板并把输出包成 {"answer": ...}，审核要求的 JSON 永远解析不出来
@@ -1250,11 +1314,12 @@ class LMRouter:
             if backend_name == "ollama":
                 backend = self.ollama
             elif backend_name == "private":
-                # 对齐模型管理：优先注册表已启用 private 后端，无则回退 settings 配置
+                # 与 cloud 要求相同：只认「模型管理」注册表里已启用的 private 后端，
+                # 不再回退 settings/env 配置（self.private）——未启用即视为不可用、跳过。
                 try:
-                    backend = await self._build_private_client() or self.private
-                except Exception:  # 注册表查询失败回退 settings
-                    backend = self.private
+                    backend = await self._build_private_client()
+                except Exception:  # 注册表查询失败按未启用处理
+                    backend = None
             elif backend_name == "cloud":
                 backend = await self._build_cloud_client()
             if backend is None:
@@ -1333,8 +1398,9 @@ class LMRouter:
 
         Returns:
             ("private" | "cloud", 客户端实例) 或 None（回退提示词协议）。
-            探测总耗时封顶 15s，绝不抛异常；结果进程内缓存（每次 chat 运行
-            首节点探测一次，后续调用直接读缓存）。
+            探测总耗时封顶 4s（2026-09-01 自 15s 下调：探测失败本就回退提示词
+            协议，长等无收益还吃掉首条消息响应预算）；绝不抛异常；结果进程内
+            缓存（每次 chat 运行首节点探测一次，后续调用直接读缓存）。
         """
         import asyncio
 
@@ -1343,6 +1409,18 @@ class LMRouter:
         cached = getattr(self, "_native_probe_cache", _NATIVE_UNSET)
         if cached is not _NATIVE_UNSET:
             return cached
+
+        # 无后端快路径（2026-09-01）：注册表里没有已启用的内网/云端后端时直接判无，
+        # 不构造客户端、不发任何探测请求（本地 Ollama 本就不参与原生探测）。
+        try:
+            from agent.llm.storage import list_backends
+
+            enabled = await list_backends(enabled_only=True)
+        except Exception:  # 注册表读取故障 → 按原链路兜底（_build_* 内部各自容错）
+            enabled = None
+        if enabled is not None and not any(b.type in ("private", "cloud") for b in enabled):
+            self._native_probe_cache = None
+            return None
 
         async def _probe() -> tuple[str, Any] | None:
             candidates: list[tuple[str, Any]] = []
@@ -1367,7 +1445,7 @@ class LMRouter:
             return None
 
         try:
-            result = await asyncio.wait_for(_probe(), timeout=15.0)
+            result = await asyncio.wait_for(_probe(), timeout=4.0)
         except Exception as exc:  # 超时/任何异常 → 提示词协议
             logger.debug("native tool calling probe failed: %s", exc)
             result = None
@@ -1667,6 +1745,135 @@ class LMRouter:
         raise LLMBackendError(
             "无可用模型：本地 Ollama / 内网 / 云端 LLM 后端均不可用。"
             "请在「设置 → 模型管理」中配置可用模型。详情：" + "; ".join(errors)
+        )
+
+    async def summarise_stream(
+        self,
+        *,
+        intent: Intent,
+        user_prompt: str,
+        plan: list[dict],
+        results: list[dict],
+        history: list | None = None,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
+    ) -> tuple[str, list[str]]:
+        """流式终答（2026-09-03 回答逐字流式）：逐 token 调 on_delta，返回 (全文, sources)。
+
+        策略：
+        - mock 模式 / L1 缓存命中 → 全文作为单个 delta 发出（与非流式行为一致）；
+        - 降级链 override → private → ollama → cloud 取首个具备 chat_stream 的后端；
+          首个 delta 发出前失败 → 切下一个流式候选；已发出 delta 后失败 → 不再换
+          流式后端（避免前端气泡拼出两段草稿），直接回退非流式；
+        - 流式全部不可用/失败 → 回退既有 summarise()（降级链与错误语义不变）；
+        - V1 取舍：流式路径不解析 sources（JSON 信封才有），返回空列表。
+
+        终答一致性兜底：无论流式还是回退路径，全文最终都写入 state.final_answer，
+        经既有 message 事件按同一 msgId 原地覆盖前端草稿（BUGFIX #142 机制）。
+        """
+        from agent.llm.stream_utils import strip_think
+
+        async def _emit(text: str) -> None:
+            if on_delta and text:
+                try:
+                    await on_delta(text)
+                except Exception:  # delta 推送故障绝不阻断终答生成
+                    pass
+
+        # mock：单帧直出（内置规则无流式语义）
+        if self._mock_mode:
+            answer, sources = await self.mock.summarise(
+                intent=intent,
+                user_prompt=user_prompt,
+                plan=plan,
+                results=results,
+                history=history,
+            )
+            await _emit(answer)
+            return answer, sources
+
+        # L1 精确缓存（与 summarise 同条件：含写工具的 plan 不查不写）。
+        # task_kind 独立命名空间：流式路径 sources 恒为空，与非流式共 key 会
+        # 互相污染（非流式命中流式写入的条目会丢 sources）。
+        history_brief = format_history_brief(history)
+        cache_key: str | None = None
+        if _L1_ENABLED and not _plan_contains_write(plan):
+            cache_key = build_response_cache_key(
+                task_kind="summarise_stream",
+                intent=intent,
+                user_prompt=user_prompt,
+                plan=plan,
+                results=results,
+                history_brief=history_brief,
+            )
+            cached = _L1_RESPONSE_CACHE.get(cache_key)
+            if cached is not None:
+                try:
+                    payload = json.loads(cached)
+                    logger.info("l1_response_cache_hit task=summarise_stream")
+                    answer = str(payload.get("answer") or "")
+                    sources = [str(s) for s in (payload.get("sources") or [])]
+                    await _emit(answer)
+                    return answer, sources
+                except (ValueError, TypeError):
+                    logger.warning("l1_response_cache_corrupt_drop task=summarise_stream")
+
+        # 流式候选链（与 summarise 同源：会话 override → private → ollama → cloud）
+        messages = build_summarise_messages(intent, user_prompt, plan, results, history)
+        candidates: list[tuple[str, Any]] = []
+        try:
+            override = await self._build_override_client()
+        except Exception:  # 注册表查询失败不阻塞
+            override = None
+        if override is not None:
+            candidates.append((f"override:{self.chat_model_override}", override))
+        if self.private is not None:
+            candidates.append(("private", self.private))
+        candidates.append(("ollama", self.ollama))
+        try:
+            cloud = await self._build_cloud_client()
+        except Exception:  # 注册表查询失败不阻塞
+            cloud = None
+        if cloud is not None:
+            candidates.append(("cloud", cloud))
+
+        for backend_name, backend in candidates:
+            if not hasattr(backend, "chat_stream"):
+                continue  # local_small / mock 等无流式原语的后端直接跳过
+            base_url = str(getattr(backend, "base_url", "") or backend_name)
+            if _backend_down(base_url):
+                continue
+            acc: list[str] = []
+            try:
+                async for delta in backend.chat_stream(messages):
+                    if delta:
+                        acc.append(delta)
+                        await _emit(delta)
+            except Exception as exc:
+                if _connect_failure(exc):
+                    _mark_backend_down(base_url)
+                logger.warning("summarise_stream %s failed: %s", backend_name, exc)
+                if acc:
+                    # 草稿已推给前端：再换流式后端会拼出两段，直接出循环走
+                    # 非流式兜底（终答 message 事件按同 id 原地覆盖，草稿不残留）
+                    break
+                continue
+            full = strip_think("".join(acc)).strip()
+            if full:
+                if cache_key is not None:
+                    _L1_RESPONSE_CACHE.put(
+                        cache_key,
+                        json.dumps({"answer": full, "sources": []}, ensure_ascii=False),
+                    )
+                return full, []
+            # 空输出视为该后端失败，继续下一个流式候选
+
+        # 流式全部不可用/失败 → 非流式兜底（降级链与错误语义与 summarise 一致）
+        return await self.summarise(
+            intent=intent,
+            user_prompt=user_prompt,
+            plan=plan,
+            results=results,
+            history=history,
         )
 
     async def decompose(

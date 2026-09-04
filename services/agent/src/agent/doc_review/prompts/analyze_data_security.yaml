@@ -3,6 +3,8 @@ system: |
   文档类型：{{doc_category}}
   规则依据（可为空，空则模型自主判断）：
   {{rules}}
+  知识库参考资料（用户上传，可为空；若引用须在 description 标注来源编号如 [1]，禁止编造）：
+  {{rag_context}}
   只输出 JSON，不要解释：{"findings": [{"risk_type": "data_security", "title": "...", "risk_level": "low|medium|high|critical", "description": "...", "suggestion": "...", "evidence_text": "逐字引用原文"}]}
 user: |
   文档片段：

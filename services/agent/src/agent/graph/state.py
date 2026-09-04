@@ -30,6 +30,8 @@ NodeName = Literal[
     "rag_retrieve",
     # Phase 18 双框架
     "mode_router",
+    # Skill 路由显形（2026-09-01）：intent 节点内 SkillRouter 阶段单独落 trace
+    "skill_route",
 ]
 StepStatus = Literal["running", "ok", "fail", "skipped"]
 
@@ -70,6 +72,9 @@ class AgentState(TypedDict, total=False):
     # 停滞熔断（2026-08-25）：连续零成功执行的轮数（prompt 模式跨图轮累计，
     # native 内层循环自带局部计数）；达阈提前终止，防小模型死循环空转
     tool_stagnant_streak: int
+    # 停滞熔断强制追问（BUGFIX #182）：达阈后不直接停，先给一次强制追问轮；
+    # 已追问过仍无进展才终止。成功执行即复位。
+    tool_stagnant_asked: bool
     # 重复调用熔断跨图轮状态（BUGFIX #165）：上一次调用指纹 + 连续重复次数。
     # prompt 模式每轮是独立节点执行，不存 state 就无法识别跨轮的原地打转。
     tool_last_call_fp: str
@@ -175,6 +180,7 @@ def empty_state(prompt: str) -> dict:
         "tool_turn_count": 0,
         "tool_loop_active": False,
         "tool_stagnant_streak": 0,
+        "tool_stagnant_asked": False,
         "tool_last_call_fp": "",
         "tool_repeat_streak": 0,
         "tool_calling_mode": "prompt",

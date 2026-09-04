@@ -124,6 +124,9 @@ _CHANNEL_BY_KIND = {
     "tool_progress": "agent://tool_progress",
     "shell_chunk": "agent://shell_chunk",
     "file_write_preview": "agent://file_write_preview",
+    # 回答逐字流式（2026-09-03）SSE 三处同步（CLAUDE.md §4）
+    # answer_delta：responder 终答路径的 token 增量（含 msgId，终答 message 同 id 覆盖）
+    "answer_delta": "agent://answer_delta",
     # Phase 19 V0：自进化闭环 SSE 三处同步（CLAUDE.md §4）
     # evolution_insight_created：失败反思产出新经验（前端经验库页刷新）
     # Phase 19 V1：skill_draft_ready 技能蒸馏草稿待审（前端技能页草稿区刷新）
@@ -310,6 +313,25 @@ async def stream_graph_events(
     # Phase 19 V0：跟踪最近一次全量状态快照（done 前抽任务轨迹用）
     last_values: dict | None = None
 
+    # 回答逐字流式（2026-09-03）：从首条 answer_delta 种子化 final_answer_msg_id，
+    # 终答 message 事件即复用同一 id（#142 原地覆盖机制），流式草稿与终稿收敛为同一条气泡。
+    _answer_delta_channel = _CHANNEL_BY_KIND["answer_delta"]
+
+    def _seed_answer_msg_id(events: list[dict]) -> None:
+        if final_answer_msg_id:
+            return
+        for evt in events:
+            if evt.get("event") != _answer_delta_channel:
+                continue
+            try:
+                payload = json.loads(evt.get("data") or "{}")
+            except ValueError:
+                continue
+            mid = str(payload.get("msgId") or "")
+            if mid:
+                final_answer_msg_id.append(mid)
+                return
+
     # 心跳保活（BUGFIX #118）：把 astream 包成单任务逐块 await，等待超过
     # _HEARTBEAT_INTERVAL_SEC 就先 yield 一条注释行保活再继续等（任务不取消，
     # 图执行不受影响）。防 Rust reqwest read_timeout=60s 静默断连。
@@ -346,9 +368,11 @@ async def stream_graph_events(
                 if time.monotonic() - last_chunk_ts > _MAX_SILENCE_SEC:
                     break
                 # 执行过程可视化：图块间隔内（单条长耗时工具执行期间）也要把已
-                # emit 的细粒度事件（shell_chunk / tool_progress）推出去，
+                # emit 的细粒度事件（shell_chunk / tool_progress / answer_delta）推出去，
                 # 不能卡到节点结束才下发。
-                for evt in await _drain_process_events():
+                pending_evts = await _drain_process_events()
+                _seed_answer_msg_id(pending_evts)
+                for evt in pending_evts:
                     yield evt
                 if time.monotonic() - last_heartbeat_ts >= _HEARTBEAT_INTERVAL_SEC:
                     last_heartbeat_ts = time.monotonic()
@@ -364,6 +388,13 @@ async def stream_graph_events(
             # Phase 19 V0：留存最近全量快照（任务收尾轨迹抽取用，best-effort）
             if mode == "values" and isinstance(payload, dict):
                 last_values = payload
+            # 回答逐字流式（2026-09-03）：先 drain builtin 队列（含 answer_delta）并种子化
+            # msgId，再转换图块——保证终答 message 事件永远复用草稿 id（delta 与节点
+            # 完成落在同一批时也不会发出两个 id，前端不会拼出第二条气泡）。
+            builtin_evts = await _drain_builtin_events()
+            _seed_answer_msg_id(builtin_evts)
+            for evt in builtin_evts:
+                yield evt
             for event in _convert_chunk(
                 mode,
                 payload,
@@ -386,9 +417,7 @@ async def stream_graph_events(
             # Phase 19 V0：消费自进化后台事件（新经验产出）并推到 SSE 流
             for evt in await _drain_evolution_events():
                 yield evt
-            # Phase 1B V1：消费 builtin 后台事件并推到 SSE 流
-            for evt in await _drain_builtin_events():
-                yield evt
+            # （builtin 队列已前置到图块转换之前 drain，含 answer_delta 种子化）
             # Phase 14 V0：消费 image_processing 后台事件并推到 SSE 流
             for evt in await _drain_image_events():
                 yield evt
@@ -418,7 +447,9 @@ async def stream_graph_events(
             yield evt
         for evt in await _drain_evolution_events():
             yield evt
-        for evt in await _drain_builtin_events():
+        builtin_tail = await _drain_builtin_events()
+        _seed_answer_msg_id(builtin_tail)
+        for evt in builtin_tail:
             yield evt
         for evt in await _drain_image_events():
             yield evt

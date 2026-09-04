@@ -10,8 +10,8 @@
     - `embed_fn` 注入：测试可传 mock（hash → 64 维向量）；生产用 sentence-transformers。
     - 阈值 0.92 / TTL 24h（按 SCHEDULE §3.1 估算）
     - 命中时同样返回字符串 + sources_referenced（与 L1 一致）
-    - 存储：用 SQLite（同 cache_l1 进程内内存 OK，但 L2 长文本条目多，SQLite 更稳；
-      复用 router.db，新增 l2_cache 表）
+    - 存储：双层 —— 进程内 dict（快路径）+ SQLite 持久层（复用 router.db，
+      l2_cache 表 + l2_cache_vec sqlite-vec 虚拟表，重启后仍可语义命中）。
 
 CLAUDE.md §2 红线：
     - 不读敏感上下文：`biznav_extract` / `repair` / `intent` 等 _LOCAL_ONLY_TASKS 任务
@@ -27,12 +27,49 @@ CLAUDE.md §2 红线：
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
+import sqlite3
 import time
 from collections.abc import Callable
 
+from agent import vector_store as vs
+
 # _LOCAL_ONLY_TASKS 不写 L2（敏感上下文不缓存）
 from agent.llm.router import _LOCAL_ONLY_TASKS
+
+logger = logging.getLogger("agent.llm.cache_l2")
+
+_L2_TABLE = "l2_cache"
+_L2_VEC_TABLE = "l2_cache_vec"
+
+
+def _l2_db_path() -> str:
+    """持久层库路径（复用 router.db，相对路径随测试 chdir 隔离）。"""
+    from agent.config import settings
+
+    return settings.llm_router_db_path
+
+
+def _l2_connect() -> sqlite3.Connection | None:
+    """建连 + 加载 sqlite-vec + 建表；任一失败返 None（内存层不受影响）。"""
+    try:
+        conn = sqlite3.connect(_l2_db_path(), timeout=5)
+        if not vs.load_extension(conn):
+            conn.close()
+            return None
+        conn.execute(
+            f"CREATE TABLE IF NOT EXISTS {_L2_TABLE} ("
+            "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  key TEXT NOT NULL UNIQUE,"
+            "  model TEXT NOT NULL,"
+            "  text TEXT NOT NULL,"
+            "  expires_at REAL NOT NULL)"
+        )
+        return conn
+    except Exception as exc:
+        logger.debug("l2_cache db connect failed: %s", exc)
+        return None
 
 
 def mock_embed(prompt: str, dim: int = 64) -> list[float]:
@@ -128,6 +165,11 @@ class L2Cache:
             if best_sim >= self._threshold and best_key is not None:
                 self.hits += 1
                 return self._store[best_key][1]
+            # 内存未命中 → 查持久层（重启后的条目只在库里）
+            db_hit = self._db_lookup(model, target)
+            if db_hit is not None:
+                self.hits += 1
+                return db_hit
             self.misses += 1
             return None
         # 精确命中
@@ -160,6 +202,63 @@ class L2Cache:
         key = self._make_key(model, prompt)
         emb = self._embed(prompt)
         self._store[key] = (emb, text, time.monotonic() + self._ttl)
+        self._db_persist(key, model, prompt, text, emb)
+
+    # ---- 持久层（router.db + sqlite-vec，best-effort）-------------------------
+
+    def _db_persist(self, key: str, model: str, prompt: str, text: str, emb: list[float]) -> None:
+        """写持久层：条目 + 向量（维度漂移时重建 vec 表）。"""
+        if not emb or not any(emb):
+            return
+        conn = _l2_connect()
+        if conn is None:
+            return
+        try:
+            vs.ensure_vec_table(conn, _L2_VEC_TABLE, len(emb))
+            conn.execute(
+                f"INSERT INTO {_L2_TABLE} (key, model, text, expires_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET text=excluded.text, "
+                "expires_at=excluded.expires_at",
+                (key, model, text, time.time() + self._ttl),
+            )
+            row_id = conn.execute(f"SELECT id FROM {_L2_TABLE} WHERE key = ?", (key,)).fetchone()[0]
+            vs.upsert(conn, _L2_VEC_TABLE, int(row_id), emb)
+            conn.commit()
+        except Exception as exc:
+            logger.debug("l2_cache db persist failed: %s", exc)
+        finally:
+            conn.close()
+
+    def _db_lookup(self, model: str, target: list[float]) -> str | None:
+        """持久层语义检索：同 model 未过期条目中相似度最高且达阈者；并回填内存层。"""
+        conn = _l2_connect()
+        if conn is None:
+            return None
+        try:
+            if vs.table_dim(conn, _L2_VEC_TABLE) != len(target):
+                return None
+            row = conn.execute(
+                f"SELECT c.text, c.expires_at, {vs.cosine_expr('v.embedding')} AS sim "
+                f"FROM {_L2_TABLE} c JOIN {_L2_VEC_TABLE} v ON v.rowid = c.id "
+                "WHERE c.model = ? ORDER BY sim DESC LIMIT 1",
+                (vs.serialize(target), model),
+            ).fetchone()
+            if row is None:
+                return None
+            text, expires_at, sim = str(row[0]), float(row[1]), float(row[2])
+            if sim < self._threshold or expires_at <= time.time():
+                return None
+            # 回填内存层（TTL 按剩余墙钟时间折回 monotonic）
+            key = hashlib.sha256(text.encode("utf-8")).hexdigest()  # 占位，不参与精确命中
+            self._store.setdefault(
+                key, (target, text, time.monotonic() + max(expires_at - time.time(), 0.0))
+            )
+            return text
+        except Exception as exc:
+            logger.debug("l2_cache db lookup failed: %s", exc)
+            return None
+        finally:
+            conn.close()
 
     def stats(self) -> dict[str, int]:
         return {"hits": self.hits, "misses": self.misses, "size": len(self._store)}
@@ -168,3 +267,13 @@ class L2Cache:
         self._store.clear()
         self.hits = 0
         self.misses = 0
+        conn = _l2_connect()
+        if conn is not None:
+            try:
+                conn.execute(f"DELETE FROM {_L2_TABLE}")
+                vs.delete_all(conn, _L2_VEC_TABLE)
+                conn.commit()
+            except Exception as exc:
+                logger.debug("l2_cache db clear failed: %s", exc)
+            finally:
+                conn.close()

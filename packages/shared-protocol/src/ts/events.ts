@@ -40,4 +40,7 @@ export type AgentStreamEvent =
   | { kind: 'run_started'; runId?: string }
   | { kind: 'tool_progress'; call_id?: string; callId?: string; tool_name?: string; message?: string; percent?: number; runId?: string }
   | { kind: 'shell_chunk'; call_id?: string; callId?: string; stream: 'stdout' | 'stderr'; chunk: string; exit_code?: number; runId?: string }
-  | { kind: 'file_write_preview'; call_id?: string; callId?: string; path: string; diff: string; risk_level?: string; runId?: string };
+  | { kind: 'file_write_preview'; call_id?: string; callId?: string; path: string; diff: string; risk_level?: string; runId?: string }
+  // 回答逐字流式（2026-09-03）：responder 终答路径的 token 增量。msgId 与终答
+  // message 事件同源（后端种子化），前端按 msgId 归并草稿气泡，终稿同 id 原地覆盖。
+  | { kind: 'answer_delta'; msgId?: string; delta?: string; runId?: string };

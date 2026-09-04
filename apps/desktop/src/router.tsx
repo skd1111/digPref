@@ -38,6 +38,7 @@ export const router = createBrowserRouter([
       { path: 'settings/dspark', element: <SettingsView /> },
       { path: 'settings/router', element: <SettingsView /> },
       { path: 'settings/codenav', element: <SettingsView /> },
+      { path: 'settings/knowledge', element: <SettingsView /> },  // 知识库/RAG（审核专家 + 聊天共用混合检索）
       { path: 'settings/toolchain', element: <SettingsView /> },  // Phase 18；2026-08-28 并入原「编译配置」
       { path: 'settings/workspace', element: <SettingsView /> },  // 工作空间路径（下方 advanced 紧跟）
       { path: 'settings/advanced', element: <SettingsView /> },  // 高级设置（2026-08-05）

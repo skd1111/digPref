@@ -45,6 +45,8 @@ export function subscribeAgentStream(handler: Handler): () => void {
     listen<AgentStreamEvent>(EVT.AGENT_RUN_STARTED, (e) => handler(e.payload)),
     listen<AgentStreamEvent>(EVT.AGENT_TOOL_PROGRESS, (e) => handler(e.payload)),
     listen<AgentStreamEvent>(EVT.AGENT_SHELL_CHUNK, (e) => handler(e.payload)),
+    // 回答逐字流式（2026-09-03）：responder 终答 token 增量
+    listen<AgentStreamEvent>(EVT.AGENT_ANSWER_DELTA, (e) => handler(e.payload)),
     listen<AgentStreamEvent>(EVT.AGENT_FILE_WRITE_PREVIEW, (e) => handler(e.payload)),
     // 生命周期通道：流结束和错误
     listen<AgentStreamEvent>(EVT.AGENT_DONE, (e) => handler(e.payload)),

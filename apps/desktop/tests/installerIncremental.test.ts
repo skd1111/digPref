@@ -39,33 +39,32 @@ describe("NSIS 增量安装护栏", () => {
 });
 
 /**
- * 随包嵌套目录护栏（BUGFIX #160，2026-08-27）。
+ * 随包资源护栏。
  *
- * Tauri bundle.resources 的 map 形式下，glob 匹配中的文件会被展平到目标目录
- * （只保留文件名，不保留相对路径，官方文档明示），导致安装目录里
- * vendor/ppt-master/workflows/ 等子目录消失、同名文件互相覆盖，
- * SKILL.md 引导读 ${SKILL_DIR}/workflows/routing.md 直接 FileNotFoundError。
- * 嵌套目录必须用目录形式（"dir/": "target/"），bundler 才会递归保留结构。
+ * 2026-09-03：不再内置 ppt-master——vendor/ppt-master 整体移出 bundle.resources
+ * （PPT 技能改由用户经 /skills/import 自行上传），安装包因此瘦身 ~100MB；
+ * 内嵌 Python（vendor/python）更早已移除。本护栏锁定二者都不得回到 resources。
+ *
+ * 另保留 BUGFIX #160 教训：map 形式的 bundle.resources 下，`**` glob 匹配的文件
+ * 会被展平到目标目录（只留文件名、丢相对路径），嵌套目录必须用目录形式（"dir/": "target/"）。
  */
-describe("Tauri resources 嵌套目录防展平护栏", () => {
+describe("Tauri resources 随包护栏", () => {
   const conf = JSON.parse(readFileSync(confPath, "utf-8")) as {
     bundle?: { resources?: Record<string, string> | string[] };
   };
   const resources = conf.bundle?.resources;
 
-  it("resources 为 map 形式且包含 ppt-master / python 条目", () => {
+  it("resources 为 map 形式，且不再捆绑 vendor/ppt-master 与 vendor/python", () => {
     expect(Array.isArray(resources)).toBe(false);
     const keys = Object.keys(resources ?? {});
-    expect(keys.some((k) => k.includes("vendor/ppt-master"))).toBe(true);
-    expect(keys.some((k) => k.includes("vendor/python"))).toBe(true);
+    // 2026-09-03：ppt-master 不再内置（用户自行上传 PPT 技能）；内嵌 Python 早已移除
+    expect(keys.some((k) => k.includes("vendor/ppt-master"))).toBe(false);
+    expect(keys.some((k) => k.includes("vendor/python"))).toBe(false);
   });
 
-  it("嵌套随包目录不用 **/*（map + glob 会展平丢目录，BUGFIX #160）", () => {
+  it("随包资源不用 ** 双星 glob（map + ** 会展平丢目录，BUGFIX #160）", () => {
     for (const src of Object.keys(resources ?? {})) {
-      if (src.includes("vendor/ppt-master") || src.includes("vendor/python")) {
-        expect(src).not.toContain("**");
-        expect(src).not.toContain("*");
-      }
+      expect(src).not.toContain("**");
     }
   });
 });

@@ -1,8 +1,8 @@
 """Skill 路由 + system_prompt 拼装。
 
 V0 模式：纯关键词匹配。V1 升级 LLM 意图分类（Ollama）+ 关键词回退。
-关键词匹配带归一化与中英混排兜底（2026-08-26）：「做一个…的ppt」
-不含连续子串「做ppt」也能命中 office_pptx_designer。
+关键词匹配带归一化与中英混排兜底（2026-08-26）：如「做一个…的ppt」
+不含连续子串「做ppt」也能命中 trigger_keywords 含「ppt」的技能。
 """
 
 from __future__ import annotations

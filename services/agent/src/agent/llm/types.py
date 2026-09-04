@@ -48,6 +48,11 @@ TaskKind = Literal[
     # 文档风险合规审核（2026-08-04）：文档分类 / 风险分析（路由链可配置，允许云端）
     "doc_classify",
     "doc_analyze",
+    # 本地知识库 RAG 的 LLM 增强阶段（2026-09-03）：HyDE / 查询扩展 / 上下文前缀。
+    # 默认关；启用时走「已启用模型」链（generate_review，同 doc_review 敏感文档姿态）。
+    "kb_hyde",
+    "kb_expand",
+    "kb_contextual",
     # 会话历史压缩（2026-08-17）：LLM 摘要旧对话（含用户原始内容 → 本地红线）
     "history_compress",
     # Phase 19 V0：失败轨迹反思（输入含用户任务内容 → 本地红线）

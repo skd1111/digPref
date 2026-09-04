@@ -34,7 +34,11 @@ from agent.graph.edges import route_after_tool_loop
 from agent.graph.state import empty_state
 from agent.llm.router import LMRouter, _parse_orchestration_action
 from agent.tools.catalog import ToolCatalog
-from agent.tools.loop import DynamicToolLoop
+from agent.tools.loop import (
+    DynamicToolLoop,
+    _merge_extra_rules,
+    _stagnant_msg,
+)
 
 # ---- 伪对象 ----------------------------------------------------------------
 
@@ -122,6 +126,20 @@ def _loop_state(**patch: Any) -> dict:
     st = empty_state("查一下天气")
     st.update(patch)
     return st
+
+
+class _SeqCatalog(_FakeCatalog):
+    """按顺序返回预置执行结果的目录（耗尽后回落成功结果）。"""
+
+    def __init__(self, seq: list[dict], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._seq = list(seq)
+
+    async def execute(self, name: str, args: dict, state: dict) -> dict:
+        self.executed.append((name, args))
+        if self._seq:
+            return self._seq.pop(0)
+        return {"name": name, "ok": True, "result": f"result:{name}"}
 
 
 # ---- ToolCatalog -----------------------------------------------------------
@@ -343,12 +361,49 @@ class TestDynamicToolLoop:
         assert "继续" in out["final_answer"]
 
     async def test_stagnant_fuse_trips_after_consecutive_failed_turns(self):
-        """停滞熔断（2026-08-25）：连续 3 轮零成功执行 → 提前终止；
+        """停滞熔断（2026-08-25，BUGFIX #182）：连续 3 轮零成功执行 → 先强制
+        追问一轮（反向问用户缺什么），追问后仍无进展才终止；
         防小模型重复同一失败调用无限空转（预算不再是唯一拦截）。
         """
-        catalog = _FakeCatalog(
-            execute_results={"get_weather": {"name": "get_weather", "ok": False, "error": "boom"}}
+        fail = {"name": "get_weather", "ok": False, "error": "boom"}
+        catalog = _SeqCatalog([dict(fail) for _ in range(4)])
+        llm = _ScriptedLoopLLM(
+            [_action("SELECT_TOOLS", selected_tool_names=["get_weather"])]
+            + [
+                _action(
+                    "TOOL_CALLS",
+                    tool_calls=[{"id": f"c{i}", "name": "get_weather", "arguments": {}}],
+                )
+                for i in range(4)
+            ]
         )
+        loop = DynamicToolLoop(llm, catalog, max_turns=20)
+        out = await loop.run(_loop_state())  # SELECT_TOOLS
+        reg = out.get("registered_tools") or []
+
+        def _next(o: dict) -> dict:
+            return _loop_state(**{**o, "registered_tools": o.get("registered_tools") or reg})
+
+        out = await loop.run(_next(out))  # 失败轮 1（streak=1）
+        assert out.get("final_answer") is None
+        out = await loop.run(_next(out))  # 失败轮 2（streak=2）
+        assert out.get("final_answer") is None
+        out = await loop.run(_next(out))  # 失败轮 3（streak=3 → 强制追问，不直接停）
+        assert out.get("final_answer") is None
+        assert out["tool_loop_active"] is True
+        assert out["tool_stagnant_asked"] is True
+        out = await loop.run(_next(out))  # 失败轮 4（追问后仍卡住 → 终止）
+        # 强制追问指令已随 EXTRA_RULES 注入最后一轮编排
+        assert "系统强制指令" in llm.calls[-1]["extra_rules"]
+        assert "均无有效结果" in out["final_answer"]
+        assert "boom" in out["final_answer"]  # 终答带上具体失败原因，不再只甩模板句
+        assert out["tool_loop_active"] is False
+
+    async def test_stagnant_force_ask_then_model_asks_user(self):
+        """BUGFIX #182：停滞达阈后模型遵从强制追问指令输出 ASK_USER →
+        用户收到具体追问（缺哪些东西），而不是模板文案直接停止。"""
+        fail = {"name": "get_weather", "ok": False, "error": "boom"}
+        catalog = _SeqCatalog([dict(fail) for _ in range(3)])
         llm = _ScriptedLoopLLM(
             [_action("SELECT_TOOLS", selected_tool_names=["get_weather"])]
             + [
@@ -358,16 +413,55 @@ class TestDynamicToolLoop:
                 )
                 for i in range(3)
             ]
+            + [_action("ASK_USER", ask_user_message="缺少素材：请提供联想公司介绍的资料文件路径。")]
         )
         loop = DynamicToolLoop(llm, catalog, max_turns=20)
-        out = await loop.run(_loop_state())  # SELECT_TOOLS
-        out = await loop.run(_loop_state(**out))  # 失败轮 1（streak=1）
-        assert out.get("final_answer") is None
-        out = await loop.run(_loop_state(**out))  # 失败轮 2（streak=2）
-        assert out.get("final_answer") is None
-        out = await loop.run(_loop_state(**out))  # 失败轮 3（streak=3 → 熔断）
-        assert "均无有效结果" in out["final_answer"]
+        out = await loop.run(_loop_state())
+        for _ in range(3):  # 三轮失败，第三轮触发强制追问（不终止）
+            out = await loop.run(_loop_state(**out))
+            assert out.get("final_answer") is None
+        assert out["tool_stagnant_asked"] is True
+        out = await loop.run(_loop_state(**out))  # 强制追问轮：模型反向问用户
+        assert "系统强制指令" in llm.calls[-1]["extra_rules"]
+        assert out["final_answer"] == "缺少素材：请提供联想公司介绍的资料文件路径。"
         assert out["tool_loop_active"] is False
+
+    async def test_stagnant_asked_resets_on_success(self):
+        """BUGFIX #182：强制追问后一旦有进展（成功执行），streak 与追问旗标一并复位，
+        后续再卡住仍能再获得一次追问机会，不背历史欠账。"""
+        fail = {"name": "get_weather", "ok": False, "error": "boom"}
+        ok = {"name": "get_weather", "ok": True, "result": "ok"}
+        catalog = _SeqCatalog(
+            [dict(fail) for _ in range(3)] + [dict(ok)] + [dict(fail) for _ in range(3)]
+        )
+        llm = _ScriptedLoopLLM(
+            [_action("SELECT_TOOLS", selected_tool_names=["get_weather"])]
+            + [
+                _action(
+                    "TOOL_CALLS",
+                    tool_calls=[{"id": f"c{i}", "name": "get_weather", "arguments": {"q": i}}],
+                )
+                for i in range(7)
+            ]
+        )
+        loop = DynamicToolLoop(llm, catalog, max_turns=20)
+        out = await loop.run(_loop_state())
+        reg = out.get("registered_tools") or []
+
+        def _next(o: dict) -> dict:
+            return _loop_state(**{**o, "registered_tools": o.get("registered_tools") or reg})
+
+        for _ in range(3):  # 失败 1–3 → 第三轮强制追问（不终止）
+            out = await loop.run(_next(out))
+        assert out["tool_stagnant_asked"] is True
+        assert out.get("final_answer") is None
+        out = await loop.run(_next(out))  # 成功轮 → 清零复位
+        assert out.get("tool_stagnant_streak", 0) == 0
+        assert out.get("tool_stagnant_asked") is False
+        for _ in range(3):  # 再次失败 1–3 → 又给一次追问机会而不是直接终止
+            out = await loop.run(_next(out))
+            assert out.get("final_answer") is None
+        assert out["tool_stagnant_asked"] is True
 
     async def test_stagnant_streak_resets_on_success(self):
         """有进展就继续：成功执行一轮即清零，不误杀长链任务。"""
@@ -412,6 +506,42 @@ class TestDynamicToolLoop:
         loop = DynamicToolLoop(llm, catalog)
         out = await loop.run(_loop_state())
         assert "无法完成" in out["final_answer"]
+
+
+# ---- 停滞熔断追问（BUGFIX #182）单元 -----------------------------------
+
+
+class TestStagnantForceAsk:
+    def test_merge_extra_rules_injects_force_ask_directive(self):
+        """追问旗标 + 达阈才注入指令；缺一不注入（不误伤正常轮）。"""
+        assert "系统强制指令" in _merge_extra_rules(
+            {"tool_stagnant_asked": True, "tool_stagnant_streak": 3}
+        )
+        assert "系统强制指令" not in _merge_extra_rules(
+            {"tool_stagnant_asked": False, "tool_stagnant_streak": 3}
+        )
+        assert "系统强制指令" not in _merge_extra_rules(
+            {"tool_stagnant_asked": True, "tool_stagnant_streak": 1}
+        )
+
+    def test_stagnant_msg_lists_recent_failures(self):
+        """终答附最近失败原因（去重、最新优先），不再只甩模板句。"""
+        results = [
+            {"name": "shell", "ok": False, "error": "python-pptx not found"},
+            {"name": "shell", "ok": True, "result": "x"},
+            {"name": "read_file", "ok": False, "error": "no such file"},
+        ]
+        msg = _stagnant_msg(3, results)
+        assert "均无有效结果" in msg
+        assert "no such file" in msg
+        assert "python-pptx not found" in msg
+        assert "继续" in msg
+
+    def test_stagnant_msg_without_failures(self):
+        """无失败记录（如全是无可执行动作）时不报错、不出空清单。"""
+        msg = _stagnant_msg(3, [])
+        assert "均无有效结果" in msg
+        assert "最近的失败原因" not in msg
 
 
 # ---- 路由 ------------------------------------------------------------------

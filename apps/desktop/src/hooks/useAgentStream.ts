@@ -437,6 +437,28 @@ export function useAgentStream(): void {
           break;
         }
 
+        case 'answer_delta': {
+          // 回答逐字流式（2026-09-03）：responder 终答路径的 token 增量。
+          // msgId 与终答 message 同源（后端种子化）：首帧 append 草稿气泡，
+          // 后续帧原地拼接；终稿经 case 'message' 按同 id update 整条覆盖收敛。
+          const msgIdD = evt.msgId;
+          const deltaD = evt.delta;
+          if (!msgIdD || !deltaD) break;
+          const stD = useChatStore.getState();
+          const tabIdD = tabFor(evt.runId);
+          const existingD = stD.tabs.find((t) => t.id === tabIdD)?.messages.find((m) => m.id === msgIdD);
+          if (existingD) {
+            update(msgIdD, { content: (existingD.content ?? '') + deltaD });
+          } else {
+            stD.appendToTab(tabIdD, {
+              id: msgIdD,
+              role: 'assistant',
+              content: deltaD,
+            });
+          }
+          break;
+        }
+
         case 'file_write_preview': {
           // 写前 Diff 预览（阶段四）：审批暂停前先到达 —— 预览卡进执行链路，
           // diff 存 store 供 WritePreviewCard（内嵌 +/- 统计 + FullDiffModal 对比）。

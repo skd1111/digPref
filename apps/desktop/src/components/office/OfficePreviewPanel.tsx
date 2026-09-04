@@ -7,13 +7,26 @@
  * 安全红线：渲染产物为本地静态内容，iframe 不给 allow-same-origin。
  */
 import { useOfficePreviewStore } from "@/store/officePreviewStore";
+import { Markdown } from "@/components/chat/Markdown";
+import { ipc } from "@/ipc/invoke";
 
 export function OfficePreviewPanel(): JSX.Element | null {
-  const { open, loading, error, path, mode, html, imageBase64, close, refresh } =
+  const { open, loading, error, path, mode, source, html, imageBase64, pdfUrl, close, refresh } =
     useOfficePreviewStore();
 
   if (!open) return null;
   const fileName = path ? path.split(/[\\/]/).pop() ?? path : "";
+  const title = source === "office" ? "Office 预览" : "文件预览";
+
+  // 兜底：WebView 不能内嵌渲染时（如某些 PDF/格式），交系统默认程序打开
+  const openExternal = async (): Promise<void> => {
+    if (!path) return;
+    try {
+      await ipc.openWithDefault(path);
+    } catch (e) {
+      window.alert(`用系统程序打开失败：${path}\n${String(e)}`);
+    }
+  };
 
   return (
     <div
@@ -27,12 +40,20 @@ export function OfficePreviewPanel(): JSX.Element | null {
         {/* 标题栏 */}
         <div className="flex items-center justify-between gap-2 border-b border-neutral-800 px-3 py-2">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="text-[13px] font-semibold text-neutral-100">Office 预览</span>
+            <span className="text-[13px] font-semibold text-neutral-100">{title}</span>
             <span className="truncate text-[12px] text-neutral-400" title={path ?? ""}>
               {fileName}
             </span>
           </div>
           <div className="flex items-center gap-1">
+            <button
+              className="rounded px-2 py-1 text-[12px] text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
+              disabled={!path}
+              onClick={() => void openExternal()}
+              title="用系统默认程序打开"
+            >
+              ↗ 系统打开
+            </button>
             <button
               className="rounded px-2 py-1 text-[12px] text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
               disabled={loading || !path}
@@ -98,7 +119,27 @@ export function OfficePreviewPanel(): JSX.Element | null {
               src={`data:image/png;base64,${imageBase64}`}
             />
           )}
-          {!loading && !error && !html && !imageBase64 && (
+          {/* 本地 md 渲染（知识库依据/已上传 markdown）：浅色底 + .md-body 排版 */}
+          {!loading && !error && source === "local-text" && mode === "markdown" && html && (
+            <div className="h-full w-full overflow-auto bg-white px-6 py-4">
+              <Markdown text={html} />
+            </div>
+          )}
+          {/* 本地纯文本（txt/csv/log）：等宽字体、保留换行 */}
+          {!loading && !error && source === "local-text" && mode === "text" && html && (
+            <pre className="h-full w-full overflow-auto whitespace-pre-wrap break-words bg-white px-4 py-3 font-mono text-[12px] leading-relaxed text-neutral-800">
+              {html}
+            </pre>
+          )}
+          {/* WebView 内嵌 PDF（asset 协议）：依赖系统 WebView 的 PDF 能力；不行时用右上“系统打开”兜底 */}
+          {!loading && !error && source === "local-pdf" && pdfUrl && (
+            <iframe
+              className="h-full w-full border-0 bg-white"
+              src={pdfUrl}
+              title={fileName}
+            />
+          )}
+          {!loading && !error && !html && !imageBase64 && !pdfUrl && (
             <div className="flex flex-1 items-center justify-center text-[13px] text-neutral-500">
               暂无预览内容
             </div>

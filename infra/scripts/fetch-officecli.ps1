@@ -1,4 +1,4 @@
-# 拉取 OfficeCLI 二进制（V9 Office 能力 · 随安装包内置，2026-08-25）
+﻿# 拉取 OfficeCLI 二进制（V9 Office 能力 · 随安装包内置，2026-08-25）
 #
 # OfficeCLI（iOfficeAI，Apache 2.0）：单二进制 Office 引擎，无需安装 Office，
 # 供 builtin_office_* 工具族与 /office/preview 预览端点使用。

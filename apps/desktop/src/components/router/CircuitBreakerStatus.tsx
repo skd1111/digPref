@@ -39,7 +39,7 @@ export function CircuitBreakerStatus(): JSX.Element {
         🔌 熔断器状态
       </h3>
       <p className="mb-3 text-2xs" style={{ color: '#616161' }}>
-        V2: 5 秒轮询拉真状态（RouterDashboard setMetrics 写入）。Open 后点「重置」手动恢复。
+        熔断后点“重置”手动恢复。
       </p>
 
       {circuits.length === 0 ? (

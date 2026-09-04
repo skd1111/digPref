@@ -1,7 +1,7 @@
 """文档解析：主流办公文档格式 → ParsedDocument（页 / 块 / 全局偏移）。
 
 支持矩阵：
-    pdf   pypdf 文本层（扫描件无 OCR → 明确报错）
+    pdf   pypdf 文本层；无文本层（扫描件）→ pypdfium2 栅格化 + RapidOCR 端侧识别回退
     docx  python-docx 段落 + 表格
     doc   Word 97-2003：Windows 下经 Word/WPS COM 转 docx；PK 魔数嗅探直解
     txt/md/csv  纯文本（UTF-8 / GBK）
@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import re
 import subprocess
@@ -23,7 +24,10 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import ClassVar
 
+from agent.config import settings
 from agent.doc_review.models import Block, DocFormat, Page, ParsedDocument, generate_id
+
+logger = logging.getLogger(__name__)
 
 
 class DocParseError(Exception):
@@ -115,7 +119,37 @@ def _parse_pdf(path: Path) -> list[tuple[int, list[str]]]:
         blocks = _split_blocks(text)
         if blocks:
             pages.append((i, blocks))
-    return pages
+    if pages:
+        return pages
+    # 无文本层 → 扫描件：按开关走 pypdfium2 栅格化 + RapidOCR 端侧识别回退（best-effort）
+    return _ocr_scanned_pdf(path)
+
+
+def _ocr_scanned_pdf(path: Path) -> list[tuple[int, list[str]]]:
+    """扫描件 PDF 的 OCR 回退：仅当无文本层时触发（正常 PDF 不走）。
+
+    纯本地端侧（pypdfium2 栅格化 + RapidOCR），数据不出域；开关关闭/依赖缺失/
+    识别失败均静默返 []（上层 parse_document 报「未提取到文本」）。
+    """
+    if not settings.doc_review_pdf_ocr_enabled:
+        return []
+    try:
+        from agent.image_processing.ocr import ocr_pdf_to_pages, rapidocr_available
+
+        if not rapidocr_available():
+            logger.info("scanned PDF OCR skipped: RapidOCR 不可用 file=%s", path.name)
+            return []
+        pages = ocr_pdf_to_pages(
+            path,
+            scale=float(settings.doc_review_pdf_ocr_scale),
+            max_pages=int(settings.doc_review_pdf_ocr_max_pages),
+        )
+        if pages:
+            logger.info("scanned PDF OCR fallback ok file=%s pages=%d", path.name, len(pages))
+        return pages
+    except Exception as exc:
+        logger.warning("scanned PDF OCR fallback failed file=%s: %s", path.name, exc)
+        return []
 
 
 def _parse_docx(path: Path) -> list[tuple[int, list[str]]]:
@@ -344,5 +378,5 @@ def parse_document(path: str | Path) -> ParsedDocument:
     else:
         by_page = _parse_text(p)
     if not by_page:
-        raise DocParseError("未提取到文本（可能为扫描件；OCR 不在 V0 范围）")
+        raise DocParseError("未提取到文本（可能为扫描件且 OCR 未启用/不可用，或确实无文字内容）")
     return _assemble(by_page, file_name=p.name, file_path=str(p.resolve()), fmt=fmt)

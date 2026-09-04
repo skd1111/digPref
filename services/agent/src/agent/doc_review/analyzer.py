@@ -90,6 +90,7 @@ async def analyze_document(
     rules: list[PolicyRule],
     chunk_max_chars: int,
     chunk_overlap: int,
+    rag_context: str = "",
     llm: LLMFunc | None = None,
     on_progress: Callable[[float], Awaitable[None] | None] | None = None,
     concurrency: int | None = None,
@@ -147,6 +148,7 @@ async def analyze_document(
             template["system"]
             .replace("{{doc_category}}", classification.doc_category.value)
             .replace("{{rules}}", rules_text_by_risk[risk_type])
+            .replace("{{rag_context}}", rag_context or "（无）")
         )
         user_part = template["user"].replace("{{chunk_text}}", chunk)
         base_prompt = f"{system_part}\n\n{discipline}\n\n{user_part}"

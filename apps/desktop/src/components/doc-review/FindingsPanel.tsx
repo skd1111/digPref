@@ -1,11 +1,21 @@
 import { useEffect, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { ipc } from "@/ipc/invoke";
+import { previewLocalFile } from "@/store/officePreviewStore";
 import {
   useDocReviewStore,
   DOC_REVIEW_RISK_COLORS,
 } from "@/store/docReviewStore";
 import type { DocFinding } from "@eaide/shared-protocol";
+
+/** 点击依据→预览命中的知识原文件（md/txt/html 内置预览，pdf/doc 等走系统默认程序）。 */
+async function openRefFile(path: string): Promise<void> {
+  try {
+    await previewLocalFile(path);
+  } catch (e) {
+    window.alert(`打开依据原文件失败：${path}\n${String(e)}`);
+  }
+}
 
 function KbRefBlock({ finding }: { finding: DocFinding }): JSX.Element | null {
   const refs = finding.kb_refs ?? [];
@@ -21,7 +31,24 @@ function KbRefBlock({ finding }: { finding: DocFinding }): JSX.Element | null {
       {refs.map((ref, i) => (
         <div key={`${finding.finding_id}-kb-${i}`} className="mt-1.5">
           <p className="text-2xs font-semibold" style={{ color: "#1f1f1f" }}>
-            📖 {ref.source} · {ref.heading}
+            {ref.file_path ? (
+              <button
+                type="button"
+                className="cursor-pointer rounded underline decoration-dotted underline-offset-2 hover:text-[#0b6bcb]"
+                style={{ color: "#1f1f1f" }}
+                title="点击预览依据原文件"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void openRefFile(ref.file_path);
+                }}
+              >
+                📖 {ref.source}
+              </button>
+            ) : (
+              <>📖 {ref.source}</>
+            )}
+            {" · "}
+            {ref.heading}
           </p>
           {ref.excerpt && (
             <p

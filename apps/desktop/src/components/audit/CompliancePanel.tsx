@@ -107,13 +107,13 @@ export function CompliancePanel({ taskId }: CompliancePanelProps): JSX.Element {
         </h3>
         <div className="space-y-0.5 text-2xs" style={{ color: '#616161' }}>
           {task.task_type === 'hotswap' && (
-            <div>⚙ Phase 3C Arthas 热更 - 字节码结构校验已通过</div>
+            <div>⚙ Arthas 热更 - 字节码结构校验已通过</div>
           )}
           {task.task_type === 'sql' && task.environment === 'prod' && (
-            <div>🗄 Phase 2E 运营专家模式 - HITL 二次确认链路</div>
+            <div>🗄 运营专家模式 - HITL 二次确认链路</div>
           )}
-          <div>📚 Phase 4 知识库 - 制度 / 业务规则证据（接入中）</div>
-          <div>📋 Phase 2G 业务功能点 - 影响范围自动评估（接入中）</div>
+          <div>📚 知识库 - 制度 / 业务规则证据（接入中）</div>
+          <div>📋 业务功能点 - 影响范围自动评估（接入中）</div>
         </div>
       </div>
     </div>

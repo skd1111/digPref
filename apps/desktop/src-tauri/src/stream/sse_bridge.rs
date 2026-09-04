@@ -147,6 +147,11 @@ pub mod channel {
     pub const SHELL_CHUNK: &str = "agent://shell_chunk";
     pub const FILE_WRITE_PREVIEW: &str = "agent://file_write_preview";
 
+    // 回答逐字流式（2026-09-03） —— SSE 三处同步（CLAUDE.md §4）
+    // answer_delta：responder 终答路径的 token 增量（含 msgId，终答 message 同 id 覆盖）。
+    // （只转发，Rust 侧不解析业务语义）
+    pub const ANSWER_DELTA: &str = "agent://answer_delta";
+
     // Phase 19 V0 自进化闭环 —— SSE 三处同步（CLAUDE.md §4）
     // evolution_insight_created：失败反思产出新经验（前端经验库页刷新）
     // skill_draft_ready（V1）：技能蒸馏草稿待审（前端技能页草稿区刷新）
@@ -537,6 +542,8 @@ fn map_event_to_channel(event_name: &str) -> &'static str {
         "tool_progress"      => channel::TOOL_PROGRESS,
         "shell_chunk"        => channel::SHELL_CHUNK,
         "file_write_preview" => channel::FILE_WRITE_PREVIEW,
+        // 回答逐字流式（2026-09-03） SSE 三处同步（CLAUDE.md §4）
+        "answer_delta"       => channel::ANSWER_DELTA,
         // Phase 19 V0：自进化闭环 SSE 三处同步（CLAUDE.md §4）
         "evolution_insight_created" => channel::EVOLUTION_INSIGHT_CREATED,
         "skill_draft_ready"         => channel::SKILL_DRAFT_READY,   // Phase 19 V1

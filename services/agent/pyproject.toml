@@ -36,6 +36,11 @@ dependencies = [
     "pypdf>=4.0",
     "python-docx>=1.1",
     "pyyaml>=6.0",
+    # 扫描件 PDF OCR（2026-09-04）：pypdfium2 栅格化 + RapidOCR 端侧识别（纯本地、数据不出域）；
+    # rapidocr 复用已有 onnxruntime，PP-OCRv4 mobile 模型~15MB 随包分发（另拉 opencv-python）；
+    # 缺失时 doc_review.parser 与 image_processing.ocr 静默退化，功能不中断
+    "pypdfium2>=4.0",
+    "rapidocr-onnxruntime>=1.4",
     # Phase 7 数据专家：SQL 结果 DataFrame（从 db-all 提升为主依赖，sql/run 真实执行必需）
     "pandas>=2.0",
     # SSH 会话（agent.ssh.client 运行时 import，未声明会被 uv sync 清理）
@@ -52,6 +57,10 @@ dependencies = [
     # 语义路由 / Few-Shot 检索 / KB 向量化共用；纯 CPU 推理无 CUDA 依赖
     "onnxruntime>=1.17",
     "tokenizers>=0.19",
+    "sqlite-vec>=0.1.9",
+    # 本地知识库混合检索（2026-09-03）：中文分词喂 SQLite FTS5（原生 BM25），
+    # 纯 Python 轻依赖；缺失时 hybrid_rag 退化 CJK bigram 分词，功能不中断
+    "jieba>=0.42",
 ]
 
 [project.optional-dependencies]

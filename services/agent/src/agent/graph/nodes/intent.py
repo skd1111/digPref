@@ -272,6 +272,12 @@ async def intent_node(state: AgentState, llm: LMRouter) -> dict:
     )
     # Phase 2D V1：LLM 意图分类 + 关键词回退（V0 仅关键词）
     skill_match: dict | None = None
+    # Skill 路由显形（2026-09-01）：本段在上方 duration_ms 截表之后执行，此前完全
+    # 无 trace，探活 + 最多两轮 Ollama 分类的最坏 ~11s 是隐形黑洞；单独计时并
+    # 落 skill_route 条目。
+    skill_route_started = time.monotonic()
+    skill_route_status = "skipped"
+    skill_route_extra: dict = {}
     try:
         from agent.skills import api as skills_api
 
@@ -282,6 +288,22 @@ async def intent_node(state: AgentState, llm: LMRouter) -> dict:
             pinned_routing = _load_pinned_skill(str(state.get("pinned_skill_id") or ""))
             if pinned_routing:
                 routing = pinned_routing
+                skill_route_status = "ok"
+                skill_route_extra = {"mode": "pinned"}
+            # 快路径短路（2026-09-01）：语义路由直出是零 LLM 预置场景，闲聊走罐头模板，
+            # 都不需要 Skill 规范注入——跳过 SkillRouter 探活 + 最多两轮 Ollama 分类（最坏 ~11s）。
+            # 强钉是用户显式动作，优先级最高，不在此短路范围（见上分支）。
+            elif (isinstance(analysis, dict) and "_route" in analysis) or intent == "chitchat":
+                routing = None
+                skill_route_extra = {
+                    "mode": "fast_path",
+                    "reason": (
+                        "semantic_route_hit"
+                        if isinstance(analysis, dict) and "_route" in analysis
+                        else "chitchat"
+                    ),
+                }
+                cot_log("intent.skill_route.skip", run_id=run_id, **skill_route_extra)
             else:
                 # 端侧地址以「模型管理」为准（router.db 自定义 URL/端口），与 LMRouter 同源
                 from agent.llm.router import load_enabled_local_backend
@@ -300,7 +322,9 @@ async def intent_node(state: AgentState, llm: LMRouter) -> dict:
                     inherited = _inherit_last_skill(prompt, str(state.get("last_skill_id") or ""))
                     if inherited:
                         routing = inherited
-            if routing.skill_id:
+                skill_route_status = "ok"
+                skill_route_extra = {"mode": "routed"}
+            if routing is not None and routing.skill_id:
                 skill_match = {
                     "active_skill_id": routing.skill_id,
                     "active_skill_name": routing.skill_name,
@@ -308,7 +332,8 @@ async def intent_node(state: AgentState, llm: LMRouter) -> dict:
                 }
     except Exception:
         # skill 模块未初始化 / LLM/keyword 都没命中 → 不影响主流程
-        pass
+        skill_route_status = "fail"
+    skill_route_ms = int((time.monotonic() - skill_route_started) * 1000)
 
     result: dict = {
         "intent": intent,
@@ -319,7 +344,13 @@ async def intent_node(state: AgentState, llm: LMRouter) -> dict:
                 intent=intent,
                 duration_ms=duration_ms,
                 structured=bool(analysis),
-            )
+            ),
+            record_trace(
+                "skill_route",
+                skill_route_status,
+                duration_ms=skill_route_ms,
+                **skill_route_extra,
+            ),
         ],
     }
     if analysis:

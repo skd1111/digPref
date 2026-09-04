@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import re
+from collections.abc import AsyncIterator
 from typing import Any, cast
 
 import httpx
@@ -31,6 +32,7 @@ from agent.llm.prompts import (
     load_prompt,
     normalize_message,
 )
+from agent.llm.stream_utils import ThinkBlockFilter
 from agent.llm.token_usage import record_openai_usage
 from agent.llm.types import Intent
 
@@ -772,3 +774,69 @@ class PrivateLLMClient:
             fallback_output=str(content or ""),
         )
         return _strip_think(content)
+
+    # ---- 流式对话（2026-09-03 回答逐字流式） ------------------------------
+
+    async def chat_stream(
+        self,
+        messages: list[dict],
+        *,
+        temperature: float = 0.3,
+        timeout: float = 300.0,
+    ) -> AsyncIterator[str]:
+        """流式对话（OpenAI 兼容 SSE）：逐 `data:` 行解析 choices[0].delta.content。
+
+        终答路径专用：不带 response_format（结构化 JSON 信封与逐字流式冲突），
+        think 块由 ThinkBlockFilter 增量抑制（内网推理模型 <THINK> 前奏不漏给前端）；
+        多厂商 400 参数适配不做流式内重试（失败直接上抛，Router 切降级链 /
+        非流式兜底）；流式帧无 usage 字段，Token 计量 V1 缺省（非流式路径不受影响）。
+        """
+        truncated = self._truncate_history(messages)
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": truncated,
+            "temperature": temperature,
+            "stream": True,
+        }
+        if self.max_output_tokens and self.max_output_tokens > 0:
+            payload["max_tokens"] = self.max_output_tokens
+        filt = ThinkBlockFilter()
+        url = f"{self.base_url}/chat/completions"
+        try:
+            # connect 限 10s（同 extract_chat）：后端不可达时快速上抛切降级链
+            async with self.client.stream(
+                "POST", url, json=payload, timeout=httpx.Timeout(timeout, connect=10.0)
+            ) as r:
+                if r.status_code >= 400:
+                    # 流式响应不能直接 r.text：先 aread 再拼错误正文（BUGFIX #137 同源语义）
+                    detail = (await r.aread()).decode("utf-8", errors="replace").strip()[:500]
+                    logger.error(
+                        "LLM stream HTTP %s from %s: %s", r.status_code, url, detail or "(空响应体)"
+                    )
+                    r.raise_for_status()
+                async for line in r.aiter_lines():
+                    line = line.strip()
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data = line[len("data:") :].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        frame = json.loads(data)
+                    except ValueError:
+                        continue  # 半截帧/保活噪声，不中断主流程
+                    choices = frame.get("choices") or []
+                    if not choices:
+                        continue
+                    piece = str((choices[0].get("delta") or {}).get("content") or "")
+                    if piece:
+                        out = filt.feed(piece)
+                        if out:
+                            yield out
+        except httpx.HTTPError as exc:
+            logger.warning("private LLM chat_stream transport failed: %s", exc)
+            raise
+        # 流正常收尾（[DONE] 或自然 EOF）：放行扣留尾巴
+        tail = filt.flush()
+        if tail:
+            yield tail

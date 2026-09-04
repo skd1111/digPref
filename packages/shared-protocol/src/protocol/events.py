@@ -110,6 +110,17 @@ class FileWritePreviewEvent(ChatMessage):
     risk_level: str | None = Field(default=None, alias="risk_level")
 
 
+class AnswerDeltaEvent(ChatMessage):
+    """回答逐字流式（2026-09-03）：responder 终答路径的 token 增量。
+
+    msg_id 由后端种子化到终答 message 事件（#142 同 id 原地覆盖），
+    前端按 msg_id 归并草稿气泡，终稿到达时整条覆盖收敛。"""
+
+    kind: Literal["answer_delta"] = "answer_delta"
+    msg_id: str | None = Field(default=None, alias="msgId")
+    delta: str = ""
+
+
 AgentStreamEvent = Annotated[
     MessageEvent
     | ToolCallEvent
@@ -124,6 +135,7 @@ AgentStreamEvent = Annotated[
     | RunStartedEvent
     | ToolProgressEvent
     | ShellChunkEvent
-    | FileWritePreviewEvent,
+    | FileWritePreviewEvent
+    | AnswerDeltaEvent,
     Field(discriminator="kind"),
 ]

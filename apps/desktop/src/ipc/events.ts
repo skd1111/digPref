@@ -200,6 +200,8 @@ export const EVT = {
   AGENT_TOOL_PROGRESS: "agent://tool_progress",
   /** shell 命令流式输出片段（含 call_id + stream + chunk，结束帧带 exit_code） */
   AGENT_SHELL_CHUNK: "agent://shell_chunk",
+  /** 回答逐字流式（2026-09-03）：responder 终答 token 增量（含 msgId + delta，终稿 message 同 id 覆盖） */
+  AGENT_ANSWER_DELTA: "agent://answer_delta",
   /** 写前 Diff 预览（含 call_id + path + unified diff，前端渲染+审批） */
   AGENT_FILE_WRITE_PREVIEW: "agent://file_write_preview",
 } as const;

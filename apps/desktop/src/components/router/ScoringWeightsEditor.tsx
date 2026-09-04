@@ -56,7 +56,7 @@ export function ScoringWeightsEditor(): JSX.Element {
     setHint(null);
     try {
       const r = await ipc.routerSetWeights(weights);
-      setHint('✓ 已保存到 router.db（Engine 内存已热生效）');
+      setHint('✓ 已保存，引擎已热生效');
       // 用后端返回的真值覆盖（防御性：保证前端与后端一致）
       setWeights(r.weights);
     } catch (e) {
@@ -73,7 +73,7 @@ export function ScoringWeightsEditor(): JSX.Element {
     try {
       const r = await ipc.routerSetWeights(DEFAULT_WEIGHTS);
       setWeights(r.weights);
-      setHint('✓ 已恢复默认（0.35 / 0.25 / 0.20 / 0.15 / 0.05）');
+      setHint('✓ 已恢复默认权重（0.35 / 0.25 / 0.20 / 0.15 / 0.05）');
     } catch (e) {
       setErr(String(e));
     } finally {
@@ -87,7 +87,7 @@ export function ScoringWeightsEditor(): JSX.Element {
         📊 评分权重
       </h3>
       <p className="mb-3 text-2xs" style={{ color: '#616161' }}>
-        5 维评分 Σ=1（默认 0.35 / 0.25 / 0.20 / 0.15 / 0.05）。点保存后端热生效到 Engine。
+        五维评分权重之和需等于 1，保存后后端热生效。
       </p>
 
       {err && (

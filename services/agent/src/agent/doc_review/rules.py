@@ -1,4 +1,8 @@
-"""规则扩展口子：V0 Noop，V1 接财税法规素材库（FiscalTaxRuleProvider）。"""
+"""规则模型 + 扩展口子（Noop）。
+
+2026-09-04：审核依据统一改走用户上传的 RAG 知识库，内置财税规则库（FiscalTaxRuleProvider）
+已下线；本模块仅保留 PolicyRule 数据模型（analyzer 的 {{rules}} 槽位类型）与 Noop 口子。
+"""
 
 from __future__ import annotations
 
@@ -26,7 +30,7 @@ class RuleProvider(Protocol):
 
 
 class NoopRuleProvider:
-    """空实现：模型自主判断（财税素材目录缺失时的退化形态）。"""
+    """空实现：模型自主判断（内置财税规则库下线后的默认形态）。"""
 
     async def get_rules(
         self, *, doc_category: str, risk_type: RiskType, sample_text: str = ""
@@ -38,7 +42,5 @@ class NoopRuleProvider:
 
 
 def build_default_rule_provider() -> RuleProvider:
-    """默认 provider：财税规则库（素材目录不存在时自行退化为返回空）。"""
-    from agent.doc_review.fiscal_rules import FiscalTaxRuleProvider
-
-    return FiscalTaxRuleProvider()
+    """默认 provider：Noop（依据已改走上传 RAG，不再注入内置财税规则）。"""
+    return NoopRuleProvider()

@@ -16,6 +16,7 @@ CLAUDE.md §2 红线：
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from agent.graph.state import AgentState, record_trace
 
@@ -30,6 +31,17 @@ _RAG_TRIGGER_KEYWORDS: tuple[str, ...] = (
     "参考",
     "规范",
     "说明",
+    "合规",
+    "审核",
+    "制度",
+    "法规",
+    "条款",
+    "政策",
+    "规定",
+    "标准",
+    "风险",
+    "报销",
+    "流程",
     "是什么",
     "怎么用",
     "如何",
@@ -38,6 +50,11 @@ _RAG_TRIGGER_KEYWORDS: tuple[str, ...] = (
     "reference",
     "spec",
     "guide",
+    "compliance",
+    "policy",
+    "regulation",
+    "audit",
+    "risk",
     "how to",
     "what is",
 )
@@ -136,6 +153,19 @@ async def rag_retrieve_node(state: AgentState, retriever=None) -> dict:
             ],
         }
 
+    refs: list[dict[str, Any]] = []
+    for r in ctx.results[:8]:
+        meta = getattr(r.chunk, "metadata", {}) or {}
+        refs.append(
+            {
+                "source": str(meta.get("source") or r.citation or ""),
+                "doc_title": r.doc_title,
+                "snippet": str(meta.get("child_content") or r.chunk.content or "")[:200],
+                "page_no": int(meta.get("page_no", 1) or 1),
+                "matched": list(meta.get("matched", []) or [])[:8],
+            }
+        )
+
     return {
         "rag_context": ctx,
         "system_prompt_addon": ctx.formatted_prompt,
@@ -146,6 +176,7 @@ async def rag_retrieve_node(state: AgentState, retriever=None) -> dict:
                 results_count=len(ctx.results),
                 elapsed_ms=ctx.elapsed_ms,
                 backend=ctx.backend,
+                refs=refs,
             )
         ],
     }

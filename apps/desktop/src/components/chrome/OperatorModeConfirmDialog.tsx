@@ -167,7 +167,7 @@ export const AUDITOR_MODE_CONTENT: AdvancedModeDialogContent = {
     '核心：Monaco Diff 审核 + 风险可视化（🔴高 / 🟡中 / 🟢低）+ Evidence Chain 证据链',
     '金融级安全：所有批准必须 MFA 二次验证（TOTP / 审批密码 / Windows Hello）',
     '审计日志采用 哈希签名链 防篡改，研发操作 → 运营执行 → 审核把关 全链路闭环',
-    'Phase 3C Arthas 热更、Phase 2G 业务规则变更、Phase 4 知识库合规检查 都会推送到此工作台',
+    'Arthas 热更、业务规则变更、知识库合规检查 都会推送到此工作台',
   ],
   footerHint: '审核专家模式独立三栏 UI，不复用运营专家两栏布局。模式选择会持久化到本地。',
   accentColor: '#b25c1a', // 暖橙色 — 区别于运营专家的蓝色

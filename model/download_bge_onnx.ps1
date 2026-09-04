@@ -1,4 +1,4 @@
-# 从 hf-mirror 下载 bge-small-zh-v1.5 ONNX 模型文件（一次性，开发机执行）
+﻿# 从 hf-mirror 下载 bge-small-zh-v1.5 ONNX 模型文件（一次性，开发机执行）
 $ErrorActionPreference = 'Stop'
 $base = 'https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/main'
 $dest = 'D:\ditPref\model\bge-small-zh-v1.5-onnx'

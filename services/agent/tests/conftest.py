@@ -45,12 +45,30 @@ def _isolate(monkeypatch, tmp_path):
     # 语义路由（2026-08-31 默认开启）：测试默认关闭，避免真实进程内向量模型
     # 干扰断言；专项测试自行 setattr(True) + 注入伪 embedding。
     monkeypatch.setattr(settings, "semantic_route_enabled", False)
+    # 本地知识库混合检索：测试默认关闭冷启动预加载（避免 lifespan 触碰 data_root/真实 ONNX）
+    monkeypatch.setattr(settings, "rag_preload_on_startup", False)
+    # 知识库数据根钉到 tmp（避免 doc_review /analyze 等路径在 %APPDATA% 创建游离 kb.db）
+    monkeypatch.setattr(settings, "rag_kb_dir", str(tmp_path / "knowledge"))
     try:
         from agent.graph.semantic_route import reset_semantic_router
         from agent.llm.onnx_embedding import reset_onnx_embedding_client
 
         reset_semantic_router()
         reset_onnx_embedding_client()
+    except Exception:
+        pass
+    try:
+        from agent.knowledge.api import reset_for_testing as _kb_reset_api
+        from agent.knowledge.hybrid_rag import reset_hybrid_retriever
+        from agent.knowledge.reranker import reset_reranker_client
+        from agent.knowledge.retriever import reset_default_retriever
+        from agent.knowledge.storage import reset_default_storage
+
+        reset_default_storage()
+        reset_default_retriever()
+        reset_hybrid_retriever()
+        reset_reranker_client()
+        _kb_reset_api()
     except Exception:
         pass
     # 禁用 Redis —— 测试走进程内 dict fallback

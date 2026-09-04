@@ -13,9 +13,11 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from agent.graph.state import AgentState, record_trace
+from agent.observability.cot_log import cot as cot_log
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +153,7 @@ def _declaration(work_mode: str, routing: str) -> str:
 
 async def mode_router_node(state: AgentState, llm: Any | None) -> dict:
     """LangGraph 节点：START 之后的第一个节点，写 routing 相关状态。"""
+    started = time.monotonic()
     prompt = state.get("user_prompt", "")
     work_mode = state.get("work_mode", "full")
     router = ModeRouter(llm=llm)
@@ -182,16 +185,31 @@ async def mode_router_node(state: AgentState, llm: Any | None) -> dict:
 
     # OpenAI 原生工具调用探测（2026-08-07）：每次运行的首节点探测一次，
     # 结果写入 state 后本次运行内固定不变；不可用/不支持 → 提示词协议。
+    # 单独计时（2026-09-01）：无启用后端时快路径毫秒级返回；配了慢后端时
+    # 探测可能占整轮大头，耗时落 trace + cot.log 让隐形开销显形。
     tool_calling_mode = "prompt"
     native_backend = None
+    probe_ms = 0
     if hasattr(llm, "resolve_native_backend"):
+        probe_started = time.monotonic()
         try:
             resolved = await llm.resolve_native_backend()
         except Exception:  # 探测故障绝不影响主链路
             resolved = None
+        probe_ms = int((time.monotonic() - probe_started) * 1000)
         if resolved:
             native_backend, _ = resolved
             tool_calling_mode = "native"
+
+    duration_ms = int((time.monotonic() - started) * 1000)
+    cot_log(
+        "mode_router.done",
+        run_id=state.get("run_id"),
+        routing=routing,
+        tool_calling_mode=tool_calling_mode,
+        native_probe_ms=probe_ms,
+        duration_ms=duration_ms,
+    )
 
     return {
         "routing": routing,
@@ -210,6 +228,8 @@ async def mode_router_node(state: AgentState, llm: Any | None) -> dict:
                 performance=performance,
                 tool_calling_mode=tool_calling_mode,
                 native_backend=native_backend,
+                duration_ms=duration_ms,
+                native_probe_ms=probe_ms,
             )
         ],
     }

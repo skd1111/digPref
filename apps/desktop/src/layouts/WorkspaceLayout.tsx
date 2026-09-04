@@ -430,8 +430,8 @@ function SideBar({ activity, mode }: { activity: ActivityId; mode: WorkMode }): 
           // 数据专家模式：默认 DataSourceTree（外层 SideBar 折叠由 DataWorkbench 内部管理）
           <DataSourceTree />
         ) : mode === 'auditor' ? (
-          // 审核专家模式：占位（Phase 5 实现）
-          <PlaceholderPanel title="审核工作台" hint="Phase 5 占位" />
+          // 审核专家模式：占位
+          <PlaceholderPanel title="审核工作台" hint="功能开发中" />
         ) : (
           // 'full' / 'operator'：按 leftPanelContent 决定
           <LeftPanelBody activity={activity} />

@@ -1,4 +1,4 @@
-"""LMRouter 适配：文档审核任务走可配置链 generate_review（默认 ollama → 内网 → 云端）。"""
+"""LMRouter 适配：文档审核任务走可配置链 generate_review（默认云端 → 内网，均需已启用）。"""
 
 from __future__ import annotations
 

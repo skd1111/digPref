@@ -994,6 +994,148 @@ text 提交前验证清单必须与 Makefile `lint-py` 完全对齐（check + fo
 
 ---
 
+### #182 停滞熔断只甩模板句直接停，不反向追问用户缺什么（#182）
+
+| 字段 | 内容 |
+|---|---|
+| **是否修复** | 已修复 |
+| **修复时间** | 2026-08-31 |
+| **发现方式** | 用户实测截图：「做一个介绍联想公司的 ppt」任务连续 3 轮零成功后被熔断 |
+| **涉及文件** | `tools/loop.py`、`graph/state.py` |
+
+**现象**
+
+PPT 生成任务连续 3 轮工具执行无有效结果，停滞熔断触发后直接甩一句模板文案
+「请补充关键信息或换一种表述」终止循环：用户看不出到底缺什么（素材？依赖？要求？），
+任务卡死在「等待人工干预」但无任何可操作的提问。熔断的本意是防空转，
+但把「停止」当成了终点，丢掉了「把缺什么问清楚」这一步。
+
+**根因与修复**
+
+`_stagnant_msg` 是无上下文的固定文案，达阈即 `_done` 终止，模型没有机会基于
+已有失败做针对性追问。修复：熔断从「立即停」改为「先追问、再停」——
+1. 达阈时不终止，置位 `tool_stagnant_asked`（新增 state 字段）：提示词协议路径经
+   EXTRA_RULES、native 路径经追加 messages，注入强制指令，逼模型输出 ASK_USER /
+   调 ask_user，反向列出需要用户补充的东西（素材路径、目标结构、环境依赖等）；
+2. 追问后仍无进展才终止，终答 `_stagnant_msg` 附最近失败原因清单（去重、
+   最新优先，最多 3 条），并告知可回复「继续」换路子接续；
+3. 任一轮成功执行即复位 streak 与追问旗标，不背历史欠账。
+   空转防护不放松：追问只给一次，重复调用熔断（#165）不受影响。
+
+**验证**
+
+- 新增/更新回归 9 条：提示词协议 3 条（达阈不终止且下轮注入指令、模型追问后
+  正常退出、成功后复位）+ 单元 3 条（指令注入条件、终答附失败原因、空结果不报错）
+  + native 3 条（追问后 ask_user、追问后仍败附原因终止、成功复位）；
+  存量熔断/重复调用/瞬时重试测试全绿，后端全量退出码 0。
+- `ruff check` / `ruff format` 全过；`mypy` 无新增错误（存量基线不变）。
+
+**教训**
+
+熔断/限流类防护的终止文案不能是孤立模板句：终止前要么把失败原因带出来，
+要么给模型一次「反向追问」的机会把缺什么问清楚——防护机制的目标是把任务
+导回可推进状态（用户补信息），而不只是停止烧资源。
+
+---
+
+### #183 首轮问候耗时 34.6s：隐形探测/路由开销 + 无后端空探测（#183）
+
+| 字段 | 内容 |
+|---|---|
+| **是否修复** | 已修复 |
+| **修复时间** | 2026-09-01 |
+| **发现方式** | 用户实测截图：一句「你好」整轮耗时 34.6s，而控制台仅显示意图识别 4983ms + 回答生成 0ms |
+| **涉及文件** | `llm/router.py`、`dual/router.py`、`graph/nodes/intent.py`、`graph/state.py`、`trace/collector.py`、前端 `ThinkingStepCard.tsx` |
+
+**现象**
+
+首轮闲聊总耗时与可见步骤耗时严重不符（~30s 无归属）。排查发现三块隐形开销：
+1. `mode_router` 首节点每 run 调 `resolve_native_backend()` 原生工具调用探测，
+   外层超时 15s，配了慢/不通的内网端点时干等；且未配置任何后端时仍逐个走客户端构建链路；
+2. `intent` 节点的 `duration_ms` 在 Skill 路由之前截表，SkillRouter 探活 + 最多两轮
+   Ollama 分类（最坏 ~11s）完全不在 trace 里；
+3. 语义路由直出/闲聊这类零 LLM 场景仍会跑完整 Skill 路由。
+
+**根因与修复**
+
+1. `resolve_native_backend()` 增加无后端快路径：先查注册表，无已启用内网/云端后端时
+   直接判无并缓存，不构造客户端、不发任何探测请求（本地 Ollama 本就不参与）；
+   探测超时自 15s 降至 4s（失败本就回退提示词协议，长等无收益）。
+2. `intent_node` 对语义路由直出（`_route` 命中）与 chitchat 直接短路 SkillRouter；
+   强钉是用户显式动作，保持最高优先级不受影响。
+3. 隐形耗时显形：`mode_router` trace 补 `duration_ms` + `native_probe_ms`（并落 cot.log）；
+   intent 节点内 Skill 路由阶段单独计时落 `skill_route` trace 条目（`NodeName` Literal、
+   后端 `NODE_LABELS`、前端 `NODE_META` 同步补中文名）。
+
+**验证**
+
+新增回归：`test_intent_skill_shortcut.py`（闲聊/_route 短路不得构造 SkillRouter +
+对照组正常路由）、`test_router_native_probe.py`（空/仅本地注册表不发探测 +
+已启用内网后端照常命中）。既有 141 条相关用例（强钉/快路径/语义路由/原生工具环）全绿，
+前端 tsc/eslint/vitest 通过；全量后端仅 1 条与本次无关的 `test_builtin_office`
+真实二进制用例偶发失败（单独重跑通过）。
+
+**教训**
+
+节点计时要在「所有副作用结束后」截表，且每个会发网络请求的阶段都要有独立 trace 条目；
+能力探测类逻辑必须先问「有没有必要探」——未配置目标时零开销直判，而不是靠超时兜底。
+
+---
+
+### #184 build-all 调用的 .ps1 存为 UTF-8 无 BOM，被 Windows PowerShell 5.1 按 GBK 误读致整脚本解析失败（#184）
+
+| 字段 | 内容 |
+|---|---|
+| **是否修复** | 已修复 |
+| **修复时间** | 2026-09-03 |
+| **发现方式** | 打包前置核查：直接跑 fetch-ppt-master.ps1 下 cp314 wheel 时，powershell 报「数组索引表达式丢失/字符串缺少终止符」等 7 处解析错误，中文全成乱码（`鎶€鑳藉寘涓嬭浇澶辫触`） |
+| **涉及文件** | `infra/scripts/fetch-ppt-master.ps1`、`infra/scripts/fetch-officecli.ps1`、`model/download_bge_reranker_onnx.ps1`、`model/download_bge_onnx.ps1` |
+
+**现象**
+
+build-all.bat 用 `powershell`（Windows PowerShell 5.1）调用这些含中文注释/字符串的 .ps1。5.1 对无 BOM 文件按系统 ANSI（GBK）解码，UTF-8 中文字节被误读，个别多字节序列吞掉相邻的 `"` 字符串终止符 → 级联解析错误，整个脚本无法执行。用 5.1 解析器实测：fetch-ppt-master.ps1 FAIL 7、download_bge_reranker_onnx.ps1 FAIL 3（fetch-officecli/download_bge_onnx 仅字节碰巧没触发，属同类定时炸弹）。而 pwsh 7 默认 UTF-8，`[Parser]::ParseFile` 校验反而报 OK，掩盖了问题——CI（release.yml 用 pwsh）不受影响，仅本地 build-all.bat 用 powershell 触发。
+
+**根因与修复**
+
+这些脚本此前均为 UTF-8 无 BOM。给 4 个 .ps1 前置 UTF-8 BOM（`EF BB BF`）：5.1 见到 BOM 即按 UTF-8 正确解码，pwsh 7 亦兼容；采用字节级 prepend，正文与 CRLF/LF 换行一字不动。修复后 5.1 解析全部 OK。
+
+**验证**
+
+经 `powershell`(5.1) 的 `[System.Management.Automation.Language.Parser]::ParseFile` 复测 4 脚本 → 全 OK；fetch-ppt-master.ps1 实跑成功下载 65 个 wheel。
+
+**教训**
+
+Windows 上会被 `powershell`(5.1) 调用、且含非 ASCII 的 .ps1 必须存为 **UTF-8 with BOM**；跨 5.1/pwsh7 的脚本要用 5.1 解析器实测，别只信 pwsh7 的 ParseFile（两者对无 BOM 文件的默认编码不同，会漏判）。用 Write/SearchReplace 写 .ps1 后应复检 BOM 是否仍在。
+
+---
+
+### #185 fetch-ppt-master.ps1 的 Resolve-Python 命中无 pip 的 uv venv，静默下载 0 个 wheel（且已先清空旧 wheel）（#185）
+
+| 字段 | 内容 |
+|---|---|
+| **是否修复** | 已修复 |
+| **修复时间** | 2026-09-03 |
+| **发现方式** | 修完 #184 后重跑 fetch，日志 `via C:\Windows\py.exe` 后紧跟 `.venv\Scripts\python.exe: No module named pip`，最终 `done: skill + 0 wheels` |
+| **涉及文件** | `infra/scripts/fetch-ppt-master.ps1` |
+
+**现象**
+
+脚本先 `Remove-Item deps\*.whl` 清旧 wheel，再用 `Resolve-Python` 取解释器跑 `pip download`。Resolve-Python 仅按 `py/python/python3` 顺序返回第一个存在的命令、**不校验 pip 可用性**；在激活了 uv 建的 `.venv`（不含 pip）的 shell 里，裸 `py` 命中 venv 的 python → `No module named pip` → 下载 0 wheel。旧 wheel 已被清空，deps 直接变空，PPT 离线依赖全丢；而脚本对该失败仅 `Write-Warning` 不中断，`done: 0 wheels` 表面像成功。
+
+**根因与修复**
+
+跨版本 wheel 下载（`--python-version/--abi` 决定目标）只要求解释器**带 pip**，与被调用解释器自身版本无关。将 `Resolve-Python` 改为 `Resolve-PipPython`：逐个候选探测 `-m pip --version` 退出码，返回首个带可用 pip 的调用（优先 `py -3` 取注册的真实解释器，绕过 venv），并以 `@{Exe;Args}` + 数组 splatting 传参；全不可用则 `throw` 明确错误，不再静默下 0 wheel。
+
+**验证**
+
+修后重跑 `via C:\Windows\py.exe -3` → 真实 3.14（pip 25.3），成功下载 65 个 wheel（12 cp314 + 4 abi3 + 余 none-any，52MB）+ 生成 requirements-offline.txt，deps 无 cp312 残留。
+
+**教训**
+
+调外部解释器跑 `-m pip` 前必须探测 pip 实际可用（退出码），别假设「命令存在=能用」；激活 venv 的开发机与干净构建机上 `py`/`python` 解析目标不同，脚本要能绕过无 pip 的 venv。「先删旧产物再下载」的步骤一旦下载静默失败即净损失——失败必须硬中断，或改为先下后删。
+
+---
+
 ### 待跟进：工具编排预算 24 轮上限
 
 > **2026-08-27 更新**：本条最初写于 #163 修复时，当时推测「24 轮不够用」。
@@ -1008,4 +1150,97 @@ text 提交前验证清单必须与 Makefile `lint-py` 完全对齐（check + fo
 现状：#163 修复后「继续」应当可用，#165 修复后空转会在第 3 轮被掐断。
 预算上限暂不调整 —— 先看熔断生效后长链任务是否还会触顶。若仍频繁触顶，
 再评估提高 `le` 上限或引入基于 `task_id` 台账的断点续跑（不依赖对话历史）。
+
+---
+
+### #186 打包后向量检索全仓静默失效 —— sqlite-vec 原生扩展 vec0.dll 未随 exe 分发
+
+| 字段 | 内容 |
+|---|---|
+| **是否修复** | 已修复 |
+| **修复时间** | 2026-09-03 |
+| **发现方式** | 用户问「上传后向量模型是否真运行」；查生产日志见 `hybrid_search ... bm25=20 vec=0`（向量通道恒 0），直查生产 kb.db 发现 `kb_chunks_vec` 表不存在，且 data_root 下所有 .db（router.db / doc_review_vec.db / data_expert.db）均无任何 vec0 虚表 |
+| **涉及文件** | `eaide-agent.spec` |
+
+**现象**
+
+本地知识库混合检索上传入库看似正常（chunks/FTS5 都在，`ingest done children=103`），embedding 模型也确实加载运行（日志 `onnx_embedding: loaded`、`kb_meta.dim=512`），但文档审核时 `hybrid_search ... vec=0` —— 向量通道恒返 0，检索实际只靠 BM25。进一步查生产 data_root 下所有 SQLite 库，**没有任何一个 vec0 虚拟表**（kb_chunks_vec / l2_cache_vec / fiscal_vec / route_vec 全无），说明 sqlite-vec 在打包后的 exe 里从未成功建表。
+
+**问题原因**
+
+`agent/vector_store.py::load_extension` 走 `sqlite_vec.load(conn)` → `conn.load_extension(<sqlite_vec 包目录>/vec0)`，依赖包内原生扩展 `vec0.dll`（282KB）。该 .dll 是**包内数据文件、运行时按路径动态加载**，不是 Python 导入的二进制依赖，PyInstaller 静态分析发现不了，也无内置 hook 收集。`eaide-agent.spec` 既没把它列进 `binaries`/`datas`，`hiddenimports` 也没有 `sqlite_vec` → 打包后 `_MEIPASS/sqlite_vec/vec0.dll` 缺失 → `load_extension` 抛异常被 best-effort 吞掉返 False → `ensure_vec_table` 的 `CREATE VIRTUAL TABLE ... USING vec0` 失败 → 全仓所有向量表都建不起来。因为 vector_store 处处 best-effort 静默降级，开发/测试（venv 里 .dll 在）全绿，只有打包 exe 才暴露，且表现为「功能能用但向量检索悄悄退化成纯关键词」，极隐蔽。自 v2.123 sqlite-vec 全仓迁移起即存在。
+
+**根因与修复**
+
+`eaide-agent.spec` 新增 `_sqlite_vec_binaries()`（`collect_dynamic_libs('sqlite_vec')` → `[('.../vec0.dll', 'sqlite_vec')]`，落到 `_MEIPASS/sqlite_vec/vec0.dll`，与 `loadable_path()` 对齐），接进 `Analysis(binaries=...)`；`hiddenimports` 补 `sqlite_vec`（保证 Python 模块本体也被收集）。
+
+**验证**
+
+`collect_dynamic_libs('sqlite_vec')` 实测返回正确 (src, 'sqlite_vec') 目标；spec `py_compile` 通过。重新打包后 vec0.dll 随 exe 分发，向量建表恢复；存量库经设置页/知识库页「重建索引」基于库内原文重嵌入即可补齐向量（无需重新上传）。
+
+**教训**
+
+「靠 load_extension 按路径动态加载的原生扩展」（sqlite-vec 这类）PyInstaller 不会自动收集，必须显式 `collect_dynamic_libs`/`collect_data_files` 进 binaries/datas；best-effort 静默降级会掩盖打包缺失——凡是「开发/测试正常、只在打包 exe 里悄悄退化」的能力，验收必须真的跑一次打包产物并查持久层（本例：查 .db 里 vec0 表是否真建出来），不能只看单测绿。
+
+---
+
+### #187 agent.log 中文全成乱码 —— logging.basicConfig 未指定 encoding，Windows 默认 GBK 落盘
+
+| 字段 | 内容 |
+|---|---|
+| **是否修复** | 已修复 |
+| **修复时间** | 2026-09-04 |
+| **发现方式** | 用户核对 RAG 生产日志时发现 `agent.log` 里中文（上传文件名 `ingest done file=...`、部分 INFO 日志）全是乱码，而同进程写的 `cot.log`、Rust 侧 `eaide.log` 中文正常 |
+| **涉及文件** | `services/agent/src/agent/main.py` |
+
+**现象**
+
+打包 exe 运行时，`logs/agent.log` 里所有中文都是乱码（如 `ingest done ... file=Ʊ▒▒▒.docx`），排查知识库入库/审核链路时读不出文件名与中文日志；但同一进程写的 `cot.log` 和 Rust 侧 `eaide.log` 中文完全正常。
+
+**问题原因**
+
+`main.py` 的 `logging.basicConfig(filename=..., ...)` 没传 `encoding`，`FileHandler` 默认用 `locale.getpreferredencoding(False)`——中文 Windows 上是 cp936/GBK，于是中文被按 GBK 落盘成乱码字节。`cot.log` 的 `FileHandler` 显式写了 `encoding="utf-8"` 所以正常，两处不一致。
+
+**根因与修复**
+
+`basicConfig` 补 `encoding="utf-8"`，与 `cot_log.py` 的 FileHandler 对齐，钉死 UTF-8 落盘。
+
+**验证**
+
+`encoding` 参数 Python 3.9+ 的 `basicConfig` 即支持（本项目 3.12/3.14）；重启后新写入的中文日志按 UTF-8 落盘、可正常读出。存量旧 agent.log 已是 GBK 字节、不追溯转换。
+
+**教训**
+
+Windows 上任何 `FileHandler`/`basicConfig(filename=...)` 都必须显式 `encoding="utf-8"`，否则默认跟随系统 ANSI 代码页（中文机 cp936），中文必乱码；同一项目多个日志入口要统一编码，避免「这个日志能读、那个不能读」的割裂。
+
+---
+
+### #188 文档审核 LLM 链后端选择与「已启用」要求不对称 + 默认回退本地 ollama
+
+| 字段 | 内容 |
+|---|---|
+| **是否修复** | 已修复 |
+| **修复时间** | 2026-09-04 |
+| **发现方式** | 用户核对生产日志后要求：文档审核分析应「云端优先→内网 private」，且两者相同要求都必须是「模型管理」里已启用的后端 |
+| **涉及文件** | `services/agent/src/agent/config.py`、`services/agent/src/agent/llm/router.py`、`services/agent/tests/test_doc_review_llm.py` |
+
+**现象**
+
+`generate_review` 默认链是 `["cloud", "private", "ollama"]`：① 末尾会回退本地 ollama（小模型产出的审核 JSON 质量差）；② private 分支写的是 `_build_private_client() or self.private`——`_build_private_client()` 只取注册表已启用后端，但 `or self.private` 又回退到 settings/env 配置的 private，与 cloud 分支「只认已启用注册表后端」不对称，违背「相同要求：已启用」。
+
+**问题原因**
+
+cloud 分支 `_build_cloud_client()` 仅遍历 `list_backends(enabled_only=True)`，未启用即 None；而 private 分支多了一层 `or self.private` 兜底，导致未在注册表启用的 private（仅 env 配置）也能被审核链使用，两个后端「已启用」判定标准不一致。
+
+**根因与修复**
+
+① `config.py`：`doc_review_llm_chain` 默认改为 `["cloud", "private"]`（去掉本地 ollama 兜底）；② `router.py::generate_review` private 分支去掉 `or self.private`，与 cloud 对称——只认注册表已启用的 private，查询异常按未启用处理（backend=None 跳过）；ollama 代码分支保留供显式配置，但默认链不含。两者都未启用则抛 `LLMBackendError`。同步校正 `generate_review`、`retriever.py`、`doc_review/llm.py` 里过时的链描述。
+
+**验证**
+
+重写 `test_doc_review_llm.py`：默认链断言改 `["cloud","private"]`；新增「仅启用 private→命中 private」「cloud+private 都启用→云端优先」「都未启用→抛错不回退 ollama」三例，连同原有 cloud 用例全绿。
+
+**教训**
+
+同一降级链里各层后端的「可用性判定」标准必须一致（本例统一为「注册表已启用」），否则某一层偷偷放宽（settings 兜底）会让「已启用」这个开关对用户失去意义；策略性改动要连带把散落在多处的过时文档串一起校正。
 

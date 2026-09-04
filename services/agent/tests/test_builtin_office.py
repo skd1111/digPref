@@ -214,6 +214,26 @@ class TestRuntime:
         candidates = rt._bundled_candidates()
         assert any(str(c).startswith(str(meipass)) for c in candidates)
 
+    def test_bundled_candidates_include_exe_dir_when_frozen(self, monkeypatch, tmp_path: Path):
+        """生产模式：Tauri 把 officecli 落到安装目录（= exe 同级），候选须含 exe 所在目录。
+
+        2026-09-03 去重后 exe 内不再有 _MEIPASS/vendor/officecli 副本，运行时靠这一级命中。
+        """
+        import agent.builtin.officecli_runtime as rt
+
+        install_dir = tmp_path / "install"
+        (install_dir / "vendor" / "officecli").mkdir(parents=True)
+        fake_exe = install_dir / "eaide-agent.exe"
+        fake_exe.write_bytes(b"MZ")
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setattr(sys, "executable", str(fake_exe), raising=False)
+        monkeypatch.delattr(sys, "_MEIPASS", raising=False)
+        monkeypatch.chdir(tmp_path)  # cwd 无 vendor/officecli，凸显 exe 目录这一级
+        candidates = rt._bundled_candidates()
+        assert any(str(c).startswith(str(install_dir)) for c in candidates)
+        name = rt._PLATFORM_BINARIES[sys.platform][0]
+        assert (install_dir / "vendor" / "officecli" / name) in candidates
+
     def test_run_returns_not_installed_outcome(self, monkeypatch):
         import agent.builtin.officecli_runtime as rt
 

@@ -65,9 +65,28 @@ interface Backend {
 }
 
 const TYPE_BADGE: Record<BackendType, { label: string; color: string }> = {
-  local: { label: 'LOCAL', color: '#059669' },
-  private: { label: 'PRIVATE', color: '#0451a5' },
-  cloud: { label: 'CLOUD', color: '#c586c0' },
+  local: { label: '端侧', color: '#059669' },
+  private: { label: '私有部署', color: '#0451a5' },
+  cloud: { label: '云端', color: '#c586c0' },
+};
+
+/** 类型/驻留下拉框的中文标签（值仍为英文，与后端 router.db 契约保持一致） */
+const TYPE_OPTIONS: Array<{ value: BackendType; label: string }> = [
+  { value: 'local', label: '端侧' },
+  { value: 'private', label: '私有部署' },
+  { value: 'cloud', label: '云端' },
+];
+
+const RESIDENCY_OPTIONS: Array<{ value: Residency; label: string }> = [
+  { value: 'local', label: '端侧' },
+  { value: 'private', label: '私有部署' },
+  { value: 'cloud', label: '云端' },
+];
+
+const RESIDENCY_LABEL: Record<Residency, string> = {
+  local: '端侧',
+  private: '私有部署',
+  cloud: '云端',
 };
 
 const CB_PILL: Record<CircuitState, { label: string; color: string }> = {
@@ -433,11 +452,6 @@ export function ModelManagementPanel(): JSX.Element {
       <header className="flex items-start justify-between">
         <div>
           <h1 className="text-ui-lg font-semibold">模型管理</h1>
-          <p className="mt-1 text-2xs text-fg-muted">
-            多模型注册表，喂给五维评估调度（能力/成本/延迟/合规/可用性）。
-            <span style={{ color: '#059669' }}> API Key 走系统 Keyring 占位符，绝不明文落库。</span>
-            <span style={{ color: '#795e26' }}> 持久化真源：router.db</span>
-          </p>
         </div>
         <div className="flex flex-shrink-0 gap-2">
           <button
@@ -527,7 +541,7 @@ export function ModelManagementPanel(): JSX.Element {
                 </div>
                 <div className="mt-1.5 grid grid-cols-5 gap-x-4 gap-y-1 text-2xs" style={{ color: '#6e6e6e' }}>
                   <span>模型：<span style={{ color: '#795e26' }}>{b.model}</span></span>
-                  <span>驻留：<span style={{ color: b.residency === 'cloud' ? '#c586c0' : '#059669' }}>{b.residency}</span></span>
+                  <span>驻留：<span style={{ color: b.residency === 'cloud' ? '#c586c0' : '#059669' }}>{RESIDENCY_LABEL[b.residency]}</span></span>
                   <span>上下文：<span style={{ color: '#0b6bcb' }}>{formatContextTokens(b.maxContext)}</span></span>
                   <span>成本：{b.costPer1k === 0 ? '免费' : `$${b.costPer1k}/1k`}</span>
                   <span>超时：{b.timeout}s</span>
@@ -617,19 +631,19 @@ function BackendEditModal({
   const submit = async (): Promise<void> => {
     if (!b.name.trim()) return setErr('名称必填');
     if (isNew && existingNames.includes(b.name)) return setErr('名称已存在');
-    if (!/^https?:\/\//.test(b.baseUrl)) return setErr('Base URL 需以 http(s):// 开头');
+    if (!/^https?:\/\//.test(b.baseUrl)) return setErr('服务地址需以 http(s):// 开头');
     if (!Number.isInteger(b.maxContext) || b.maxContext < 256 || b.maxContext > 2_000_000) {
       return setErr('上下文大小必须在 256 ~ 2,000,000 tokens 之间（整数）');
     }
-    // Phase 2C V2.5 协议校验
+    // 类型协议校验
     if ((b.type === 'private' || b.type === 'cloud') && !b.baseUrl.trim()) {
-      return setErr(`${b.type} 模型必须配置 base_url`);
+      return setErr(`${TYPE_BADGE[b.type].label}模型必须配置服务地址`);
     }
     if (b.type === 'cloud' && !apiKey.trim() && isNew) {
-      return setErr('云端必须配置 API Key（内网模型请选择 private 类型）');
+      return setErr('云端模型必须配置 API 密钥（内网模型请选择“私有部署”类型）');
     }
 
-    // API Key 直接存入 DB（配置文件模式，不走系统凭据管理器）
+    // API 密钥直接存入 DB（配置文件模式，不走系统凭据管理器）
     let apiKeyRef = b.apiKeyRef;
     if (apiKey && apiKey.trim()) {
       apiKeyRef = apiKey.trim();
@@ -647,12 +661,12 @@ function BackendEditModal({
         <div className="space-y-3 p-4">
           <Field label="名称（唯一）" value={b.name} disabled={!isNew} onChange={(v) => set('name', v)} />
           <div className="grid grid-cols-2 gap-3">
-            <Select label="类型" value={b.type} options={['local', 'private', 'cloud']} onChange={(v) => set('type', v as BackendType)} />
-            <Select label="数据驻留" value={b.residency} options={['local', 'private', 'cloud']} onChange={(v) => set('residency', v as Residency)} />
+            <Select label="类型" value={b.type} options={TYPE_OPTIONS} onChange={(v) => set('type', v as BackendType)} />
+            <Select label="数据驻留" value={b.residency} options={RESIDENCY_OPTIONS} onChange={(v) => set('residency', v as Residency)} />
           </div>
-          {/* Phase 2C V2.5: 模型角色（utility / reasoning / execution）*/}
+          {/* 模型角色（utility / reasoning / execution）*/}
           <div>
-            <label className="mb-1 block text-2xs" style={{ color: '#616161' }}>角色（Phase 2C V2.5：路由按角色选）</label>
+            <label className="mb-1 block text-2xs" style={{ color: '#616161' }}>角色</label>
             <div className="flex gap-2">
               {([
                 { v: 'utility' as const, l: '端侧小模型', d: 'SQL 语法检查 / 简单意图' },
@@ -682,19 +696,19 @@ function BackendEditModal({
               ))}
             </div>
           </div>
-          <Field label="Base URL" value={b.baseUrl} onChange={(v) => set('baseUrl', v)} />
+          <Field label="服务地址" value={b.baseUrl} onChange={(v) => set('baseUrl', v)} />
           <ContextSizePicker
             value={b.maxContext}
             onChange={(n) => set('maxContext', n)}
           />
-          <Field label="Model" value={b.model} onChange={(v) => set('model', v)} />
+          <Field label="模型名称" value={b.model} onChange={(v) => set('model', v)} />
           <Field
             label={
               apiKeyLoaded
                 ? b.type === 'cloud'
-                  ? 'API Key（必填 · 写入系统 Keyring，仅存占位符引用）'
-                  : 'API Key（选填 · 写入系统 Keyring，仅存占位符引用）'
-                : 'API Key（从 Keyring 读取中…）'
+                  ? 'API 密钥（必填 · 仅存占位符引用，明文不落库）'
+                  : 'API 密钥（选填 · 仅存占位符引用，明文不落库）'
+                : 'API 密钥（读取中…）'
             }
             type="password"
             value={apiKey}
@@ -703,17 +717,17 @@ function BackendEditModal({
           />
           {b.type !== 'cloud' && (
             <div className="text-2xs" style={{ color: '#6a9955' }}>
-              内网 / 端侧模型无需 API Key（若内网网关启用鉴权，可在此填写）
+              内网 / 端侧模型无需 API 密钥（若内网网关启用鉴权，可在此填写）
             </div>
           )}
           {b.apiKeyRef && (
             <div className="text-2xs" style={{ color: '#6a9955' }}>
-              🔑 Keyring 占位符：<code>{b.apiKeyRef}</code>
+              🔑 密钥引用：<code>{b.apiKeyRef}</code>
               {apiKey ? '（已加载）' : '（尚未配置）'}
             </div>
           )}
           <div className="grid grid-cols-2 gap-3">
-            <Field label="成本 $/1k tokens" type="number" value={String(b.costPer1k)} onChange={(v) => set('costPer1k', Number(v) || 0)} />
+            <Field label="成本（美元 / 千 tokens）" type="number" value={String(b.costPer1k)} onChange={(v) => set('costPer1k', Number(v) || 0)} />
             <Field label="超时（秒）" type="number" value={String(b.timeout)} onChange={(v) => set('timeout', Number(v) || 30)} />
           </div>
           <Field label="能力（逗号分隔）" value={b.capabilities.join(', ')} onChange={(v) => set('capabilities', v.split(',').map((s) => s.trim()).filter(Boolean))} />
@@ -758,7 +772,10 @@ function Field({
 function Select({
   label, value, options, onChange,
 }: {
-  label: string; value: string; options: string[]; onChange: (v: string) => void;
+  label: string;
+  value: string;
+  options: Array<{ value: string; label: string }>;
+  onChange: (v: string) => void;
 }): JSX.Element {
   return (
     <label className="block">
@@ -770,7 +787,7 @@ function Select({
         style={{ backgroundColor: '#ececec', color: '#1f1f1f', border: '1px solid #d4d4d4' }}
       >
         {options.map((o) => (
-          <option key={o} value={o}>{o}</option>
+          <option key={o.value} value={o.value}>{o.label}</option>
         ))}
       </select>
     </label>
@@ -808,7 +825,7 @@ function ContextSizePicker({
 
   return (
     <div>
-      <span className="mb-1 block text-2xs text-fg-muted">上下文大小（智能体调用时按此截断 history）</span>
+      <span className="mb-1 block text-2xs text-fg-muted">上下文大小（智能体调用时按此截断历史消息）</span>
       <div className="flex flex-wrap gap-1.5">
         {PRESETS.map((p) => {
           const selected = cur.preset === p;

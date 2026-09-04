@@ -4,15 +4,16 @@
     - 命中/未命中路由（余弦阈值）
     - embedding 不可用 / 全零向量 → 静默回退（返 None）
     - 开关关闭 → 不调 embedding
-    - 向量缓存落盘 + 指纹失效重建
+    - 向量缓存落 sqlite-vec（semantic_route.db）+ 指纹失效重建
     - intent_node / responder 集成（闲聊模板直回）
 """
 
 from __future__ import annotations
 
-import json
+import sqlite3
 
 import pytest
+from agent import vector_store as vs
 from agent.config import settings
 from agent.graph.semantic_route import (
     DEFAULT_ROUTES,
@@ -162,11 +163,20 @@ class TestSemanticRouteCache:
         monkeypatch.setattr(settings, "knowledge_db_path", str(tmp_path / "knowledge.db"))
         fake = _FakeEmbedding()
         await _router(fake).route("你好")
-        cache = tmp_path / "semantic_route_cache.json"
-        assert cache.exists()
-        data = json.loads(cache.read_text(encoding="utf-8"))
-        assert data["fingerprint"]
-        assert len(data["vectors"]) == sum(len(r.utterances) for r in DEFAULT_ROUTES)
+        db = tmp_path / "semantic_route.db"
+        assert db.exists()
+        # vec0 虚拟表里的正样本向量数 = 全部预置路由示例句数；指纹已落库
+        conn = sqlite3.connect(str(db))
+        try:
+            assert vs.load_extension(conn)
+            fp = conn.execute("SELECT fingerprint FROM route_meta WHERE id = 1").fetchone()[0]
+            assert fp
+            pos_count = conn.execute(
+                "SELECT COUNT(*) FROM route_vec_ref WHERE kind = 'pos'"
+            ).fetchone()[0]
+            assert pos_count == sum(len(r.utterances) for r in DEFAULT_ROUTES)
+        finally:
+            conn.close()
 
         # 新实例复用缓存 → 不再批量向量化，只产生 1 次查询 embed
         fake2 = _FakeEmbedding()

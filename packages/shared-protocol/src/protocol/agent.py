@@ -32,6 +32,7 @@ class ChatMessage(BaseModel):
     # message/tool_call/tool_result/trace/approval/log/done = events.py 流事件子类使用的 kind
     # skill_matched（Phase 2D）/ heartbeat（BUGFIX #161 看门狗）同为流事件子类 kind
     # run_started/tool_progress/shell_chunk/file_write_preview：执行过程可视化细粒度事件
+    # answer_delta（2026-09-03）：回答逐字流式，responder 终答路径的 token 增量
     kind: (
         Literal[
             "normal",
@@ -54,6 +55,7 @@ class ChatMessage(BaseModel):
             "tool_progress",
             "shell_chunk",
             "file_write_preview",
+            "answer_delta",
         ]
         | None
     ) = None

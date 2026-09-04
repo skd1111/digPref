@@ -39,6 +39,8 @@ class DocKbRef(BaseModel):
     heading: str
     excerpt: str = ""
     matched_terms: list[str] = Field(default_factory=list)
+    # 命中知识文件的绝对路径（供前端点击依据直接预览原文件）；不可解析时为空串
+    file_path: str = ""
 
 
 class DocFinding(BaseModel):

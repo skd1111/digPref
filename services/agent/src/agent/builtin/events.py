@@ -32,6 +32,10 @@ EVT_TOOL_PROGRESS = "tool_progress"
 EVT_SHELL_CHUNK = "shell_chunk"
 EVT_FILE_WRITE_PREVIEW = "file_write_preview"
 
+# 回答逐字流式（2026-09-03）：responder 终答路径的 token 增量，复用本队列
+# 的 deque + stream.py 0.4s 轮询 drain，零新增管道（与 shell_chunk 同节奏）。
+EVT_ANSWER_DELTA = "answer_delta"
+
 
 async def emit_builtin_event(kind: str, payload: dict) -> None:
     """Emit 一个 builtin 事件到进程内队列。
@@ -319,6 +323,28 @@ def emit_shell_chunk_sync(
             "chunk": chunk,
             "exit_code": exit_code,
             **({"runId": run_id} if run_id else {}),
+        },
+    )
+
+
+async def emit_answer_delta(
+    *,
+    run_id: str,
+    msg_id: str,
+    delta: str,
+) -> None:
+    """Emit answer_delta 事件（回答逐字流式，2026-09-03）。
+
+    msg_id 由 responder 生成并携带在每条 delta 上；终答 message 事件复用同一
+    id（stream.py 种子化 final_answer_msg_id），前端按 id 原地覆盖收敛。
+    """
+    await emit_builtin_event(
+        EVT_ANSWER_DELTA,
+        {
+            "kind": EVT_ANSWER_DELTA,
+            "runId": run_id,
+            "msgId": msg_id,
+            "delta": delta,
         },
     )
 

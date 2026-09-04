@@ -39,6 +39,8 @@ export interface DocKbRef {
   heading: string;
   excerpt: string;
   matched_terms: string[];
+  /** 命中知识文件的绝对路径（点击依据直接预览原文件）；不可解析时为空串 */
+  file_path: string;
 }
 
 export interface DocFinding {

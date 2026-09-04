@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import AsyncIterator
 from typing import Any, cast
 
 import httpx
@@ -17,6 +18,7 @@ from agent.llm.prompts import (
     load_prompt,
     normalize_message,
 )
+from agent.llm.stream_utils import ThinkBlockFilter
 from agent.llm.token_usage import record_ollama_usage
 from agent.llm.types import Intent
 
@@ -77,21 +79,14 @@ class OllamaClient:
 
     # ---- HTTP primitives ---------------------------------------------------
 
-    async def _chat(
+    def _build_chat_payload(
         self,
         messages: list[dict],
         *,
         format: dict | None = None,
         options: dict | None = None,
-        timeout: float = 30.0,
-    ) -> dict:
-        if not self.enabled:
-            raise OllamaUnavailableError("端侧 Ollama 未配置，跳过探测")
-        breaker = _ollama_breaker(self.base_url)
-        if not breaker.allow():
-            raise OllamaUnavailableError(
-                f"Ollama at {self.base_url} 近期连续不可达，熔断中（稍后自动探测）"
-            )
+    ) -> dict[str, Any]:
+        """组装 /api/chat 请求体（_chat 与 chat_stream 共用，语义完全一致）。"""
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -117,6 +112,24 @@ class OllamaClient:
             )
         if merged_options:
             payload["options"] = merged_options
+        return payload
+
+    async def _chat(
+        self,
+        messages: list[dict],
+        *,
+        format: dict | None = None,
+        options: dict | None = None,
+        timeout: float = 30.0,
+    ) -> dict:
+        if not self.enabled:
+            raise OllamaUnavailableError("端侧 Ollama 未配置，跳过探测")
+        breaker = _ollama_breaker(self.base_url)
+        if not breaker.allow():
+            raise OllamaUnavailableError(
+                f"Ollama at {self.base_url} 近期连续不可达，熔断中（稍后自动探测）"
+            )
+        payload = self._build_chat_payload(messages, format=format, options=options)
         try:
             # connect 阶段限 5s：Ollama 在同机，连不上就是服务没起，
             # 没必要用完整的生成超时去等 TCP 连接。
@@ -144,6 +157,78 @@ class OllamaClient:
             logger.error("Ollama _chat: request timed out after %.0fs", timeout)
             breaker.on_failure()
             raise OllamaUnavailableError(f"Ollama request timed out after {timeout:.0f}s") from exc
+
+    async def chat_stream(
+        self,
+        messages: list[dict],
+        *,
+        options: dict | None = None,
+        timeout: float = 120.0,
+    ) -> AsyncIterator[str]:
+        """流式对话（2026-09-03 回答逐字流式）：stream=True 按 NDJSON 帧产出增量。
+
+        终答路径专用：不传 format（结构化 JSON 信封与逐字流式冲突），think 块由
+        ThinkBlockFilter 增量抑制；熔断 / keep_alive / num_ctx / num_predict 语义与
+        _chat 一致；done 帧记 Token 计量（best-effort，无 done 帧时按 EOF 成功收尾）。
+        """
+        if not self.enabled:
+            raise OllamaUnavailableError("端侧 Ollama 未配置，跳过探测")
+        breaker = _ollama_breaker(self.base_url)
+        if not breaker.allow():
+            raise OllamaUnavailableError(
+                f"Ollama at {self.base_url} 近期连续不可达，熔断中（稍后自动探测）"
+            )
+        payload = self._build_chat_payload(messages, format=None, options=options)
+        payload["stream"] = True
+        filt = ThinkBlockFilter()
+        fallback_input = "\n".join(str(m.get("content", "") or "") for m in messages)
+        acc: list[str] = []
+        done_frame: dict | None = None
+        try:
+            # connect 阶段限 5s（同 _chat）；读超时用完整生成预算，流式帧间隔远小于总时长
+            async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=5.0)) as c:
+                async with c.stream("POST", f"{self.base_url}/api/chat", json=payload) as r:
+                    r.raise_for_status()
+                    async for line in r.aiter_lines():
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            frame = json.loads(line)
+                        except ValueError:
+                            continue  # 半截行/非 JSON 噪声，不中断主流程
+                        msg = frame.get("message") or {}
+                        piece = str(msg.get("content") or "")
+                        if piece:
+                            out = filt.feed(piece)
+                            if out:
+                                acc.append(out)
+                                yield out
+                        if frame.get("done"):
+                            done_frame = frame
+                            break
+        except httpx.ConnectError as exc:
+            logger.error("Ollama chat_stream: connection refused at %s: %s", self.base_url, exc)
+            breaker.on_failure()
+            raise OllamaUnavailableError(
+                f"Ollama is not reachable at {self.base_url}. Ensure the Ollama service is running."
+            ) from exc
+        except httpx.TimeoutException as exc:
+            logger.error("Ollama chat_stream: stream timed out after %.0fs", timeout)
+            breaker.on_failure()
+            raise OllamaUnavailableError(f"Ollama stream timed out after {timeout:.0f}s") from exc
+        # 流正常收尾（done 帧或自然 EOF）：放行扣留尾巴 + 记计量
+        breaker.on_success()
+        if done_frame is not None:
+            record_ollama_usage(
+                done_frame,
+                model=self.model,
+                fallback_input=fallback_input,
+                fallback_output="".join(acc),
+            )
+        tail = filt.flush()
+        if tail:
+            yield tail
 
     async def _generate(
         self,

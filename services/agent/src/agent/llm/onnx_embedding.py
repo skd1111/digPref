@@ -33,7 +33,7 @@ _PAD_TOKEN = "[PAD]"
 def _resolve_model_dir(raw: str) -> Path:
     """模型目录解析：显式配置（cwd 相对）> PyInstaller _MEIPASS > 仓库根推导。
 
-    与 knowledge-base / config/biz_dict 同策略（spec datas 已将
+    与 config/biz_dict 同策略（spec datas 已将
     model/bge-small-zh-v1.5-onnx 打进 _MEIPASS）；打包后 exe 可能在任意
     工作目录启动，多级回退缺失时返原路径（客户端自行标记不可用降级）。
     """

@@ -383,6 +383,8 @@ pub fn run() {
             commands::audit_expert::audit_decide,
             commands::doc_review::doc_review,
             commands::doc_review::doc_review_export_word,
+            // 本地知识库混合检索（审核专家上传参考资料 + 设置页 RAG 参数）
+            commands::knowledge::knowledge,
             // Phase 6 V1.5：会话管理 17 command（V0 5 + V1.5 12）
             commands::sessions::sessions_create,
             commands::sessions::sessions_list,

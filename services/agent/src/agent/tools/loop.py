@@ -144,10 +144,42 @@ def _budget_exhausted_msg(turns: int) -> str:
     )
 
 
-def _stagnant_msg(n: int) -> str:
+def _stagnant_msg(n: int, tool_results: list[dict[str, Any]]) -> str:
+    """停滞熔断终答（BUGFIX #182）：不再只甩模板句，附上最近失败原因，
+    让用户看得到「缺在哪」，并可回复「继续」换路子接续。"""
+    lines: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for r in reversed(tool_results):
+        if r.get("ok"):
+            continue
+        err = str(r.get("error") or "").strip()[:120]
+        name = str(r.get("name") or "该工具")
+        if not err or (name, err) in seen:
+            continue
+        seen.add((name, err))
+        lines.append(f"- {name}: {err}")
+        if len(lines) >= 3:
+            break
+    detail = "\n最近的失败原因：\n" + "\n".join(lines) if lines else ""
     return (
-        f"最近连续 {n} 轮工具执行均无有效结果（重复失败或无可执行动作），"
-        "已暂停继续重试以避免空转。请补充关键信息或换一种表述。"
+        f"最近连续 {n} 轮工具执行均无有效结果，已暂停重试以避免空转。"
+        f"{detail}\n请告诉我需要补充什么（如素材文件路径、具体要求、缺失的环境依赖），"
+        "或直接回复「继续」让我换一种方式接着做。"
+    )
+
+
+def _stagnant_ask_directive(n: int) -> str:
+    """停滞熔断达阈后注入的强制追问指令（BUGFIX #182）。
+
+    旧行为：达阈直接终止 + 模板句「请补充关键信息」，用户看不出缺什么；
+    新行为：给模型最后一次机会，强制它基于已有失败反向追问用户缺哪些东西。
+    """
+    return (
+        f"【系统强制指令】你已连续 {n} 轮工具执行没有取得有效结果，立即停止重试同一路线。"
+        "本轮必须输出 ASK_USER（原生模式调用 ask_user），基于上方失败原因反向追问用户："
+        "1) 简述已尝试过什么、卡在哪一步；2) 明确列出需要用户补充的东西"
+        "（如素材文件路径、目标与结构要求、缺失的环境依赖等），一次问全并给出示例。"
+        "禁止再发起工具调用，禁止输出空洞的「请补充关键信息」。"
     )
 
 
@@ -287,6 +319,13 @@ def _merge_extra_rules(state: dict) -> str:
         _active_skill_addon(state).strip(),
         experience_addon(state).strip(),
     ]
+    # 停滞熔断强制追问轮（BUGFIX #182）：达阈后注入指令，逼模型反向追问用户缺什么，
+    # 而不是甩一句模板文案直接停。
+    if (
+        bool(state.get("tool_stagnant_asked"))
+        and int(state.get("tool_stagnant_streak") or 0) >= _STAGNANT_LIMIT
+    ):
+        parts.append(_stagnant_ask_directive(int(state.get("tool_stagnant_streak") or 0)))
     return "\n\n".join(p for p in parts if p)
 
 
@@ -641,17 +680,43 @@ class DynamicToolLoop:
                 }
 
             # 停滞熔断（2026-08-25，prompt 模式）：跨图轮累计连续零成功轮，
-            # 达阈提前终止；有成功执行即清零（与 native 内层计数同一语义）。
+            # 达阈先强制追问一轮（BUGFIX #182），追问后仍无进展才终止。
             streak = int(merged.get("tool_stagnant_streak") or 0)
+            asked = bool(merged.get("tool_stagnant_asked"))
             if any(r.get("ok") for r in executed):
                 streak = 0
+                asked = False
             else:
                 streak += 1
                 if streak >= _STAGNANT_LIMIT:
+                    if not asked:
+                        # 达阈不直接停：置位追问旗标，下一轮 EXTRA_RULES 注入强制
+                        # 追问指令，逼模型反向问用户缺什么，而不是甩模板文案。
+                        return {
+                            **updates,
+                            **repair_update,
+                            **self._continue(
+                                tool_results=tool_results,
+                                tool_turn_count=turn,
+                                tool_stagnant_streak=streak,
+                                tool_stagnant_asked=True,
+                                tool_last_call_fp=last_fp,
+                                tool_repeat_streak=repeat_streak,
+                                trace=[
+                                    *op_traces,
+                                    record_trace(
+                                        "tool_orchestrator",
+                                        "running",
+                                        reason="stagnant_force_ask",
+                                        streak=streak,
+                                    ),
+                                ],
+                            ),
+                        }
                     return {
                         **updates,
                         **self._done(
-                            final_answer=_stagnant_msg(streak),
+                            final_answer=_stagnant_msg(streak, tool_results),
                             tool_turn_count=turn,
                             tool_results=tool_results,
                             trace=[
@@ -672,6 +737,7 @@ class DynamicToolLoop:
                     tool_results=tool_results,
                     tool_turn_count=turn,
                     tool_stagnant_streak=streak,
+                    tool_stagnant_asked=asked,
                     tool_last_call_fp=last_fp,
                     tool_repeat_streak=repeat_streak,
                     trace=op_traces
@@ -878,6 +944,7 @@ class DynamicToolLoop:
         # 批准重放批次：显式注入 approve，避免 dispatcher 二次拦截
         batch_approved = resuming and state.get("approval_decision") == "approve"
         stagnant = 0  # 停滞熔断：连续零成功轮计数（2026-08-25）
+        stagnant_asked = False  # 达阈后是否已给过强制追问轮（BUGFIX #182）
         # 重复调用熔断（BUGFIX #165）：按执行顺序记录调用指纹，末尾连续相同即空转
         call_fingerprints: list[str] = []
         for _ in range(self._max_turns):
@@ -1129,16 +1196,33 @@ class DynamicToolLoop:
                     )
                 )
 
-            # 停滞熔断（2026-08-25）：连续 _STAGNANT_LIMIT 轮零成功执行 = 空转，
-            # 提前终止；任一轮有成功执行即清零（有进展的任务不受影响）。
+            # 停滞熔断（2026-08-25）：连续 _STAGNANT_LIMIT 轮零成功执行 = 空转；
+            # 达阈先插入强制追问轮（BUGFIX #182）——反向问用户缺什么，
+            # 追问后仍卡住才终止；任一轮有成功执行即清零（有进展的任务不受影响）。
             if any(r.get("ok") for r in executed):
                 stagnant = 0
+                stagnant_asked = False
             else:
                 stagnant += 1
                 if stagnant >= _STAGNANT_LIMIT:
+                    if not stagnant_asked:
+                        stagnant_asked = True
+                        messages.append(
+                            {"role": "user", "content": _stagnant_ask_directive(stagnant)}
+                        )
+                        op_traces.append(
+                            record_trace(
+                                "tool_orchestrator",
+                                "running",
+                                reason="stagnant_force_ask",
+                                mode="native",
+                                streak=stagnant,
+                            )
+                        )
+                        continue
                     return _emit(
                         self._done(
-                            final_answer=_stagnant_msg(stagnant),
+                            final_answer=_stagnant_msg(stagnant, tool_results),
                             tool_turn_count=turn,
                             tool_results=tool_results,
                             trace=[
@@ -1337,6 +1421,7 @@ class DynamicToolLoop:
         full_toolset_loaded: bool | None = None,
         registered_tools: list[dict] | None = None,
         tool_stagnant_streak: int | None = None,
+        tool_stagnant_asked: bool | None = None,
         tool_last_call_fp: str | None = None,
         tool_repeat_streak: int | None = None,
         trace: list[dict] | None = None,
@@ -1356,6 +1441,8 @@ class DynamicToolLoop:
             out["registered_tools"] = registered_tools
         if tool_stagnant_streak is not None:
             out["tool_stagnant_streak"] = tool_stagnant_streak
+        if tool_stagnant_asked is not None:
+            out["tool_stagnant_asked"] = tool_stagnant_asked
         # 重复调用熔断跨图轮状态（BUGFIX #165）：prompt 模式每轮是独立节点执行，
         # 指纹与计数必须存进 state 才能跨轮累计。
         if tool_last_call_fp is not None:

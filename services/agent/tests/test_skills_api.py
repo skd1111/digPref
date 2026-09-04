@@ -53,7 +53,7 @@ def test_init_loader_seeds_builtin_office_skills(tmp_path, monkeypatch):
     try:
         api_mod.init_loader()
         ids = {s.id for s in api_mod._loader.list()}
-        assert {"office_doc_writer", "office_excel_analyst", "office_pptx_designer"} <= ids
+        assert {"office_doc_writer", "office_excel_analyst"} <= ids
         # 幂等：二次启动不重复播种、不覆盖（文件数不变）
         before = sorted(p.name for p in skills_dir.glob("*.yaml"))
         api_mod.init_loader()

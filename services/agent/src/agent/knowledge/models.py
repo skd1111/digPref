@@ -54,7 +54,7 @@ class KnowledgeDoc:
         title: str,
         source_type: str,
         source_path: str | None = None,
-        metadata: dict | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> KnowledgeDoc:
         now = int(time.time())
         return cls(
@@ -93,6 +93,17 @@ class KnowledgeChunk:
     embedding: list[float] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "doc_id": self.doc_id,
+            "seq": self.seq,
+            "content": self.content,
+            "token_count": self.token_count,
+            "metadata": self.metadata,
+            "created_at": self.created_at,
+        }
 
 
 @dataclass

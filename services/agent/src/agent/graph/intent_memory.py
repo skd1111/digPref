@@ -12,6 +12,8 @@
     - DB 与 knowledge.db 同目录（测试经 _isolate chdir 自动隔离）；
     - 全部函数 best-effort：任何故障返空/静默，绝不阻塞意图主链路；
     - embedding 走统一入口（进程内 ONNX），纯本地。
+    - 向量存储：sqlite-vec 虚拟表 intent_examples_vec（统一入口
+      agent/vector_store.py，与向量模型端侧闭环）；存量 vec_json 首连自动迁入。
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -27,6 +30,7 @@ from typing import Any
 
 import aiosqlite
 
+from agent import vector_store as vs
 from agent.config import settings
 
 logger = logging.getLogger("agent.graph.intent_memory")
@@ -35,6 +39,8 @@ _LOCK = asyncio.Lock()
 _RECENT_KEEP = 5  # 每个任务页签保留的链路条数
 _EXAMPLE_POOL_LIMIT = 500  # Few-Shot 检索候选池上限
 _FEW_SHOT_TOP_K = 3
+_VEC_TABLE = "intent_examples_vec"
+_MIGRATED: set[str] = set()  # 已完成存量迁移的 DB 路径（进程内缓存）
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS intent_examples (
@@ -43,7 +49,6 @@ CREATE TABLE IF NOT EXISTS intent_examples (
     query_text      TEXT NOT NULL,
     intent_category TEXT NOT NULL,
     entities_json   TEXT NOT NULL DEFAULT '[]',
-    vec_json        TEXT NOT NULL DEFAULT '',
     source          TEXT NOT NULL DEFAULT 'auto',
     status          TEXT NOT NULL DEFAULT 'neutral',
     ts              TEXT NOT NULL
@@ -76,7 +81,7 @@ def _now() -> str:
 
 @asynccontextmanager
 async def _use_db() -> AsyncIterator[aiosqlite.Connection]:
-    """持锁建连 + 建表的唯一入口。
+    """持锁建连 + 建表 + sqlite-vec 就绪的唯一入口。
 
     陷阱（2026-08-31）：aiosqlite.Connection 被 ``await`` 一次后线程已启动，
     绝不能 ``await connect()`` 后再进 ``async with``（threads can only be
@@ -84,7 +89,50 @@ async def _use_db() -> AsyncIterator[aiosqlite.Connection]:
     """
     async with _LOCK, aiosqlite.connect(_db_path()) as conn:
         await conn.executescript(_SCHEMA)
+        await _prepare_vec(conn)
         yield conn
+
+
+async def _prepare_vec(conn: aiosqlite.Connection) -> None:
+    """best-effort：加载 sqlite-vec 扩展（每连接必载）+ 迁移存量（每库一次）。
+
+    陷阱：aiosqlite 每次 connect 都是新线程新连接，扩展加载不得跨连接缓存；
+    可缓存的只有存量迁移（按 DB 绝对路径 —— 相对路径会随 cwd 变化串库）。
+    """
+    path = str(_db_path().resolve())
+    try:
+        loaded = await vs.load_extension_async(conn)
+        if loaded and path not in _MIGRATED:
+            await vs.run_async(conn, _migrate_legacy_vec_json)
+    except Exception as exc:
+        logger.debug("intent_memory vec prepare failed: %s", exc)
+    _MIGRATED.add(path)
+
+
+def _migrate_legacy_vec_json(raw: sqlite3.Connection) -> None:
+    """旧版 intent_examples.vec_json（JSON 文本）→ intent_examples_vec（vec0）。
+
+    迁移完清空并 DROP 旧列（SQLite ≥ 3.35）；DROP 失败保留旧列也无害。
+    """
+    cols = {r[1] for r in raw.execute("PRAGMA table_info(intent_examples)")}
+    if "vec_json" not in cols:
+        return
+    rows = raw.execute("SELECT id, vec_json FROM intent_examples WHERE vec_json != ''").fetchall()
+    for row_id, vec_json in rows:
+        try:
+            vec = [float(x) for x in json.loads(vec_json)]
+        except (TypeError, ValueError):
+            continue
+        if vec:
+            vs.ensure_vec_table(raw, _VEC_TABLE, len(vec))
+            vs.upsert(raw, _VEC_TABLE, int(row_id), vec)
+    if rows:
+        raw.execute("UPDATE intent_examples SET vec_json = ''")
+    try:
+        raw.execute("ALTER TABLE intent_examples DROP COLUMN vec_json")
+    except Exception as exc:
+        logger.debug("intent_memory drop vec_json failed: %s", exc)
+    raw.commit()
 
 
 # ---- 向量工具 ----------------------------------------------------------------
@@ -105,19 +153,6 @@ async def _embed_text(text: str) -> list[float] | None:
         return None
 
 
-def _cosine(a: list[float], b: list[float]) -> float:
-    if len(a) != len(b) or not a:
-        return 0.0
-    import math
-
-    dot = sum(x * y for x, y in zip(a, b, strict=False))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(x * x for x in b))
-    if na == 0 or nb == 0:
-        return 0.0
-    return dot / (na * nb)
-
-
 # ---- 成功路由案例（动态 Few-Shot）---------------------------------------------
 
 
@@ -136,20 +171,29 @@ async def record_example(
     vec = await _embed_text(text)
     try:
         async with _use_db() as conn:
-            await conn.execute(
+            cursor = await conn.execute(
                 "INSERT INTO intent_examples "
-                "(run_id, query_text, intent_category, entities_json, vec_json, source, status, ts)"
-                " VALUES (?, ?, ?, ?, ?, ?, 'neutral', ?)",
+                "(run_id, query_text, intent_category, entities_json, source, status, ts)"
+                " VALUES (?, ?, ?, ?, ?, 'neutral', ?)",
                 (
                     run_id,
                     text[:500],
                     intent_category,
                     json.dumps(list(entity_keys), ensure_ascii=False),
-                    json.dumps(vec) if vec else "",
                     source,
                     _now(),
                 ),
             )
+            example_id = cursor.lastrowid
+            if vec and example_id:
+                dim = len(vec)
+                await vs.run_async(
+                    conn,
+                    lambda raw: (
+                        vs.ensure_vec_table(raw, _VEC_TABLE, dim),
+                        vs.upsert(raw, _VEC_TABLE, example_id, vec),
+                    ),
+                )
             await conn.commit()
     except Exception as exc:
         logger.debug("intent_memory record_example failed: %s", exc)
@@ -204,25 +248,25 @@ async def retrieve_examples(text: str, top_k: int = _FEW_SHOT_TOP_K) -> list[dic
         return []
     try:
         async with _use_db() as conn:
-            cursor = await conn.execute(
-                "SELECT query_text, intent_category, status, vec_json FROM intent_examples"
-                " WHERE status IN ('positive', 'neutral')"
-                " ORDER BY id DESC LIMIT ?",
-                (_EXAMPLE_POOL_LIMIT,),
+            if not await vs.vec_ready_async(conn):
+                return []
+            # 候选池（最近 500 条正面/中性）内按余弦相似度排序；
+            # 无向量的案例（vec 表缺行）经 INNER JOIN 自然排除。
+            rows = await conn.execute_fetchall(
+                "SELECT e.query_text, e.intent_category, e.status, "
+                f"{vs.cosine_expr('v.embedding')} AS sim "
+                "FROM intent_examples e "
+                f"JOIN {_VEC_TABLE} v ON v.rowid = e.id "
+                "WHERE e.status IN ('positive', 'neutral') "
+                "ORDER BY e.id DESC LIMIT ?",
+                (vs.serialize(qvec), _EXAMPLE_POOL_LIMIT),
             )
-            rows = await cursor.fetchall()
     except Exception as exc:
         logger.debug("intent_memory retrieve_examples failed: %s", exc)
         return []
     scored: list[tuple[float, dict[str, Any]]] = []
-    for query_text, category, status, vec_json in rows:
-        try:
-            vec = [float(x) for x in json.loads(vec_json)] if vec_json else []
-        except (TypeError, ValueError):
-            vec = []
-        if not vec:
-            continue
-        score = _cosine(qvec, vec)
+    for query_text, category, status, sim in rows:
+        score = float(sim or 0.0)
         if status == "positive":
             score += 0.02  # 用户点赞过的小幅加权
         scored.append((score, {"query_text": str(query_text), "intent_category": str(category)}))

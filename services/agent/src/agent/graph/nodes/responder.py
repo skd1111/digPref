@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 from typing import Any
 
+from agent.config import settings
 from agent.graph.nodes.repair import MAX_RETRIES
 from agent.graph.state import AgentState, record_trace
 from agent.llm.router import LMRouter
@@ -79,7 +81,9 @@ async def responder_node(state: AgentState, llm: LMRouter) -> dict:
                     "trace": [record_trace("responder", "ok", mode="chitchat")],
                 }
             try:
-                answer, sources = await llm.summarise(
+                answer, sources = await _summarise_maybe_stream(
+                    state,
+                    llm,
                     intent="chitchat",
                     user_prompt=user_prompt,
                     plan=[],
@@ -122,7 +126,9 @@ async def responder_node(state: AgentState, llm: LMRouter) -> dict:
         }
 
     try:
-        answer, sources = await llm.summarise(
+        answer, sources = await _summarise_maybe_stream(
+            state,
+            llm,
             intent=intent,
             user_prompt=user_prompt,
             plan=plan,
@@ -152,6 +158,38 @@ async def responder_node(state: AgentState, llm: LMRouter) -> dict:
 
 
 # ---- Helpers ---------------------------------------------------------------
+
+
+async def _summarise_maybe_stream(
+    state: AgentState, llm: LMRouter, **kwargs: Any
+) -> tuple[str, list[str]]:
+    """终答汇总（2026-09-03 流式优先）：answer_stream 开启且 llm 支持
+    summarise_stream 时逐 token 发 answer_delta 事件；否则原样走 llm.summarise
+    （测试替身 / 旧后端零影响）。
+
+    delta 走 builtin.events 进程内队列（stream.py 0.4s 轮询 drain 进 SSE）；
+    msg_id 由 stream.py 从首条 delta 种子化到终答 message 事件（#142 同 id
+    原地覆盖），流式草稿与终稿收敛为同一条气泡。
+    """
+    run_id = str(state.get("run_id") or "")
+    if (
+        not getattr(settings, "answer_stream_enabled", True)
+        or not run_id
+        or not hasattr(llm, "summarise_stream")
+    ):
+        return await llm.summarise(**kwargs)
+
+    from agent.builtin.events import emit_answer_delta
+
+    msg_id = str(uuid.uuid4())
+
+    async def _on_delta(delta: str) -> None:
+        try:
+            await emit_answer_delta(run_id=run_id, msg_id=msg_id, delta=delta)
+        except Exception:  # 推送故障不阻断终答生成（终稿 message 事件兜底）
+            pass
+
+    return await llm.summarise_stream(on_delta=_on_delta, **kwargs)
 
 
 def _history_for_answer(state: AgentState) -> list:
@@ -234,7 +272,9 @@ async def _rewrite_to_chinese(state: AgentState, llm: LMRouter, draft: str) -> d
     重写异常 / 重写结果仍不含中文（模型不听话）→ 回退原草稿，不劣化终答。
     """
     try:
-        answer, sources = await llm.summarise(
+        answer, sources = await _summarise_maybe_stream(
+            state,
+            llm,
             intent=state.get("intent") or "query",
             user_prompt=state.get("user_prompt", ""),
             plan=[],
@@ -503,7 +543,9 @@ async def _synthesise_tool_results(
             }
         )
     try:
-        answer, sources = await llm.summarise(
+        answer, sources = await _summarise_maybe_stream(
+            state,
+            llm,
             intent=state.get("intent") or "query",
             user_prompt=state.get("user_prompt", ""),
             plan=[],
@@ -534,7 +576,9 @@ def _truncate_result(value: Any, limit: int = 4000) -> Any:
 async def _answer_directly(state: AgentState, llm: LMRouter) -> dict:
     """MAIN_AGENT：由主智能体直接回答（不调用工具、不派生子智能体）。"""
     try:
-        answer, sources = await llm.summarise(
+        answer, sources = await _summarise_maybe_stream(
+            state,
+            llm,
             intent=state.get("intent") or "query",
             user_prompt=state.get("user_prompt", ""),
             plan=[],
@@ -576,7 +620,9 @@ async def _respond_from_sub_agents(
         )
 
     try:
-        answer, sources = await llm.summarise(
+        answer, sources = await _summarise_maybe_stream(
+            state,
+            llm,
             intent=state.get("intent") or "query",
             user_prompt=user_prompt,
             plan=[],

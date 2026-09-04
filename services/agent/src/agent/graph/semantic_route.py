@@ -21,7 +21,8 @@ V2 增强（2026-08-31，意图识别四层增强）：
     - embedding 只走本地（LocalEmbeddingClient），不触及云端 —— 与
       _LOCAL_ONLY_TASKS 本地红线一致；
     - 只读路由：不产生任何写操作 / HITL / 审计副作用；
-    - 示例句向量缓存落本地 JSON（与 knowledge.db 同目录，测试自动隔离）。
+    - 示例句向量缓存落本地 sqlite-vec（semantic_route.db，与 knowledge.db
+      同目录，测试自动隔离；统一入口 agent/vector_store.py）。
 """
 
 from __future__ import annotations
@@ -35,6 +36,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import aiosqlite
+
+from agent import vector_store as vs
 from agent.config import settings
 
 logger = logging.getLogger("agent.graph.semantic_route")
@@ -219,8 +223,9 @@ def _routes_fingerprint(routes: tuple[Route, ...], model: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def _cache_path() -> Path:
-    return Path(settings.knowledge_db_path).parent / "semantic_route_cache.json"
+def _db_path() -> Path:
+    """示例句向量缓存库（与 knowledge.db 同目录，测试经 chdir 自动隔离）。"""
+    return Path(settings.knowledge_db_path).parent / "semantic_route.db"
 
 
 # ---- BM25（纯 Python，字符 bigram 分词）--------------------------------------
@@ -341,24 +346,11 @@ class SemanticIntentRouter:
 
         model = str(getattr(client, "model", "") or "local")
         fp = _routes_fingerprint(self._routes, model)
-        cache = _cache_path()
-        try:
-            if cache.exists():
-                data = json.loads(cache.read_text(encoding="utf-8"))
-                if data.get("fingerprint") == fp:
-                    self._vectors = [
-                        (str(name), [float(x) for x in vec])
-                        for name, vec in data.get("vectors", [])
-                    ]
-                    self._neg_vectors = [
-                        (str(name), [float(x) for x in vec])
-                        for name, vec in data.get("negative_vectors", [])
-                    ]
-                    if self._vectors:
-                        await self._refresh_dynamic_negatives()
-                        return True
-        except Exception as exc:  # 缓存损坏重建即可
-            logger.debug("semantic_route cache load failed: %s", exc)
+        loaded = await self._load_cached_vectors(fp)
+        if loaded is not None:
+            self._vectors, self._neg_vectors = loaded
+            await self._refresh_dynamic_negatives()
+            return True
 
         # 现算：先探活，避免无谓等待
         try:
@@ -394,22 +386,85 @@ class SemanticIntentRouter:
                 idx += 1
         self._vectors = pairs
         self._neg_vectors = neg_pairs
-        try:
-            cache.write_text(
-                json.dumps(
-                    {
-                        "fingerprint": fp,
-                        "vectors": pairs,
-                        "negative_vectors": neg_pairs,
-                    },
-                    ensure_ascii=False,
-                ),
-                encoding="utf-8",
-            )
-        except Exception as exc:  # 缓存写失败不影响运行
-            logger.debug("semantic_route cache write failed: %s", exc)
+        await self._save_cached_vectors(fp, pairs, neg_pairs)
         await self._refresh_dynamic_negatives()
         return True
+
+    # ---- sqlite-vec 向量缓存 -------------------------------------------------
+
+    async def _load_cached_vectors(
+        self, fp: str
+    ) -> tuple[list[tuple[str, list[float]]], list[tuple[str, list[float]]]] | None:
+        """指纹命中且向量可读 → (正样本, 负样本)；未命中/损坏返 None（重建）。"""
+        try:
+            async with aiosqlite.connect(_db_path()) as conn:
+                if not await vs.load_extension_async(conn):
+                    return None
+                cursor = await conn.execute("SELECT fingerprint FROM route_meta WHERE id = 1")
+                row = await cursor.fetchone()
+                if row is None or str(row[0]) != fp:
+                    return None
+                rows = await conn.execute_fetchall(
+                    "SELECT r.kind, r.name, v.embedding FROM route_vec_ref r "
+                    "JOIN route_vec v ON v.rowid = r.rowid ORDER BY r.rowid"
+                )
+            pairs = [(str(name), vs.deserialize(emb)) for kind, name, emb in rows if kind == "pos"]
+            neg_pairs = [
+                (str(name), vs.deserialize(emb)) for kind, name, emb in rows if kind == "neg"
+            ]
+            if not pairs:
+                return None
+            return pairs, neg_pairs
+        except Exception as exc:  # 缓存损坏重建即可
+            logger.debug("semantic_route cache load failed: %s", exc)
+            return None
+
+    async def _save_cached_vectors(
+        self,
+        fp: str,
+        pairs: list[tuple[str, list[float]]],
+        neg_pairs: list[tuple[str, list[float]]],
+    ) -> None:
+        """示例句/负样本向量 + 指纹整体重写入 semantic_route.db（best-effort）。"""
+        all_vecs = [v for _, v in pairs] + [v for _, v in neg_pairs]
+        if not all_vecs:
+            return
+        dim = len(all_vecs[0])
+        try:
+            async with aiosqlite.connect(_db_path()) as conn:
+                if not await vs.load_extension_async(conn):
+                    return
+                await conn.executescript(
+                    "CREATE TABLE IF NOT EXISTS route_meta ("
+                    "  id INTEGER PRIMARY KEY CHECK (id = 1), fingerprint TEXT NOT NULL);"
+                    "CREATE TABLE IF NOT EXISTS route_vec_ref ("
+                    "  rowid INTEGER PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL);"
+                )
+
+                def _rebuild(raw) -> None:
+                    current = vs.table_dim(raw, "route_vec")
+                    if current is not None and current != dim:
+                        raw.execute("DROP TABLE route_vec")  # 维度漂移（换模型）重建
+                    vs.ensure_vec_table(raw, "route_vec", dim)
+                    vs.delete_all(raw, "route_vec")
+                    raw.execute("DELETE FROM route_vec_ref")
+                    idx = 0
+                    for kind, entries in (("pos", pairs), ("neg", neg_pairs)):
+                        for name, vec in entries:
+                            idx += 1
+                            if vs.upsert(raw, "route_vec", idx, vec):
+                                raw.execute(
+                                    "INSERT INTO route_vec_ref(rowid, kind, name) VALUES (?, ?, ?)",
+                                    (idx, kind, name),
+                                )
+                    raw.execute(
+                        "INSERT OR REPLACE INTO route_meta(id, fingerprint) VALUES (1, ?)", (fp,)
+                    )
+
+                await vs.run_async(conn, _rebuild)
+                await conn.commit()
+        except Exception as exc:  # 缓存写失败不影响运行（下次现算）
+            logger.debug("semantic_route cache write failed: %s", exc)
 
     async def _refresh_dynamic_negatives(self) -> None:
         """增量刷新闭环反馈困难样本向量（样本集指纹变化才重新向量化）。"""

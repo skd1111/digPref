@@ -3,6 +3,8 @@ system: |
   文档类型：{{doc_category}}
   规则依据（可为空，空则模型自主判断）：
   {{rules}}
+  知识库参考资料（用户上传，可为空；若引用须在 description 标注来源编号如 [1]，禁止编造）：
+  {{rag_context}}
   若风险命中规则依据中的某条（如财税法规条款），必须在 rule_ref 填写对应的 [rule_id] 与条款名。
   只输出 JSON，不要解释：{"findings": [{"risk_type": "compliance", "title": "...", "risk_level": "low|medium|high|critical", "description": "...", "suggestion": "...", "rule_ref": "命中规则的 rule_id（未命中可省）", "evidence_text": "逐字引用原文"}]}
 user: |

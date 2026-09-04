@@ -33,13 +33,17 @@ if not exist "d:\ditPref\vendor\officecli\officecli-win-x64.exe" (
     )
 )
 
-:: 确保 PPT Master 运行时（V9.7：技能包 + 嵌入式 Python + 离线依赖；缺失不阻断，运行时友好降级）
-if not exist "d:\ditPref\vendor\ppt-master\SKILL.md" (
-    echo [INFO] 未发现 PPT Master 运行时，尝试拉取...
-    powershell -NoProfile -ExecutionPolicy Bypass -File "d:\ditPref\infra\scripts\fetch-ppt-master.ps1"
-)
-if not exist "d:\ditPref\vendor\ppt-master\SKILL.md" (
-    echo [WARN] PPT Master 运行时未就位，安装包将不含 PPT 生成技能（运行时种子提示技能包缺失）
+:: PPT Master 运行时：2026-09-03 起不再内置（vendor/ppt-master 已移出 tauri bundle.resources，
+:: PPT 技能改由用户经「设置 → 技能」/skills/import 自行上传）；安装包因此瘦身 ~100MB。
+
+:: 确保 bge-reranker ONNX 模型（本地知识库混合检索重排；~266MB，不入 git，构建时拉取；
+:: 缺失不阻断——reranker 静默 no-op，混合检索保持 RRF 融合序；bge-small 向量模型已入 git 无需拉取）
+if not exist "d:\ditPref\model\bge-reranker-base-onnx\onnx\model_quantized.onnx" (
+    echo [INFO] 未发现 bge-reranker 模型，尝试拉取...
+    powershell -NoProfile -ExecutionPolicy Bypass -File "d:\ditPref\model\download_bge_reranker_onnx.ps1"
+    if not exist "d:\ditPref\model\bge-reranker-base-onnx\onnx\model_quantized.onnx" (
+        echo [WARN] bge-reranker 未就位，安装包将不含重排模型（混合检索退化为 RRF 序，功能不中断）
+    )
 )
 
 :: 构建 eaide-executor（Rust 本地执行器独立二进制；随 Agent exe / 安装包分发，
@@ -66,6 +70,13 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 echo [1/2] Agent exe 构建完成 ✓
+echo.
+
+:: ---- Step 1b: 精简 config/driver（移除已冻结进 exe 的冗余 wheel + 运行时再生的 _site）----
+:: config/driver 作为 tauri 资源落到安装目录；numpy/pandas/cryptography 等已冻结进 exe，
+:: 只保留 exe 未冻结的少数驱动（oracledb/clickhouse/aioodbc/pyodbc/lz4/backports_zstd）
+echo [1b] 精简 config/driver 冗余离线驱动 ...
+call uv run python infra\scripts\prune-driver-bundle.py
 echo.
 
 :: ---- Step 2: Tauri 构建桌面安装包 ----

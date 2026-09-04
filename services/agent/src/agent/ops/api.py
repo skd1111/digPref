@@ -29,7 +29,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import sys
 import time
 import zipfile
 from pathlib import Path
@@ -38,6 +37,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from agent.config import settings
 from agent.paths import data_root
 
 from .cases import (
@@ -938,84 +938,30 @@ async def case_delete_file(file_id: str) -> dict:
     return {"ok": True, "file_id": file_id}
 
 
-def _knowledge_base_dir() -> Path | None:
-    """仓库内 knowledge-base 目录（合规/法律/数据安全/资金风险/案例库 md）。
+async def _search_local_knowledge(question: str, limit: int = 3) -> list[dict]:
+    """制度问答检索（找制度变问助手）：走**用户上传的本地 RAG 知识库**混合检索。
 
-    支持 EAIDE_KB_DIR 环境变量覆盖（部署形态不同时指向实际目录）。
+    2026-09-04：内置 knowledge-base/ 关键词检索下线，统一改走上传 RAG 库
+    （FTS5 BM25 + 向量 + RRF + reranker），与文档审核依据同源。命中返回
+    [{title, source, snippet}]（title/source=上传文档标题，snippet=命中片段），
+    未启用 RAG / 库空 / 检索异常 → 空列表（best-effort 降级，不阻塞问答）。
     """
-    override = os.environ.get("EAIDE_KB_DIR")
-    if override:
-        p = Path(override)
-        return p if p.is_dir() else None
-    candidate = Path(__file__).resolve().parents[5] / "knowledge-base"
-    if candidate.is_dir():
-        return candidate
-    # PyInstaller 单文件打包后源码在 _MEIPASS 解压目录，parents[5] 上溯不到；
-    # 回退到 spec datas 打进来的内置副本（与 doc_review/knowledge.py 同策略）。
-    meipass = getattr(sys, "_MEIPASS", None)
-    if meipass:
-        bundled = Path(meipass) / "knowledge-base"
-        if bundled.is_dir():
-            return bundled
-    return None
-
-
-_KB_STOPWORDS = frozenset(
-    {"请问", "什么", "怎么", "如何", "哪些", "需要", "注意", "问题", "办理", "业务", "材料", "专家"}
-)
-
-
-def _search_local_knowledge(question: str, limit: int = 3) -> list[dict]:
-    """知识库关键词检索（找制度变问助手，2026-08-10）。
-
-    对 knowledge-base/*.md 按关键词命中计分，返回带出处的片段：
-    [{title, source, snippet}]。知识库不存在/无命中 → 空列表（降级不阻塞）。
-    """
-    kb_dir = _knowledge_base_dir()
-    if kb_dir is None:
+    if not question.strip() or not settings.rag_enabled:
         return []
-    # 关键词：中文无分词 → 对连续中文串取 2/3 字 n-gram（含停用词的丢弃），
-    # 再并上英文/数字词；命中计分仅用于排序。
-    import re
+    try:
+        from agent.knowledge.retriever import get_default_retriever
 
-    words: set[str] = set()
-    for run in re.findall(r"[\u4e00-\u9fff]+", question):
-        for n in (2, 3):
-            for i in range(len(run) - n + 1):
-                gram = run[i : i + n]
-                if any(sw in gram for sw in _KB_STOPWORDS):
-                    continue
-                words.add(gram)
-    words |= {w for w in re.findall(r"[A-Za-z0-9]{2,}", question)}
-    if not words:
+        ctx = await get_default_retriever().retrieve(question, top_k=limit)
+    except Exception:
+        logger.debug("ops case_ask 制度问答 RAG 检索失败", exc_info=True)
         return []
-    scored: list[tuple[int, Path, str, str]] = []
-    for md in sorted(kb_dir.glob("*.md")):
-        try:
-            text = md.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        score = sum(text.count(w) for w in words)
-        if score == 0:
-            continue
-        # 标题：首个 H1；片段：首个命中行的上下文
-        title = md.stem
-        for line in text.splitlines():
-            if line.startswith("# "):
-                title = line[2:].strip()
-                break
-        snippet = ""
-        lines = text.splitlines()
-        for i, line in enumerate(lines):
-            if any(w in line for w in words):
-                snippet = "\n".join(x.strip() for x in lines[i : i + 3] if x.strip())[:220]
-                break
-        scored.append((score, md, title, snippet))
-    scored.sort(key=lambda x: -x[0])
-    return [
-        {"title": title, "source": md.name, "snippet": snippet}
-        for _, md, title, snippet in scored[:limit]
-    ]
+    out: list[dict] = []
+    for r in ctx.results:
+        meta = getattr(r.chunk, "metadata", {}) or {}
+        title = str(r.doc_title or r.citation or "")
+        snippet = str(meta.get("child_content") or r.chunk.content or "")[:220]
+        out.append({"title": title, "source": title, "snippet": snippet})
+    return out
 
 
 def _build_ask_messages(
@@ -1038,9 +984,9 @@ def _build_ask_messages(
         names = "、".join(str(f.get("file_name", "")) for f in materials[:10])
         sys_parts.append(f"已向你提交的材料：{names}")
     if kb_results:
-        kb_lines = ["内部知识库检索结果（回答必须优先依据这些制度内容，并注明出处）："]
+        kb_lines = ["知识库检索结果（回答必须优先依据这些制度内容，并注明出处）："]
         for r in kb_results:
-            kb_lines.append(f"《{r['title']}》（{r['source']}）：{r['snippet']}")
+            kb_lines.append(f"《{r['title']}》：{r['snippet']}")
         sys_parts.append("\n".join(kb_lines))
     return [
         {"role": "system", "content": "\n\n".join(sys_parts)},
@@ -1109,8 +1055,8 @@ async def case_ask(req: CaseAskRequest) -> dict:
                 },
             )
             return {"qa": qa, "draft": _normalize_draft_row(draft)}
-    # 找制度变问助手（2026-08-10）：先查内部知识库，命中则回答附制度出处（防黑盒）
-    kb_results = _search_local_knowledge(req.question)
+    # 找制度变问助手：先查上传的本地 RAG 知识库，命中则回答附制度出处（防黑盒）
+    kb_results = await _search_local_knowledge(req.question)
     messages = _build_ask_messages(member, req.question, materials, kb_results)
     llm_call = _make_summarize_llm()
     try:
@@ -1119,10 +1065,7 @@ async def case_ask(req: CaseAskRequest) -> dict:
         raise HTTPException(502, str(e)) from e
     answer_text = answer.strip()
     if kb_results:
-        sources = "\n".join(
-            f"{i + 1}. 《{r['title']}》（knowledge-base/{r['source']}）"
-            for i, r in enumerate(kb_results)
-        )
+        sources = "\n".join(f"{i + 1}. 《{r['title']}》" for i, r in enumerate(kb_results))
         answer_text += f"\n\n---\n📚 制度出处：\n{sources}"
     # 清单形态长文回答 → 自动转可直填草稿（BUGFIX #82）：问题没带「模板/清单」
     # 关键词（如「需要什么材料」）也能出表单，不在气泡里砸一大段文字；
@@ -1137,10 +1080,7 @@ async def case_ask(req: CaseAskRequest) -> dict:
             )
             if kb_results:
                 # 转草稿后仍保留制度出处（防黑盒）
-                sources = "\n".join(
-                    f"{i + 1}. 《{r['title']}》（knowledge-base/{r['source']}）"
-                    for i, r in enumerate(kb_results)
-                )
+                sources = "\n".join(f"{i + 1}. 《{r['title']}》" for i, r in enumerate(kb_results))
                 answer_text += f"\n\n---\n📚 制度出处：\n{sources}"
     qa = store.add_qa(
         case_id=req.case_id,

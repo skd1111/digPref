@@ -16,11 +16,6 @@ from agent.driver_bootstrap import load_drivers
 
 load_drivers()
 
-# PPT Master 捆绑运行时（嵌入式 Python + 离线依赖解压）—— best-effort 不阻断启动
-from agent.ppt_master_bootstrap import ensure_ppt_master_runtime
-
-ensure_ppt_master_runtime()
-
 # LLM active 后端统一配置 —— 必须在 agent.config 加载前应用
 # （router.db llm_kv 为唯一长期事实源；遗留 llm-config.json 启动时迁移）
 from agent.llm.active_config import apply_active
@@ -60,6 +55,10 @@ except OSError:
     _AGENT_LOG.parent.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     filename=str(_AGENT_LOG),
+    # BUGFIX #187：显式钉 UTF-8 —— 此前未传 encoding，FileHandler 在中文 Windows 上
+    # 默认用 locale 编码（cp936/GBK）落盘，agent.log 里的中文（上传文件名 / 中文日志）
+    # 全成乱码，与 UTF-8 的 eaide.log / cot.log 不一致，排查困难。
+    encoding="utf-8",
     # BUGFIX #175：级别跟随 settings.log_level（默认 info）—— 此前硬编码 DEBUG，
     # aiosqlite 每条 SQL 两行 DEBUG 刷屏，掩盖真实错误。
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
@@ -260,6 +259,42 @@ async def lifespan(app: FastAPI):
     except Exception:
         log.exception("data scheduler startup failed")
     app.state.data_scheduler = data_scheduler
+    # 本地知识库混合检索：启动从 kb.db 应用持久化参数（含旧 JSON 一次性迁移）+ 可选冷启动预加载
+    try:
+        from agent.config import settings as _settings
+        from agent.knowledge.rag_config import load_rag_config
+
+        load_rag_config()
+        if getattr(_settings, "rag_preload_on_startup", False):
+            # 模型/维度漂移检测：迁移到不同 embedding 环境时标 stale，面板提示重建
+            try:
+                from agent.knowledge.storage import get_default_storage as _kb_storage
+
+                _st = _kb_storage()
+                _cur_model = _settings.local_embedding_model or "bge-small-zh-v1.5"
+                if _st.needs_reindex(_cur_model, int(_settings.local_embedding_dim)):
+                    _st.mark_all_stale()
+            except Exception:
+                log.debug("rag drift check skipped", exc_info=True)
+
+            async def _preload_rag() -> None:
+                # 预热 ONNX embedding / reranker session + 触发建表/FTS5 就绪（best-effort）
+                try:
+                    from agent.knowledge.reranker import get_reranker_client
+                    from agent.knowledge.retriever import build_default_embedding_client
+                    from agent.knowledge.storage import get_default_storage
+
+                    emb = build_default_embedding_client()
+                    if emb is not None:
+                        await emb.embed("预热")
+                    await get_reranker_client().health_check()
+                    get_default_storage().get_stats()
+                except Exception:
+                    log.debug("rag preload skipped", exc_info=True)
+
+            app.state.rag_preload_task = asyncio.create_task(_preload_rag())
+    except Exception:
+        log.exception("rag startup init failed")
     try:
         yield
     finally:

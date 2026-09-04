@@ -10,7 +10,9 @@ import { FileReferenceBadge } from './FileReferenceBadge';
 import { splitFileRefs } from './fileRef';
 
 const NODE_META: Record<string, { label: string; icon: string; color: string }> = {
+  mode_router: { label: '模式路由', icon: '🚦', color: '#6b7280' },
   intent: { label: '意图识别', icon: '🧭', color: '#059669' },
+  skill_route: { label: '技能路由', icon: '🎯', color: '#0b6bcb' },
   planner: { label: '任务规划', icon: '🧠', color: '#0451a5' },
   decompose: { label: '任务分解', icon: '🧩', color: '#c586c0' },
   tool_orchestrator: { label: '工具调用', icon: '🔧', color: '#0b6bcb' },

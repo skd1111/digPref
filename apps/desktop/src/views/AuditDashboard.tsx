@@ -13,6 +13,7 @@ import { useEffect, useState } from "react";
 import { useAuditStore } from "@/store/auditStore";
 import { useCollabStore } from "@/store/collabStore";
 import { DocReviewDashboard } from "./DocReviewDashboard";
+import { KbPanel } from "@/components/doc-review/KbPanel";
 import { ApprovalQueue } from "@/components/audit/ApprovalQueue";
 import { AuditApprovalCard } from "@/components/audit/AuditApprovalCard";
 import { DiffViewer } from "@/components/audit/DiffViewer";
@@ -115,8 +116,10 @@ function AuditApprovalDashboard(): JSX.Element {
   );
 }
 
+type AuditTab = "approval" | "doc" | "kb";
+
 export function AuditDashboard(): JSX.Element {
-  const [docTab, setDocTab] = useState(false);
+  const [tab, setTab] = useState<AuditTab>("approval");
   return (
     <div className="flex h-full flex-col">
       <div
@@ -124,17 +127,28 @@ export function AuditDashboard(): JSX.Element {
         style={{ borderColor: "#d4d4d4", backgroundColor: "#f3f3f3" }}
       >
         <TabButton
-          active={!docTab}
-          onClick={() => setDocTab(false)}
+          active={tab === "approval"}
+          onClick={() => setTab("approval")}
           label="审批工作台"
         />
         <TabButton
-          active={docTab}
-          onClick={() => setDocTab(true)}
+          active={tab === "doc"}
+          onClick={() => setTab("doc")}
           label="文档审核"
         />
+        <TabButton
+          active={tab === "kb"}
+          onClick={() => setTab("kb")}
+          label="知识库"
+        />
       </div>
-      {docTab ? <DocReviewDashboard /> : <AuditApprovalDashboard />}
+      {tab === "doc" ? (
+        <DocReviewDashboard />
+      ) : tab === "kb" ? (
+        <KbPanel />
+      ) : (
+        <AuditApprovalDashboard />
+      )}
     </div>
   );
 }

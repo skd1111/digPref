@@ -4,9 +4,10 @@ OfficeCLI（iOfficeAI，Apache 2.0）是单二进制、无需安装 Office 的�
 docx / xlsx / pptx 读/改/建 + 内置高保真 HTML/PNG 渲染引擎，专为 AI Agent
 设计（确定性 --json 输出 + 结构化错误码，供上层自愈）。
 
-二进制定位（三级回退，与 config/biz_dict 同策略）：
+二进制定位（多级回退，与 config/biz_dict 同策略）：
     1. 显式覆盖：settings.builtin_officecli_executable
-    2. 捆绑二进制：vendor/officecli/<平台二进制>（cwd 缺失时回退 PyInstaller _MEIPASS）
+    2. 捆绑二进制：vendor/officecli/<平台二进制>
+       （候选根：cwd → exe 所在目录 → PyInstaller _MEIPASS → 仓库根推导）
     3. PATH 中的 officecli
 
 安全约束：
@@ -31,7 +32,9 @@ from typing import Any
 
 from agent.config import settings
 
-# 捆绑二进制的相对目录（spec datas: ('vendor/officecli', 'vendor/officecli')）
+# 捆绑二进制的相对目录（Tauri resources 落到安装目录 vendor/officecli，与 Agent exe 同级；
+# 2026-09-03 起不再进 spec datas——exe 内 _MEIPASS 副本已移除以缩减安装包 ~64MB，
+# 运行时靠下方 _bundled_candidates 的「exe 所在目录」候选命中安装目录那份）
 _VENDOR_REL_DIR = "vendor/officecli"
 
 # 各平台二进制文件名（与 GitHub Releases 制品名一致）
@@ -69,9 +72,16 @@ class OfficeCliOutcome:
 
 
 def _bundled_candidates() -> list[Path]:
-    """捆绑二进制候选路径：cwd 优先，缺失回退 PyInstaller _MEIPASS。"""
+    """捆绑二进制候选路径：cwd → exe 所在目录 → _MEIPASS → 仓库根。
+
+    生产模式 Tauri 把 officecli 落到安装目录 vendor/officecli，且 Agent exe 也在
+    安装目录 → 「exe 所在目录」候选即命中（不再依赖 exe 内 _MEIPASS 副本，该副本
+    已从 spec datas 移除以缩减安装包）。_MEIPASS 候选保留，兼容仍打包它的旧构建。
+    """
     names = _PLATFORM_BINARIES.get(sys.platform, ())
     roots = [Path.cwd()]
+    if getattr(sys, "frozen", False):
+        roots.append(Path(sys.executable).resolve().parent)
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
         roots.append(Path(meipass))

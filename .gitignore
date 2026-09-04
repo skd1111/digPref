@@ -119,12 +119,19 @@ config/driver/*.whl
 vendor/officecli/officecli-*
 
 # =========================
-# V9.7 PPT Master runtime (fetched by infra/scripts/fetch-ppt-master.ps1)
-# 技能包 ~76MB + 嵌入式 Python + 离线 wheel，仅本地/构建机持有；
-# spec 不进 datas，tauri resources 随安装包分发，运行时缺失友好降级。
+# PPT Master runtime：2026-09-03 起不再内置（已移出 tauri bundle.resources，PPT 技能
+# 改由用户经 /skills/import 自行上传）。/vendor/ppt-master/ 与 /vendor/python/ 保留
+# 忽略项，仅为防止旧构建/旧拉取遗留的目录被误提交。
 # =========================
 /vendor/ppt-master/
 /vendor/python/
+
+# =========================
+# bge-reranker ONNX 模型（量化版 ~266MB）：由 model/download_bge_reranker_onnx.ps1
+# 在开发/打包机拉取，eaide-agent.spec datas 打进安装包（同 officecli 模式）。
+# 不入 git（体积大且超 GitHub 100MB 单文件限制）；未下载时 reranker 静默 no-op。
+# =========================
+/model/bge-reranker-base-onnx/
 
 # =========================
 # Tauri generated

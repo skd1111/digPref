@@ -34,9 +34,10 @@ vi.mock("@tauri-apps/api/core", () => ({
     if (cmd === "read_text_file") return responder.readFile(args);
     return {};
   },
+  convertFileSrc: (p: string) => `http://asset.localhost/${encodeURIComponent(p)}`,
 }));
 
-import { useOfficePreviewStore } from "@/store/officePreviewStore";
+import { useOfficePreviewStore, previewLocalFile } from "@/store/officePreviewStore";
 import { OfficePreviewPanel } from "@/components/office/OfficePreviewPanel";
 
 function resetStore() {
@@ -50,6 +51,7 @@ function resetStore() {
     sessionId: null,
     html: null,
     imageBase64: null,
+    pdfUrl: null,
     page: 1,
   });
   invokeCalls.length = 0;
@@ -153,6 +155,62 @@ describe("officePreviewStore", () => {
     } finally {
       responder.readFile = original;
     }
+  });
+});
+
+describe("previewLocalFile 分流", () => {
+  it("pdf → WebView 内嵌（openPdf 设 asset URL）", async () => {
+    await act(async () => {
+      await previewLocalFile("C:/data/knowledge/files/x.pdf");
+    });
+    const s = useOfficePreviewStore.getState();
+    expect(s.source).toBe("local-pdf");
+    expect(s.mode).toBe("pdf");
+    expect(s.pdfUrl).toContain("asset.localhost");
+    expect(s.pdfUrl).toContain(encodeURIComponent("C:/data/knowledge/files/x.pdf"));
+  });
+
+  it("md → openText markdown（直读文本渲染）", async () => {
+    await act(async () => {
+      await previewLocalFile("C:/kb/制度.md");
+    });
+    const s = useOfficePreviewStore.getState();
+    expect(s.source).toBe("local-text");
+    expect(s.mode).toBe("markdown");
+    expect(s.html).toContain("本地演示稿");
+    const call = invokeCalls.find((c) => c.cmd === "read_text_file");
+    expect(call?.args).toMatchObject({ path: "C:/kb/制度.md" });
+  });
+
+  it("docx → openPreview（OfficeCLI 渲染）", async () => {
+    await act(async () => {
+      await previewLocalFile("C:/报告.docx");
+    });
+    expect(useOfficePreviewStore.getState().source).toBe("office");
+    expect(invokeCalls.some((c) => c.cmd === "office_preview_render")).toBe(true);
+  });
+
+  it("txt → openText text（等宽纯文本）", async () => {
+    await act(async () => {
+      await previewLocalFile("C:/notes.txt");
+    });
+    const s = useOfficePreviewStore.getState();
+    expect(s.source).toBe("local-text");
+    expect(s.mode).toBe("text");
+  });
+
+  it("doc → 系统默认程序打开（无内置渲染器兜底）", async () => {
+    await act(async () => {
+      await previewLocalFile("C:/legacy.doc");
+    });
+    expect(invokeCalls.some((c) => c.cmd === "open_with_default")).toBe(true);
+  });
+
+  it("空路径忽略", async () => {
+    await act(async () => {
+      await previewLocalFile("   ");
+    });
+    expect(useOfficePreviewStore.getState().open).toBe(false);
   });
 });
 

@@ -84,7 +84,7 @@ export function ScoringRadar({
                 className="w-16 shrink-0 text-right font-mono"
                 style={{ color: '#1f1f1f' }}
               >
-                {clampedScore.toFixed(2)} · w={clampedWeight.toFixed(2)}
+                {clampedScore.toFixed(2)} · 权重={clampedWeight.toFixed(2)}
               </div>
             </div>
           );
@@ -92,7 +92,6 @@ export function ScoringRadar({
       </div>
       <p className="text-2xs mt-2" style={{ color: '#616161' }}>
         蓝线 = 当前引擎权重；bar 颜色 = 得分（绿 ≥ 0.66 / 黄 0.33-0.65 / 红 &lt; 0.33）。
-        Phase 4 上线后这里会显示每个 backend 的真实分数。
       </p>
     </div>
   );

@@ -63,7 +63,7 @@ export function CommentEditor({
           <span>⚠</span>
           <div>
             <strong>检测到可能的 PII（卡号 / 身份证 / 手机号）</strong>。
-            真实生产中 <strong>脱敏由后端 Phase 4 redact.py 处理</strong>，前端 MVP 仅展示。
+            真实生产中 <strong>脱敏由后端 redact.py 处理</strong>，前端仅展示。
             最终落库前内容会经过：PII 脱敏 → SHA-256 hash → AES-256-GCM 加密。
           </div>
         </div>

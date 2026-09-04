@@ -69,11 +69,54 @@ def test_parse_docx(tmp_path):
     assert "商业秘密" in doc.full_text
 
 
-def test_empty_pdf_raises(tmp_path):
+def test_empty_pdf_raises(tmp_path, monkeypatch):
+    from agent.config import settings
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas
 
+    # 关掉扫描件 OCR 回退，隔离验证“无文本层且无 OCR → 报错”（不依赖真实 OCR）
+    monkeypatch.setattr(settings, "doc_review_pdf_ocr_enabled", False)
     p = tmp_path / "empty.pdf"
+    c = canvas.Canvas(str(p), pagesize=A4)
+    c.showPage()
+    c.save()
+    with pytest.raises(DocParseError, match="未提取到文本"):
+        parse_document(p)
+
+
+def test_scanned_pdf_ocr_fallback(tmp_path, monkeypatch):
+    """无文本层 PDF → 触发 OCR 回退；用 fake OCR 验证接线（不跑真实推理）。"""
+    import agent.image_processing.ocr as ocr_mod
+    from agent.config import settings
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    monkeypatch.setattr(settings, "doc_review_pdf_ocr_enabled", True)
+    monkeypatch.setattr(ocr_mod, "rapidocr_available", lambda: True)
+    monkeypatch.setattr(
+        ocr_mod,
+        "ocr_pdf_to_pages",
+        lambda path, *, scale, max_pages: [(1, ["扫描件识别出的合同金额壹佰万"])],
+    )
+    p = tmp_path / "scan.pdf"
+    c = canvas.Canvas(str(p), pagesize=A4)
+    c.showPage()  # 空白页，无文本层
+    c.save()
+    doc = parse_document(p)
+    assert doc.format.value == "pdf"
+    assert "扫描件识别出的合同金额壹佰万" in doc.full_text
+
+
+def test_scanned_pdf_ocr_unavailable_raises(tmp_path, monkeypatch):
+    """开关开但 RapidOCR 不可用 → 静默退化，仍报未提取到文本（不报错崩溃）。"""
+    import agent.image_processing.ocr as ocr_mod
+    from agent.config import settings
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    monkeypatch.setattr(settings, "doc_review_pdf_ocr_enabled", True)
+    monkeypatch.setattr(ocr_mod, "rapidocr_available", lambda: False)
+    p = tmp_path / "scan2.pdf"
     c = canvas.Canvas(str(p), pagesize=A4)
     c.showPage()
     c.save()

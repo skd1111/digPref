@@ -75,17 +75,13 @@ export function RouterDashboard(): JSX.Element {
       <h2 className="text-ui font-semibold" style={{ color: '#1f1f1f' }}>
         🧭 路由仪表盘
       </h2>
-      <p className="text-2xs" style={{ color: '#616161' }}>
-        V2.0: <span style={{ color: '#059669' }}>5 秒轮询拉真 metrics</span>（circuits / budget / backends），
-        评分权重可保存到 router.db，熔断器手动重置直连后端。
-      </p>
 
       {metricsError && (
         <div
           className="rounded px-2 py-1 text-2xs"
           style={{ backgroundColor: '#3c1e1e', color: '#cd3131' }}
         >
-          ⚠ metrics 拉取失败 · {metricsError}（{refreshing ? '重试中' : '已停止'}）
+          ⚠ 指标拉取失败 · {metricsError}（{refreshing ? '重试中' : '已停止'}）
         </div>
       )}
 
@@ -98,7 +94,7 @@ export function RouterDashboard(): JSX.Element {
           ⚙️ 执行模式
         </h3>
         <p className="mb-3 text-2xs" style={{ color: '#616161' }}>
-          Auto = 模型推荐直接执行；Manual = 弹 VSCode 风格选项让用户确认
+          自动 = 按路由结果直接执行；手动 = 弹出候选项让用户确认
         </p>
         <div className="mb-3 flex gap-2">
           {(['auto', 'manual'] as const).map((m) => {
@@ -114,13 +110,13 @@ export function RouterDashboard(): JSX.Element {
                   color: active ? '#ffffff' : '#1f1f1f',
                 }}
               >
-                {m === 'auto' ? '▶ Auto' : '⏸ Manual'}
+                {m === 'auto' ? '▶ 自动' : '⏸ 手动'}
               </button>
             );
           })}
         </div>
 
-        {/* Phase 2C V3：manual 模式确认面板（5s 刷新路由决策） */}
+        {/* 手动模式确认面板（5s 刷新路由决策） */}
         <ManualConfirmationPanel />
 
         <div
@@ -132,7 +128,7 @@ export function RouterDashboard(): JSX.Element {
               ⚡ Spark 模式 {sparkEnabled ? '开' : '关'}
             </div>
             <div className="text-2xs" style={{ color: '#616161' }}>
-              reasoning 模型先打草稿 → execution 模型继续完善（V2.0 后端真接 + placeholder 输出）
+              推理模型先打草稿 → 复杂模型继续完善
             </div>
           </div>
           <label className="flex items-center gap-2">

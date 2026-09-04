@@ -105,51 +105,57 @@ async def test_delete_cascades(tmp_path, client):
     assert (await client.get(f"/doc-review/documents/{doc_id}")).status_code == 404
 
 
-async def test_retrieval_auto_activates_risk_types(tmp_path, client, monkeypatch):
-    """类型自动判定：分类器只勾 legal，但文档命中财税规则库 →
-    检索自动补入 compliance/financial 维度，无需人工指定文档类型。"""
-    from agent.config import settings
-    from agent.doc_review.fiscal_rules import _CACHE
+async def test_kb_refs_come_from_uploaded_rag(monkeypatch):
+    """依据改走上传 RAG：_attach_kb_refs 用混合检索命中构建 kb_refs（含可预览 file_path）。"""
+    from typing import ClassVar
 
-    fiscal = tmp_path / "kb" / "fiscal-tax"
-    (fiscal / "regulations").mkdir(parents=True)
-    (fiscal / "regulations" / "增值税法-摘要.md").write_text(
-        "# 增值税法-摘要\n\n## 进项抵扣\n餐饮服务购进的进项税额不得抵扣。\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(settings, "doc_review_fiscal_dir", str(fiscal))
-    _CACHE.clear()
+    from agent.doc_review import api as dr_api
 
-    p = tmp_path / "报销制度.txt"
-    p.write_text("员工用餐饮服务发票抵扣进项税额，财务予以报销。", encoding="utf-8")
-    doc_id = (await client.post("/doc-review/documents", json={"file_path": str(p)})).json()[
-        "doc_id"
+    class _FakeChunk:
+        doc_id = "kb1"
+        content = "父块原文"
+        metadata: ClassVar[dict] = {
+            "child_content": "子块：本公司享有最终解释权属违规",
+            "heading_path": "第一章 > 格式条款",
+            "matched": ["解释权"],
+        }
+
+    class _FakeResult:
+        chunk = _FakeChunk()
+        doc_title = "合规制度.pdf"
+        citation = "合规制度.pdf"
+
+    class _FakeCtx:
+        results: ClassVar[list] = [_FakeResult()]
+
+    class _FakeRetriever:
+        async def retrieve(self, query, top_k=3):
+            return _FakeCtx()
+
+    class _FakeKbStorage:
+        def resolve_file_path(self, doc_id):
+            return "/data/knowledge/files/kb1_合规制度.pdf"
+
+    monkeypatch.setattr("agent.knowledge.retriever.get_default_retriever", lambda: _FakeRetriever())
+    monkeypatch.setattr("agent.knowledge.storage.get_default_storage", lambda: _FakeKbStorage())
+    monkeypatch.setattr(dr_api.settings, "rag_enabled", True)
+
+    findings = [
+        {"title": "单方最终解释权", "description": "d", "evidence_text": "本公司享有最终解释权"}
     ]
+    out = await dr_api._attach_kb_refs(findings)
+    assert out[0]["kb_refs"]
+    ref = out[0]["kb_refs"][0]
+    assert ref["source"] == "合规制度.pdf"
+    assert ref["file_path"] == "/data/knowledge/files/kb1_合规制度.pdf"
+    assert ref["heading"] == "第一章 > 格式条款"
+    assert "解释权" in ref["matched_terms"]
 
-    async def fake_generate_review(self, **kwargs):
-        kind = kwargs["kind"]
-        if kind == "doc_classify":
-            # 模拟小模型分类器漏勾财税相关维度，只给 legal
-            return json.dumps({"doc_category": "internal_policy", "risk_types": ["legal"]})
-        return json.dumps({"findings": []})
 
-    monkeypatch.setattr("agent.llm.router.LMRouter.generate_review", fake_generate_review)
-    resp = await client.post(f"/doc-review/documents/{doc_id}/analyze")
-    assert resp.status_code == 200
+async def test_kb_refs_empty_when_rag_disabled(monkeypatch):
+    """未启用 RAG → kb_refs 为空（不调检索）。"""
+    from agent.doc_review import api as dr_api
 
-    import asyncio
-
-    body = {}
-    for _ in range(200):
-        body = (await client.get(f"/doc-review/documents/{doc_id}/status")).json()
-        if body["status"] in ("done", "failed"):
-            break
-        await asyncio.sleep(0.05)
-    assert body["status"] == "done"
-
-    detail = (await client.get(f"/doc-review/documents/{doc_id}")).json()
-    # legal（分类器）+ compliance/financial（检索自动补入）
-    assert "legal" in detail["risk_types"]
-    assert "compliance" in detail["risk_types"]
-    assert "financial" in detail["risk_types"]
-    _CACHE.clear()
+    monkeypatch.setattr(dr_api.settings, "rag_enabled", False)
+    out = await dr_api._attach_kb_refs([{"title": "t", "description": "", "evidence_text": ""}])
+    assert out[0]["kb_refs"] == []

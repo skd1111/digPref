@@ -331,15 +331,35 @@ async def test_ask_expert(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ask_expert_with_knowledge_sources(client, monkeypatch, tmp_path):
-    """找制度变问助手：知识库命中时回答附制度出处（防黑盒）。"""
-    kb = tmp_path / "kb"
-    kb.mkdir()
-    (kb / "01-合规风险.md").write_text(
-        "# 合规风险清单\n\n## 反洗钱\n客户风险等级评定必须留痕，高风险客户需强化尽调。\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("EAIDE_KB_DIR", str(kb))
+async def test_ask_expert_with_knowledge_sources(client, monkeypatch):
+    """找制度变问助手：改走上传 RAG 库，命中时回答附制度出处（防黑盒）。"""
+    from typing import ClassVar
+
+    import agent.knowledge.retriever as retr
+    from agent.config import settings
+
+    class _FakeChunk:
+        doc_id = "kb1"
+        content = "父块原文"
+        metadata: ClassVar[dict] = {
+            "child_content": "客户风险等级评定必须留痕，高风险客户需强化尽调。",
+            "heading_path": "反洗钱",
+        }
+
+    class _FakeResult:
+        chunk = _FakeChunk()
+        doc_title = "合规风险清单"
+        citation = "合规风险清单"
+
+    class _FakeCtx:
+        results: ClassVar[list] = [_FakeResult()]
+
+    class _FakeRetriever:
+        async def retrieve(self, query, top_k=3):
+            return _FakeCtx()
+
+    monkeypatch.setattr(settings, "rag_enabled", True)
+    monkeypatch.setattr(retr, "get_default_retriever", lambda: _FakeRetriever())
     _mock_llm(monkeypatch, "需按制度对客户进行风险等级评定并留痕。")
     r = client.post(
         "/ops/case/ask",
@@ -353,8 +373,9 @@ async def test_ask_expert_with_knowledge_sources(client, monkeypatch, tmp_path):
     assert r.status_code == 200, r.text
     answer = r.json()["qa"]["answer"]
     assert "制度出处" in answer
+    # 出处来自上传 RAG 文档标题（不再是内置 knowledge-base 文件名）
     assert "合规风险清单" in answer
-    assert "01-合规风险.md" in answer
+    assert "knowledge-base" not in answer
 
 
 @pytest.mark.asyncio

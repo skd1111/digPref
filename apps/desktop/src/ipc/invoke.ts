@@ -26,6 +26,7 @@ const ARGS_WRAPPED_COMMANDS = new Set([
   "audit_decide",
   "doc_review",
   "doc_review_export_word",
+  "knowledge",
 ]);
 
 // ---- Token 用量（与 Python llm/usage_api.py 的 GET /llm/token-usage 对齐）----
@@ -60,6 +61,61 @@ export async function invoke<T = unknown>(
 ): Promise<T> {
   const payload = ARGS_WRAPPED_COMMANDS.has(cmd) ? { args: args ?? {} } : args;
   return tauriInvoke<T>(cmd, payload);
+}
+
+// ---- 本地知识库混合检索（审核专家上传参考资料 + 设置页 RAG 参数）----
+// 与 Agent /knowledge/v1/* 对齐（字段镜像 Python knowledge/api.py 的 V1 响应模型）
+export interface KbDocSummary {
+  id: string;
+  title: string;
+  file_name: string;
+  source_type: string;
+  category: string;
+  /** pending | indexing | ready | failed | stale */
+  status: string;
+  error?: string | null;
+  chunk_count: number;
+  size_bytes: number;
+  created_at: number;
+  updated_at: number;
+  /** 已复制入库的源文件绝对路径（点击预览用）；未复制/丢失时为空串 */
+  file_path: string;
+}
+
+export interface KbStatus {
+  storage_available: boolean;
+  embedding_available: boolean;
+  reranker_available: boolean;
+  stats: { total_docs: number; total_chunks: number; by_source_type: Record<string, number> };
+  db_path: string;
+  embed_model: string;
+  dim: number;
+  needs_reindex: boolean;
+  reindexing: boolean;
+  reindex_progress: number;
+}
+
+export interface KbConfigResponse {
+  config: Record<string, number | boolean>;
+  editable: string[];
+  /** 索引期参数键：改了需重建索引才对已入库数据生效 */
+  index_time: string[];
+  db_path: string;
+  kb_dir: string;
+}
+
+export interface KbSearchResult {
+  chunk_id: string;
+  doc_id: string;
+  doc_title: string;
+  source_type: string;
+  similarity: number;
+  citation: string;
+  content_preview: string;
+  source: string;
+  page_no: number;
+  heading_path: string;
+  matched: string[];
 }
 
 // ---------- Typed command surface ----------
@@ -528,6 +584,48 @@ export const ipc = {
       mode,
       save_path,
     }),
+
+  // 本地知识库混合检索（审核专家上传参考资料 + 设置页 RAG 参数）
+  /** 上传参考资料入库（后台分块+向量化，轮询 kbList 看状态） */
+  kbUpload: (file_path: string, category?: string) =>
+    invoke<{ doc_id: string; status: string }>("knowledge", {
+      _op: "kb_upload",
+      file_path,
+      category: category ?? "",
+    }),
+  kbList: () => invoke<{ total: number; docs: KbDocSummary[] }>("knowledge", { _op: "kb_list" }),
+  kbDelete: (doc_id: string) =>
+    invoke<{ deleted: boolean }>("knowledge", { _op: "kb_delete", doc_id }),
+  kbSearch: (query: string, top_k?: number, category?: string) =>
+    invoke<{
+      query: string;
+      results: KbSearchResult[];
+      formatted_prompt: string;
+      elapsed_ms: number;
+      backend: string;
+    }>("knowledge", {
+      _op: "kb_search",
+      query,
+      top_k: top_k ?? 5,
+      category: category ?? "",
+    }),
+  kbReindex: () =>
+    invoke<{ ok: boolean; started?: boolean; already?: boolean; progress?: number }>(
+      "knowledge",
+      { _op: "kb_reindex" },
+    ),
+  kbStatus: () => invoke<KbStatus>("knowledge", { _op: "kb_status" }),
+  kbConfigGet: () => invoke<KbConfigResponse>("knowledge", { _op: "kb_config_get" }),
+  /** 保存 RAG 参数（落 kb.db + 热应用：查询期参数即生效；索引期参数回传 needs_reindex 供提示重建） */
+  kbConfigSet: (config: Record<string, number | boolean>) =>
+    invoke<{
+      ok: boolean;
+      restart_required: boolean;
+      changed?: string[];
+      hot_applied?: string[];
+      needs_reindex?: string[];
+      config: Record<string, number | boolean>;
+    }>("knowledge", { _op: "kb_config_set", config }),
 
   // Phase 2F V0: 代码导航
   codeNavJump: (body: {

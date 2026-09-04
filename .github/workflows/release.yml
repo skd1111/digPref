@@ -40,6 +40,13 @@ jobs:
       - name: Install uv
         run: pip install uv
       - run: uv sync --all-packages
+      # bge-reranker ONNX 模型（~266MB，不入 git）：构建 agent exe 前 best-effort 拉取，
+      # 供 spec datas 打进 exe；拉取失败不阻断（reranker 静默 no-op，混合检索保持 RRF 序）。
+      # 注：bge-small 向量模型（~23MB）已入 git，检出即有，无需拉取。
+      - name: Fetch bge-reranker model (best-effort)
+        shell: bash
+        run: |
+          pwsh -File model/download_bge_reranker_onnx.ps1 || echo "[release] bge-reranker fetch failed; agent exe will no-op rerank"
       - name: PyInstaller build
         run: uv run pyinstaller eaide-agent.spec --noconfirm --distpath agent-dist --workpath agent-build
       - name: chmod +x
@@ -127,19 +134,8 @@ jobs:
             echo "placeholder (eaide-executor built separately via cargo build --bin eaide-executor)" > vendor/executor/README.txt
           fi
 
-      # V9.7 PPT Master 运行时（技能包 + 嵌入式 Python + 离线 wheel）：best-effort 拉取；
-      # 失败退占位，运行时种子 prompt 引导友好提示（仅 Windows 目标真实生效，macOS 退占位）
-      - name: Fetch PPT Master runtime (best-effort)
-        shell: bash
-        run: |
-          mkdir -p vendor/ppt-master vendor/python
-          pwsh -File infra/scripts/fetch-ppt-master.ps1 || echo "[release] ppt-master runtime fetch failed, fallback to placeholder"
-          if ! ls vendor/ppt-master/SKILL.md >/dev/null 2>&1; then
-            echo "placeholder (ppt-master skill fetched separately via infra/scripts/fetch-ppt-master.ps1)" > vendor/ppt-master/README.txt
-          fi
-          if ! ls vendor/python/python* >/dev/null 2>&1; then
-            echo "placeholder (embedded python fetched separately via infra/scripts/fetch-ppt-master.ps1)" > vendor/python/README.txt
-          fi
+      # PPT Master 运行时：2026-09-03 起不再内置（vendor/ppt-master 已移出 bundle.resources，
+      # PPT 技能改由用户经 /skills/import 自行上传），故不再拉取。
 
       - run: pnpm install --frozen-lockfile
 

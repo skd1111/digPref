@@ -31,8 +31,9 @@ import { WorkspaceSettingsPanel } from './settings/WorkspaceSettingsPanel';
 import { McpSettingsPanel } from './settings/McpSettingsPanel';
 import { AdvancedSettingsPanel } from './settings/AdvancedSettingsPanel';
 import { EvolutionPanel } from './settings/EvolutionPanel';
+import { KnowledgeRagPanel } from './settings/KnowledgeRagPanel';
 
-type SectionId = 'envs' | 'models' | 'gen-limits' | 'dspark' | 'secrets' | 'terminal' | 'about' | 'skills' | 'expert-teams' | 'router' | 'codenav' | 'toolchain' | 'workspace' | 'advanced' | 'mcp' | 'evolution';
+type SectionId = 'envs' | 'models' | 'gen-limits' | 'dspark' | 'secrets' | 'terminal' | 'about' | 'skills' | 'expert-teams' | 'router' | 'codenav' | 'toolchain' | 'workspace' | 'advanced' | 'mcp' | 'evolution' | 'knowledge';
 
 const SECTIONS: { id: SectionId; label: string; icon: string }[] = [
   { id: 'envs', label: 'Environments', icon: '🌍' },
@@ -49,11 +50,12 @@ const SECTIONS: { id: SectionId; label: string; icon: string }[] = [
   { id: 'expert-teams', label: '专家团', icon: '👥' },
   { id: 'router', label: '路由仪表盘', icon: '🧭' },
   { id: 'codenav', label: '代码导航', icon: '🔍' },
+  { id: 'knowledge', label: '知识库/RAG', icon: '📚' },  // 审核专家 + 聊天共用的本地混合检索
   { id: 'toolchain', label: '工具链与编译', icon: '🛠' },  // Phase 18；2026-08-28 并入原「编译配置」
   { id: 'advanced', label: '高级设置', icon: '⚙' },  // 推理模式 + 会话自主性（2026-08-05）
 ];
 
-const KNOWN_SEGS: SectionId[] = ['envs', 'models', 'gen-limits', 'dspark', 'secrets', 'terminal', 'about', 'skills', 'expert-teams', 'router', 'codenav', 'toolchain', 'workspace', 'advanced', 'mcp', 'evolution'];
+const KNOWN_SEGS: SectionId[] = ['envs', 'models', 'gen-limits', 'dspark', 'secrets', 'terminal', 'about', 'skills', 'expert-teams', 'router', 'codenav', 'toolchain', 'workspace', 'advanced', 'mcp', 'evolution', 'knowledge'];
 
 export function SettingsView(): JSX.Element {
   const location = useLocation();
@@ -168,6 +170,7 @@ export function SettingsView(): JSX.Element {
           {active === 'toolchain' && <ToolchainSettingsPanel />}
           {active === 'workspace' && <WorkspaceSettingsPanel />}
           {active === 'advanced' && <AdvancedSettingsPanel />}
+          {active === 'knowledge' && <KnowledgeRagPanel />}
         </main>
       </div>
     </div>

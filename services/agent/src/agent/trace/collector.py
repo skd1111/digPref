@@ -38,7 +38,9 @@ _MAX_TEXT_CHARS = 4000
 
 # 节点中文名（时间线展示用）
 NODE_LABELS: dict[str, str] = {
+    "mode_router": "模式路由",
     "intent": "意图识别",
+    "skill_route": "技能路由",
     "planner": "任务规划",
     "decompose": "任务分解决策",
     "tool_orchestrator": "动态工具调用",

@@ -66,7 +66,6 @@ class TestBundledSeedsValidity:
         expected = {
             "office_doc_writer",
             "office_excel_analyst",
-            "office_pptx_designer",
             "visual_deck_designer",
             "ui_frontend_designer",
         }
