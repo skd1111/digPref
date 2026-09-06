@@ -3,7 +3,7 @@
  *
  * 覆盖：
  *   1. builtin_tool_started → 该 run 阶段切「工具调用中：某动作」；
- *      builtin_tool_done → 回「等模型返回」，成功工具回执「做完了：某动作」；
+ *      builtin_tool_done → 回「thinking」，成功工具回执「做完了：某动作」；
  *   2. done 按 run 清归属（其他并发 run 不受影响）；
  *   3. 工具调用块翻牌（BUGFIX #157：不再永远「进行中」转圈）；
  *   4. 并发两个 run 各归各的页签，事件不串台。
@@ -85,7 +85,7 @@ function activeTabMessages() {
 }
 
 describe('执行阶段细化（按 run 隔离）', () => {
-  it('工具开始 → 「工具调用中：中文动作」；工具完成 → 回「等模型返回」', async () => {
+  it('工具开始 → 「工具调用中：中文动作」；工具完成 → 回「thinking」', async () => {
     await mount();
     const tabId = activeTabId();
     useChatStore.getState().startRun('run-1', tabId);

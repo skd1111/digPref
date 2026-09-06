@@ -567,6 +567,12 @@ export const ipc = {
       error?: string;
       /** 分析进度 0..1（排队/历史无记录时为 null） */
       progress?: number | null;
+      /** 分析耗时明细（ms）：知识库召回 / 重排 / 模型分析；Agent 重启后为 null */
+      timings?: {
+        retrieval_ms: number;
+        rerank_ms: number;
+        model_ms: number;
+      } | null;
     }>("doc_review", {
       _op: "status",
       doc_id,

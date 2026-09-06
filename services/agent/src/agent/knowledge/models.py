@@ -131,6 +131,7 @@ class RAGContext:
     formatted_prompt: str = ""
     elapsed_ms: int = 0
     backend: str = "local"
+    rerank_ms: int = 0  # reranker 耗时（ms），含 ONNX 推理；未启用/不可用 = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -139,6 +140,7 @@ class RAGContext:
             "formatted_prompt": self.formatted_prompt,
             "elapsed_ms": self.elapsed_ms,
             "backend": self.backend,
+            "rerank_ms": self.rerank_ms,
         }
 
 

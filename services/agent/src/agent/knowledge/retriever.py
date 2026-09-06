@@ -147,12 +147,14 @@ class RAGRetriever:
             )
         formatted = _citation_prompt(hits, max_chars=self.max_prompt_chars)
         elapsed = int((time.perf_counter() - t0) * 1000)
+        rerank_ms = getattr(self._hybrid, "last_rerank_ms", 0)
         return RAGContext(
             query=query,
             results=results,
             formatted_prompt=formatted,
             elapsed_ms=elapsed,
             backend="hybrid",
+            rerank_ms=rerank_ms,
         )
 
     def format_for_llm(self, results: Any) -> str:

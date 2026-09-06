@@ -24,12 +24,37 @@ interface Props {
   message: ChatMessageT;
   /** chat 区横向宽度的 2/5（px）；未提供时不做宽度限制 */
   maxWidth?: number | undefined;
-  /** 流式输出中（仅最后一条 assistant 消息为 true）→ 末尾显示闪烁光标 */
+  /** 流式输出中（仅最后一条 assistant 消息为 true）→ 打字机逐字揭示 + 末尾闪烁光标 */
   streaming?: boolean | undefined;
 }
 
 /** 用户消息折叠时的最大行数 */
 const COLLAPSE_LINES = 10;
+
+/**
+ * 打字机流式输出（2026-09-06）：active 期间按自适应步长逐字揭示
+ * （每 24ms 追上剩余长度的 1/8，delta 大块到达时自动加速，观感平滑）；
+ * 停用后继续吐字直到追平再定格全文，避免流结束时文字戛然而止；
+ * 从未 active 的消息（历史回填 / 非流式更新）直接全文，不补动画。
+ */
+function useTypewriter(text: string, active: boolean): string {
+  const [len, setLen] = useState(active ? 0 : text.length);
+  const startedRef = useRef(active);
+  useEffect(() => {
+    if (active) startedRef.current = true;
+    if (!startedRef.current || len >= text.length) {
+      setLen(text.length);
+      return;
+    }
+    const step = Math.max(1, Math.floor((text.length - len) / 8));
+    const timer = window.setTimeout(
+      () => setLen((v) => Math.min(text.length, v + step)),
+      24,
+    );
+    return () => window.clearTimeout(timer);
+  }, [text, len, active]);
+  return startedRef.current ? text.slice(0, len) : text;
+}
 
 function useContentOverflow(
   ref: { current: HTMLDivElement | null },
@@ -195,6 +220,9 @@ function AssistantBubble({
   // 选项式追问（2026-08-05）：clarify 围栏块由输入框上方卡片渲染，
   // 正文不展示原始 JSON
   const displayContent = stripClarifyBlock(message.content);
+  // 打字机流式输出（2026-09-06）：流式期间逐字揭示，结束后追平定格
+  const shown = useTypewriter(displayContent, !!streaming);
+  const revealing = shown.length < displayContent.length;
 
   return (
     <div className="flex">
@@ -205,15 +233,15 @@ function AssistantBubble({
           style={{ ...widthStyle, color: '#202124' }}
         >
           {/* 助手回复走轻量 Markdown 渲染（标题/列表/代码/表格），样式见 globals.css .md-body */}
-          <Markdown text={displayContent} />
-          {/* 流式输出中：末尾闪烁光标（打字机感，2026-08-07） */}
-          {streaming && <span className="stream-cursor" aria-hidden="true" />}
+          <Markdown text={shown} />
+          {/* 打字机光标（2026-08-07）：流式与追平吐字期间全程闪烁 */}
+          {(streaming || revealing) && <span className="stream-cursor" aria-hidden="true" />}
           {message.code && <CodeBlock code={message.code} language={message.codeLang ?? 'sql'} />}
           {message.pendingApproval && <ApprovalCard approval={message.pendingApproval} />}
         </div>
-        {!streaming && <CopyButton text={displayContent} />}
+        {!streaming && !revealing && <CopyButton text={displayContent} />}
         {/* Phase 19 V0 自进化：终答 👍/👎 反馈（非流式且有内容才挂载） */}
-        {!streaming && displayContent.trim() !== '' && (
+        {!streaming && !revealing && displayContent.trim() !== '' && (
           <FeedbackButtons messageId={message.id} sessionId={message.runId ?? ''} />
         )}
       </div>

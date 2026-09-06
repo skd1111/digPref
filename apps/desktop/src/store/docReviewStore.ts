@@ -24,6 +24,12 @@ export interface AnalysisSummary {
   high: number;
   medium: number;
   low: number;
+  /** 分析耗时明细（ms）：知识库召回 / 重排 / 模型分析；Agent 重启后为 null */
+  timings?: {
+    retrieval_ms: number;
+    rerank_ms: number;
+    model_ms: number;
+  } | null;
 }
 
 interface DocReviewState {
@@ -248,6 +254,7 @@ export const useDocReviewStore = create<DocReviewState>((set, get) => ({
           high: list.filter((f) => f.risk_level === "high").length,
           medium: list.filter((f) => f.risk_level === "medium").length,
           low: list.filter((f) => f.risk_level === "low").length,
+          timings: st.timings ?? null,
         };
         // 同步刷新列表内该文档的状态/风险等级：否则列表还是旧快照，
         // "分析"按钮不会变成"重新分析"，风险等级徽章也不显示

@@ -96,6 +96,7 @@ class HybridRetriever:
         self._embedding = embedding
         self._reranker = reranker
         self._llm: Any | None = None
+        self.last_rerank_ms: int = 0  # 最近一次 search() 的 reranker 耗时（ms）
 
     # ---- 依赖懒解析 ---------------------------------------------------------
 
@@ -276,6 +277,7 @@ class HybridRetriever:
         # 先取父块（rerank 用父块文本，信息更全）
         parent_map = self._load_parents(chunks) if expand_parent else {}
         score_by_seq = dict(candidates)
+        t_rerank = time.perf_counter()
         if settings.rag_rerank_enabled and cand_seqs:
             reranker = self._get_reranker()
             if reranker is not None:
@@ -296,6 +298,7 @@ class HybridRetriever:
                 if rscores and len(rscores) == len(cand_seqs):
                     score_by_seq = dict(zip(cand_seqs, rscores))
                     cand_seqs = sorted(cand_seqs, key=lambda s: score_by_seq[s], reverse=True)
+        rerank_elapsed = time.perf_counter() - t_rerank
 
         # --- 组装 Top-K ---
         qtokens = set(tk.tokenize(query))
@@ -336,7 +339,7 @@ class HybridRetriever:
                 )
             )
         logger.info(
-            "hybrid_search query_chars=%d bm25=%d vec=%d fused=%d rerank=%s hits=%d elapsed=%.1fms",
+            "hybrid_search query_chars=%d bm25=%d vec=%d fused=%d rerank=%s hits=%d elapsed=%.1fms rerank=%.1fms",
             len(query),
             len(bm25_rank),
             len(vec_rank),
@@ -344,7 +347,10 @@ class HybridRetriever:
             settings.rag_rerank_enabled,
             len(results),
             (time.perf_counter() - t0) * 1000,
+            rerank_elapsed * 1000,
         )
+        # 把 rerank 耗时挂到返回列表上，供上层 retriever 读取（避免改方法签名）
+        self.last_rerank_ms = int(rerank_elapsed * 1000)
         return results
 
     def _load_parents(self, chunks: dict[int, Any]) -> dict[int, str]:

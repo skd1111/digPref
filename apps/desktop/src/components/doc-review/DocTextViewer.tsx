@@ -91,50 +91,127 @@ function AnalyzingOverlay({
   );
 }
 
-/** 分析完成横幅：总数 + 各危级统计（可关闭） */
-function AnalysisDoneBanner(): JSX.Element | null {
+/** 分析完成弹窗：风险统计 + 耗时明细，用户点「确定」后关闭 */
+function AnalysisDoneDialog(): JSX.Element | null {
   const summary = useDocReviewStore((s) => s.analysisSummary);
   const dismiss = useDocReviewStore((s) => s.dismissAnalysisSummary);
   if (!summary) return null;
+
   const chips: Array<{ label: string; count: number; color: string }> = [
     { label: "严重", count: summary.critical, color: "#b3261e" },
     { label: "高危", count: summary.high, color: "#cd3131" },
     { label: "中危", count: summary.medium, color: "#b25c1a" },
     { label: "低危", count: summary.low, color: "#059669" },
   ];
+  const t = summary.timings;
+  const fmt = (ms: number): string =>
+    ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+
   return (
     <div
-      className="mb-3 flex flex-wrap items-center gap-2 rounded border px-3 py-2"
-      style={{ borderColor: "#c8e6c9", backgroundColor: "#f1f8f1" }}
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ backgroundColor: "rgba(0,0,0,0.35)" }}
+      onClick={dismiss}
+      role="dialog"
+      aria-modal="true"
     >
-      <span className="text-ui font-semibold" style={{ color: "#059669" }}>
-        ✓ 分析完成 · 共 {summary.total} 条风险点
-      </span>
-      {chips
-        .filter((c) => c.count > 0)
-        .map((c) => (
-          <span
-            key={c.label}
-            className="rounded px-1.5 py-0.5 text-2xs font-bold"
-            style={{ backgroundColor: `${c.color}1f`, color: c.color }}
-          >
-            {c.label} {c.count}
-          </span>
-        ))}
-      {summary.total === 0 && (
-        <span className="text-2xs" style={{ color: "#616161" }}>
-          未发现风险
-        </span>
-      )}
-      <button
-        type="button"
-        onClick={dismiss}
-        className="ml-auto rounded px-1.5 text-2xs"
-        style={{ color: "#616161" }}
-        title="关闭"
+      <div
+        className="w-[380px] max-w-[90vw] rounded-lg shadow-2xl"
+        style={{ backgroundColor: "#ffffff" }}
+        onClick={(e) => e.stopPropagation()}
       >
-        ✕
-      </button>
+        {/* 头部 */}
+        <div
+          className="flex items-center gap-2 border-b px-5 py-3"
+          style={{ borderColor: "#e0e0e0" }}
+        >
+          <span className="text-xl" style={{ color: "#059669" }}>
+            ✓
+          </span>
+          <span className="text-ui font-semibold" style={{ color: "#1f1f1f" }}>
+            分析完成 · 共 {summary.total} 条风险点
+          </span>
+        </div>
+
+        {/* 风险统计 */}
+        <div className="flex flex-wrap items-center gap-2 px-5 py-3">
+          {chips
+            .filter((c) => c.count > 0)
+            .map((c) => (
+              <span
+                key={c.label}
+                className="rounded px-2 py-0.5 text-2xs font-bold"
+                style={{ backgroundColor: `${c.color}1f`, color: c.color }}
+              >
+                {c.label} {c.count}
+              </span>
+            ))}
+          {summary.total === 0 && (
+            <span className="text-2xs" style={{ color: "#616161" }}>
+              未发现风险
+            </span>
+          )}
+        </div>
+
+        {/* 耗时明细 */}
+        {t && (
+          <div
+            className="mx-5 mb-4 rounded border px-4 py-3"
+            style={{ borderColor: "#e0e0e0", backgroundColor: "#fafafa" }}
+          >
+            <p
+              className="mb-2 text-2xs font-semibold"
+              style={{ color: "#333333" }}
+            >
+              本次分析耗时
+            </p>
+            <div className="flex flex-col gap-1.5 text-2xs">
+              <div className="flex items-center justify-between">
+                <span style={{ color: "#616161" }}>知识库召回</span>
+                <span
+                  className="font-mono font-semibold"
+                  style={{ color: "#0e639c" }}
+                >
+                  {fmt(t.retrieval_ms)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span style={{ color: "#616161" }}>重排</span>
+                <span
+                  className="font-mono font-semibold"
+                  style={{ color: "#0e639c" }}
+                >
+                  {fmt(t.rerank_ms)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span style={{ color: "#616161" }}>调用模型分析</span>
+                <span
+                  className="font-mono font-semibold"
+                  style={{ color: "#0e639c" }}
+                >
+                  {fmt(t.model_ms)}
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 确定按钮 */}
+        <div
+          className="flex justify-end border-t px-5 py-3"
+          style={{ borderColor: "#e0e0e0" }}
+        >
+          <button
+            type="button"
+            onClick={dismiss}
+            className="rounded px-5 py-1.5 text-ui font-medium text-white"
+            style={{ backgroundColor: "#0e639c", cursor: "pointer" }}
+          >
+            确定
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -235,7 +312,7 @@ export function DocTextViewer(): JSX.Element {
         aria-hidden={analyzing && blurred}
       >
         <AnalysisErrorBanner />
-        <AnalysisDoneBanner />
+        <AnalysisDoneDialog />
         <div className="mb-3 flex flex-wrap gap-2">
           {(["critical", "high", "medium", "low"] as const).map((lv) => (
             <span
@@ -260,7 +337,7 @@ export function DocTextViewer(): JSX.Element {
               return (
                 <p
                   key={block.block_id}
-                  className="mb-3 whitespace-pre-wrap"
+                  className="mb-3 whitespace-pre-line"
                   style={{ lineHeight: 1.8 }}
                 >
                   {segs.map((seg, i) => {

@@ -2,7 +2,7 @@
  * AiStatus —— aicss.dev 风格的 AI 状态组件（2026-08-10，所有模式共享）。
  *
  * 三件套：
- *   - AiThinkingIndicator：思考中（流光文字 + 旋转星芒 orb + 呼吸光晕）
+ *   - AiThinkingIndicator：思考中（弧光 orb + 流光文字 + 数据流均衡器）
  *   - AiSearchIndicator：  联网搜索/检索（查询词 + 旋转地球 → 完成勾，来源可折叠）
  *   - AiTodoList：         任务列表（To-dos 卡片，n/N 进度 + 勾选样式）
  *
@@ -16,7 +16,8 @@ import { useState } from "react";
 // ---------------------------------------------------------------------------
 
 /**
- * 思考中指示器：旋转星芒 + 流光文字 + 三个跳动圆点。
+ * 思考中指示器（2026-09-06 科技感升级）：
+ *   弧光 orb（旋转锥形渐变环 + 脉冲核心 + 轨道粒子）+ 流光文字 + 数据流均衡器能量柱。
  * label 可定制（默认「思考中」，专家审核场景用「审核中」等）。
  */
 export function AiThinkingIndicator({
@@ -35,38 +36,26 @@ export function AiThinkingIndicator({
         </div>
       )}
       <div
-        className="ai-thinking inline-flex items-center gap-2 rounded-full border px-3 py-1.5"
+        className="ai-thinking inline-flex items-center gap-2.5 rounded-full border px-3 py-1.5"
         style={{ borderColor: "#e7e5e4", backgroundColor: "#fafaf9" }}
         aria-label={label}
       >
-        <span className="ai-thinking-orb flex-shrink-0" aria-hidden="true">
-          <svg
-            className="animate-thinking-spark"
-            width="13"
-            height="13"
-            viewBox="0 0 24 24"
-            fill="none"
-          >
-            <path
-              d="M12 2.5l1.9 6.1a1.5 1.5 0 0 0 .95.95l6.1 1.9-6.1 1.9a1.5 1.5 0 0 0-.95.95L12 20.5l-1.9-6.1a1.5 1.5 0 0 0-.95-.95l-6.1-1.9 6.1-1.9a1.5 1.5 0 0 0 .95-.95L12 2.5z"
-              fill="#10a37f"
-              opacity="0.9"
-            />
-          </svg>
+        {/* 弧光 orb：雷达扫描环 + 呼吸核心 + 环绕粒子，三层错速旋转 */}
+        <span className="ai-thinking-orb" aria-hidden="true">
+          <span className="ai-orb-ring" />
+          <span className="ai-orb-core" />
+          <span className="ai-orb-satellite" />
         </span>
-        <span className="animate-thinking-shimmer text-ui font-medium">
+        <span className="animate-thinking-shimmer text-ui font-medium tracking-wide">
           {label}
         </span>
-        <span className="inline-flex items-end gap-1" aria-hidden="true">
-          {[0, 150, 300].map((delay) => (
+        {/* 数据流均衡器：5 根错相伸缩的能量柱 */}
+        <span className="ai-thinking-eq" aria-hidden="true">
+          {[0, 1, 2, 3, 4].map((i) => (
             <span
-              key={delay}
-              className="inline-block h-1.5 w-1.5 animate-bounce rounded-full"
-              style={{
-                backgroundColor: "#10a37f",
-                opacity: 0.65,
-                animationDelay: `${delay}ms`,
-              }}
+              key={i}
+              className="ai-eq-bar"
+              style={{ animationDelay: `${i * 110}ms` }}
             />
           ))}
         </span>

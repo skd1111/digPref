@@ -315,13 +315,14 @@ function Pane({
     if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
   }, [messages]);
 
-  // 最后一条 assistant 消息 id：只有它在 busy 时显示打字机光标
-  const lastAssistantId = (() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === "assistant") return messages[i].id;
-    }
-    return null;
-  })();
+  // 打字机光标归属（2026-09-06 修正）：仅当本页签在跑且消息流末尾就是 assistant
+  // 消息时，光标才挂在它末尾（正在流式输出的那条）；末尾若是用户新提问/执行步骤，
+  // 说明旧回复已完结，光标不再悬在对话中间的旧回复尾巴上
+  // （该阶段的等待反馈由下方 ThinkingIndicator 承担）
+  const streamingId =
+    busy && messages.length > 0 && messages[messages.length - 1].role === "assistant"
+      ? messages[messages.length - 1].id
+      : null;
 
   // 任务进度待办卡迁居左侧「任务计划」面板（2026-08-28，SideBar 头部可切）；
   // 对话区不再渲染悬浮横幅，todo 消息仍留在 store 供左侧面板读取与历史归档。
@@ -442,7 +443,7 @@ function Pane({
                   <ChatMessage
                     message={item.m}
                     maxWidth={chatWidth > 0 ? Math.round(chatWidth * 0.4) : undefined}
-                    streaming={busy && item.m.id === lastAssistantId}
+                    streaming={item.m.id === streamingId}
                   />
                 )}
               </div>
@@ -536,7 +537,7 @@ function Splitter({
  * 避免长时间无反馈显得卡死。
  * 2026-08-26 细化（用户反馈「思考中太宽泛」）：
  *   - 只有发起执行的页签才显示（切到别的页签不再假显思考态）；
- *   - 文案随执行阶段变化：等模型返回 / 工具调用中：某动作。
+ *   - 文案随执行阶段变化：thinking（等模型返回） / 工具调用中：某动作。
  */
 function ThinkingIndicator({
   messages,
@@ -556,7 +557,7 @@ function ThinkingIndicator({
   const last = messages[messages.length - 1];
   // assistant 已经开始输出正文 → 不再重复展示思考态（工具阶段照常展示）
   if (phase !== "tool" && last && last.role === "assistant" && last.content) return null;
-  const label = phase === "tool" && detail ? `工具调用中：${detail}` : "等模型返回";
+  const label = phase === "tool" && detail ? `工具调用中：${detail}` : "thinking";
   return <AiThinkingIndicator label={label} />;
 }
 

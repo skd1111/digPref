@@ -230,7 +230,7 @@ export const useChatStore = create<ChatState>()(
     busyTabIds: [],            // 2026-08-26 并发：正在执行的页签集合（可多个）
     runTabMap: {},             // runId → tabId（活跃 run）
     tabRunIds: {},             // tabId → runId
-    runPhaseByRun: {},         // runId → 执行阶段（等模型返回 / 工具调用中）
+    runPhaseByRun: {},         // runId → 执行阶段（thinking 等模型返回 / 工具调用中）
     changedFilesByRun: {},     // runId → 本轮改动文件累积
     artifactsByRun: {},        // runId → 本轮交付产物累积
     runStartTsByRun: {},       // runId → 开始时间戳（整轮耗时统计）

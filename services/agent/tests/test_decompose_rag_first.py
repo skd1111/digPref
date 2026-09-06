@@ -134,3 +134,129 @@ async def test_min_matched_hits_threshold(monkeypatch):
     st = _state(rag_context=_Ctx([_Result(["对公转账"]), _Result([])]))
     out = await decompose_node(st, _ExplodingLLM())
     assert out["decompose_decision"]["decision"]["mode"] == "TOOL_ONLY"
+
+
+# ---- 追问抑制（2026-09-06）：知识库已命中 = 来源已具备，不得反问用户 ----
+
+
+def _clarify_state(**over) -> dict:
+    """「提取出审核规则」式场景：意图分析判来源缺失要追问，但库里有用户上传的资料。"""
+    st = _state(
+        user_prompt="提取出审核规则",
+        intent_analysis={
+            "intent": "query",
+            "intent_category": "content_generation",
+            "need_tool": True,
+            "need_clarification": True,
+            "clarification_message": "请告知审核规则的来源是哪个？",
+            "confidence": 0.9,
+            "entities": {},
+        },
+    )
+    st.update(over)
+    return st
+
+
+async def test_clarification_suppressed_when_kb_hits(monkeypatch):
+    """need_clarification=true 但知识库已命中 → 据库作答，不把用户上传的文件反问回去。"""
+    monkeypatch.setattr(settings, "rag_first_answer_enabled", True)
+    out = await decompose_node(_clarify_state(), _ExplodingLLM())
+    assert out["decompose_decision"]["decision"]["mode"] == "MAIN_AGENT"
+    assert any(t.get("reason") == "rag_first_answer" for t in out["trace"])
+
+
+async def test_clarification_suppressed_even_low_confidence(monkeypatch):
+    """低置信度分析（交决策器复核档）同样先被 RAG 优先拦截，不进盲决策。"""
+    monkeypatch.setattr(settings, "rag_first_answer_enabled", True)
+    st = _clarify_state(
+        intent_analysis={
+            "intent": "query",
+            "intent_category": "knowledge_qa",
+            "need_tool": True,
+            "need_clarification": True,
+            "confidence": 0.5,
+            "entities": {},
+        }
+    )
+    out = await decompose_node(st, _ExplodingLLM())
+    assert out["decompose_decision"]["decision"]["mode"] == "MAIN_AGENT"
+
+
+async def test_clarification_still_asks_without_kb_hits(monkeypatch):
+    """知识库无命中 → 追问保留，不过度抑制（真缺信息还是要问）。"""
+    monkeypatch.setattr(settings, "rag_first_answer_enabled", True)
+    out = await decompose_node(_clarify_state(rag_context=None), _ExplodingLLM())
+    assert out["decompose_decision"]["decision"]["mode"] == "ASK_USER"
+
+
+# ---- 决策器 LLM 召回注入（2026-09-06）：盲决策是「反问来源」的另一条路 ----
+
+
+class _CapturingLLM:
+    """记录编排决策器入参；accept_rag=False 模拟不支持 rag_context 的旧替身。"""
+
+    def __init__(self, accept_rag: bool = True):
+        self.kwargs: dict | None = None
+        self._accept_rag = accept_rag
+
+    async def decompose(self, **kw):
+        if not self._accept_rag and "rag_context" in kw:
+            raise TypeError("decompose() got an unexpected keyword argument 'rag_context'")
+        self.kwargs = kw
+        return {
+            "decision": {
+                "mode": "MAIN_AGENT",
+                "should_enable_subagent": False,
+                "execution_allowed": True,
+                "user_confirmation_required": False,
+                "confidence": 0.9,
+                "reason": "captured",
+                "clarifying_questions": [],
+                "confirmation_message": None,
+                "refusal_message": None,
+            },
+            "scoring": {},
+            "selected_subagents": [],
+            "tool_calls": [],
+            "plan": [],
+            "fallback": "none",
+        }
+
+
+def _decider_state(**over) -> dict:
+    """低置信度 + 无 rag_context 实例（仅有 addon）→ 必进编排决策器 LLM。"""
+    st = _state(
+        user_prompt="提取出审核规则",
+        rag_context=None,
+        system_prompt_addon="【知识库参考】[1] 审核管理办法 第三条 审核规则如下…",
+        intent_analysis={
+            "intent": "query",
+            "intent_category": "content_generation",
+            "need_tool": True,
+            "need_clarification": False,
+            "confidence": 0.5,
+            "entities": {},
+        },
+    )
+    st.update(over)
+    return st
+
+
+async def test_decider_receives_rag_context(monkeypatch):
+    """召回非空时拼进决策 prompt——决策器不再盲判「来源缺失」。"""
+    monkeypatch.setattr(settings, "rag_first_answer_enabled", True)
+    llm = _CapturingLLM()
+    out = await decompose_node(_decider_state(), llm)
+    assert llm.kwargs is not None
+    assert "审核管理办法" in str(llm.kwargs.get("rag_context") or "")
+    assert out["decompose_decision"]["decision"]["mode"] == "MAIN_AGENT"
+
+
+async def test_decider_double_without_rag_context_kwarg(monkeypatch):
+    """注入替身不接受 rag_context → TypeError 后自动降级旧签名（向后兼容）。"""
+    monkeypatch.setattr(settings, "rag_first_answer_enabled", True)
+    llm = _CapturingLLM(accept_rag=False)
+    out = await decompose_node(_decider_state(), llm)
+    assert llm.kwargs is not None
+    assert "rag_context" not in llm.kwargs
+    assert out["decompose_decision"]["decision"]["mode"] == "MAIN_AGENT"

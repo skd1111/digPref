@@ -53,9 +53,11 @@ pub async fn doc_review(args: Value) -> AppResult<Value> {
 
     let url = format!("{}{}", base_url, path);
     // get/findings 会触发后端为每条 finding 各做一次 RAG 检索（kb_refs），大文档可达数十秒；
-    // 这两个 op 用长超时兜底，其余轻量 op 仍用短超时，以便 Agent 掉线时快速失败。
+    // register 对扫描件 PDF 需等 RapidOCR 冷启动+逐页识别（实测 7 页≈20s+，大扫描件更久），
+    // 15s 短超时必误报「导入失败」；这三类 op 用长超时兜底，其余轻量 op 仍用短超时，以便 Agent 掉线时快速失败。
     let timeout_secs = match op {
         "get" | "findings" => 90,
+        "register" => 180,
         _ => 15,
     };
     let client = reqwest::Client::builder()

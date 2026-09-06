@@ -3,6 +3,23 @@
 > 本文件是项目唯一的版本变更记录台账。每??Phase 交付或重大变更时必须在此追加记录??
 ---
 
+## 2026-09-06
+
+### v2.135 — 知识库召回接入编排决策器 + 抑制「来源缺失」式错误追问 + 文档审核 OCR 异步化/耗时统计 + thinking 指示器 + 构建脚本整理（bump 0.1.5）
+
+- **背景**：① 用户把文档上传到知识库后，在开发模式说「提取出审核规则」这类短句时，`rag_retrieve` 已命中召回，但编排决策器（`decompose`）看不到召回、误判「来源缺失」→ 弹 A/B/C 反问用户已上传的文件；提示词协议工具循环也漏注入召回（native 循环 2026-09-04 已修），同一路「找不到文件」式追问仍出现。② 文档审核 `register` 对扫描件 PDF 走 RapidOCR（冷启动 + 逐页识别，实测 7 页≈20s+），同步 `parse_document` 阻塞 FastAPI 事件循环（health/SSE/轮询全排队），且 Rust 侧 15s 短超时必误报「导入失败」。
+- **改动**：
+  - **决策器看到召回**：[router.py](../services/agent/src/agent/llm/router.py) `decompose()` 新增 `rag_context` 参数 → 注入 `{{KNOWLEDGE_CONTEXT}}`；[decompose.py](../services/agent/src/agent/graph/nodes/decompose.py) `_decide()` 把 `state.system_prompt_addon` 传入（旧签名 `TypeError` 自动降级）；[decompose.md](../services/agent/src/agent/llm/prompts/decompose.md) 新增 §10.10「知识库检索结果」输入块 + §2.3 第 5 条纪律「知识库即来源，命中即不得反问来源」。
+  - **RAG 优先前移**：`decompose.py` 快速路径把「RAG 优先作答（MAIN_AGENT）」移到 `need_clarification→ASK_USER` 分支之前并去掉 `need_tool` 限制——知识库命中即「来源」已具备，不再反问。
+  - **提示词协议循环补齐**：[loop.py](../services/agent/src/agent/tools/loop.py) `_merge_extra_rules()` 注入 `system_prompt_addon`（`format_rag_block`），与 native 循环对齐。
+  - **审核 OCR 异步化 + 超时兜底（双重保障）**：[api.py](../services/agent/src/agent/doc_review/api.py) `register_document` 用 `asyncio.to_thread(parse_document)` 卸载阻塞（事件循环不再排队）；[doc_review.rs](../apps/desktop/src-tauri/src/commands/doc_review.rs) `register` op 超时 15s→180s。
+  - **耗时统计**：[hybrid_rag.py](../services/agent/src/agent/knowledge/hybrid_rag.py) 记录 reranker 耗时（`last_rerank_ms`），经 `RAGContext.rerank_ms`（[models.py](../services/agent/src/agent/knowledge/models.py)/[retriever.py](../services/agent/src/agent/knowledge/retriever.py)）透出；`api.py` `_run_timings` 汇总 `retrieval_ms/rerank_ms/model_ms`，前端 [invoke.ts](../apps/desktop/src/ipc/invoke.ts)/[docReviewStore.ts](../apps/desktop/src/store/docReviewStore.ts)/[DocTextViewer.tsx](../apps/desktop/src/components/doc-review/DocTextViewer.tsx) 分析完成弹窗展示耗时明细。
+  - **选项解析**：[responder.py](../services/agent/src/agent/graph/nodes/responder.py) 字母选项正则覆盖全角括号 `（A）`（中文场景高频）。
+  - **前端 UI**：[index.html](../apps/desktop/index.html) 去掉全局 `font-mono`；[AiStatus.tsx](../apps/desktop/src/components/chat/AiStatus.tsx) 新增动画「thinking」状态指示器（orb + shimmer + 均衡器，工具阶段显示「工具调用中：xxx」）+ [globals.css](../apps/desktop/src/styles/globals.css) 配套动画 + [CenterChatFlow.tsx](../apps/desktop/src/layouts/CenterChatFlow.tsx)/[ChatMessage.tsx](../apps/desktop/src/components/chat/ChatMessage.tsx) 接线；[ChatInput.tsx](../apps/desktop/src/components/chat/ChatInput.tsx) 上下文大小指示器改按模型窗口百分比显示（窗口未知回退 token 数）。
+  - **构建整理**：`build-all.bat`/`build-with-msvc.bat` 移出版本库并加入 [.gitignore](../.gitignore)（本地构建脚本不入库）；[eaide-agent.spec](../eaide-agent.spec) `hiddenimports` 补 `uvicorn` 基础包（此前只列子模块）；[download_bge_reranker_onnx.ps1](../model/download_bge_reranker_onnx.ps1) 改用 `curl`（下载更稳）；新增 [bench-retrieval.py](../infra/scripts/bench-retrieval.py)（检索基准）+ [tauri-driver-strip.py](../infra/scripts/tauri-driver-strip.py)（构建前动态裁剪空资源目录）。
+- **影响**：知识库已命中时不再反问「来源是哪个文件」，短句查询直接据库作答；扫描件 PDF 导入不再阻塞健康检查、不再误报失败；审核完成可见检索/重排/模型耗时明细；等待反馈由统一 thinking 指示器承担。Agent 侧改动需重启/重新打包在生产客户端生效。
+- **验证**：本地 `ruff check`/`ruff format --check`/`mypy packages`/`pytest` 全绿（9 例环境跳过）；前端 `eslint`/`vitest` 61 文件·389 用例/`tsc --noEmit` 全绿；新增回归 [test_decompose_rag_first.py](../services/agent/tests/test_decompose_rag_first.py) 覆盖追问抑制/低置信度抑制/无命中仍追问/决策器收到 `rag_context`/旧签名兼容。Rust `clippy`/`test` 交 CI（本地无 cargo）。
+
 ## 2026-09-04
 
 ### v2.134 — macOS 日志/数据根修复 + 设置页「一键导出全部日志」（BUGFIX #193）

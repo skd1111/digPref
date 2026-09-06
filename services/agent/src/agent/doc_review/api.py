@@ -35,6 +35,8 @@ _background_tasks: set[asyncio.Task[Any]] = set()
 
 # 分析进度（run_id → 0..1）：内存态，供 /status 轮询；Agent 重启归零不影响主流程
 _run_progress: dict[str, float] = {}
+# 分析耗时明细（run_id → dict）：内存态，done 时填充；Agent 重启归零
+_run_timings: dict[str, dict[str, float]] = {}
 
 
 async def _attach_kb_refs(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -108,7 +110,9 @@ class RegisterRequest(BaseModel):
 @router.post("/documents")
 async def register_document(req: RegisterRequest) -> dict[str, Any]:
     try:
-        parsed = parse_document(req.file_path)
+        # 解析含扫描件 OCR 回退（RapidOCR 冷启动≈20s+逐页识别），同步调用会阻塞事件循环
+        # （health/SSE/轮询全部排队）；放线程池执行，DocParseError 原样抛出。
+        parsed = await asyncio.to_thread(parse_document, req.file_path)
     except DocParseError as exc:
         if str(exc).startswith("不支持的格式"):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -218,6 +222,9 @@ async def _run_analysis(storage: DocReviewStorage, doc_id: str, run_id: str) -> 
         risk_types = [rt.value for rt in classification.risk_types]
         # 本地知识库混合检索（审核专家 RAG）：召回参考资料注入分析提示词（best-effort）
         rag_context = ""
+        t_rag_total = time.perf_counter()
+        rag_retrieval_ms = 0
+        rag_rerank_ms = 0
         if settings.rag_enabled:
             try:
                 from agent.knowledge.retriever import get_default_retriever
@@ -227,14 +234,19 @@ async def _run_analysis(storage: DocReviewStorage, doc_id: str, run_id: str) -> 
                     rag_query, top_k=settings.rag_top_k
                 )
                 rag_context = rag_ctx.formatted_prompt or ""
+                rag_retrieval_ms = getattr(rag_ctx, "elapsed_ms", 0)
+                rag_rerank_ms = getattr(rag_ctx, "rerank_ms", 0)
                 logger.info(
-                    "doc_review rag retrieve doc_id=%s hits=%d chars=%d",
+                    "doc_review rag retrieve doc_id=%s hits=%d chars=%d retrieval_ms=%d rerank_ms=%d",
                     doc_id,
                     len(rag_ctx.results),
                     len(rag_context),
+                    rag_retrieval_ms,
+                    rag_rerank_ms,
                 )
             except Exception:
                 logger.debug("doc_review rag retrieve skipped", exc_info=True)
+        rag_elapsed_ms = int((time.perf_counter() - t_rag_total) * 1000)
         await storage.update_run(
             run_id,
             status="analyzing",
@@ -251,6 +263,7 @@ async def _run_analysis(storage: DocReviewStorage, doc_id: str, run_id: str) -> 
             rag_context=rag_context,
             on_progress=lambda frac: _run_progress.__setitem__(run_id, 0.15 + 0.8 * frac),
         )
+        model_elapsed_ms = int((time.perf_counter() - t0) * 1000)
         logger.info(
             "doc_review analyze done doc_id=%s elapsed=%.1fs findings=%d",
             doc_id,
@@ -313,6 +326,12 @@ async def _run_analysis(storage: DocReviewStorage, doc_id: str, run_id: str) -> 
         except Exception:
             logger.warning("doc_review audit write failed", exc_info=True)
         _run_progress[run_id] = 1.0
+        # 记录耗时明细供前端展示
+        _run_timings[run_id] = {
+            "retrieval_ms": rag_elapsed_ms,
+            "rerank_ms": rag_rerank_ms,
+            "model_ms": model_elapsed_ms,
+        }
         logger.info(
             "doc_review run done doc_id=%s run_id=%s findings=%d total_elapsed=%.1fs",
             doc_id,
@@ -324,6 +343,7 @@ async def _run_analysis(storage: DocReviewStorage, doc_id: str, run_id: str) -> 
         logger.exception("doc_review analysis failed doc_id=%s", doc_id)
         await storage.update_run(run_id, status="failed", error=str(exc))
         _run_progress.pop(run_id, None)
+        _run_timings.pop(run_id, None)
         emit_event_sync(
             EVT_DOC_REVIEW_FAILED,
             {
@@ -396,12 +416,14 @@ async def get_status(doc_id: str) -> dict[str, Any]:
     # 已完成但内存无记录（Agent 重启过）→ 直接报 100%
     if progress is None and latest["status"] == "done":
         progress = 1.0
+    timings = _run_timings.get(latest["run_id"])
     return {
         "doc_id": doc_id,
         "run_id": latest["run_id"],
         "status": latest["status"],
         "error": latest["error"],
         "progress": progress,
+        "timings": timings,
     }
 
 

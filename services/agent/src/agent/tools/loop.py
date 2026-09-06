@@ -383,6 +383,13 @@ def _merge_extra_rules(state: dict) -> str:
         _active_skill_addon(state).strip(),
         experience_addon(state).strip(),
     ]
+    # 知识库召回注入（2026-09-06 补齐提示词协议通道）：native 循环 2026-09-04
+    # 已注入，提示词协议循环漏了 → 同一路「找不到文件」式 ASK_USER 仍会出现。
+    rag_addon = str(state.get("system_prompt_addon") or "").strip()
+    if rag_addon:
+        from agent.llm.prompts import format_rag_block
+
+        parts.append(format_rag_block(rag_addon).strip())
     # 停滞熔断强制追问轮（BUGFIX #182）：达阈后注入指令，逼模型反向追问用户缺什么，
     # 而不是甩一句模板文案直接停。
     if (

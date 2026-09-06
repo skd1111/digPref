@@ -212,6 +212,11 @@ export function ChatInput(): JSX.Element {
   }, [ctxLimits, chatModel]);
   // 警示阈值：窗口已知用其 90%（与自动压缩同阈值，变橙即意味着下次发送会自动压缩）
   const ctxWarnTokens = ctxLimit ? Math.floor(ctxLimit * CTX_AUTO_COMPRESS_RATIO) : CTX_WARN_TOKENS;
+  // 上下文占用百分比（窗口已知时）：null = 模型窗口未知（Agent 未就绪），指示器回退显示 token 数
+  const ctxPct = useMemo(
+    () => (ctxLimit && ctxLimit > 0 ? Math.round((historyTokens / ctxLimit) * 100) : null),
+    [ctxLimit, historyTokens],
+  );
   const [modelOptions, setModelOptions] = useState<Array<{ name: string; label: string }>>([]);
   const refreshModelOptions = useCallback(async (): Promise<void> => {
     try {
@@ -947,7 +952,7 @@ export function ChatInput(): JSX.Element {
               ))}
             </select>
             {/* 🧠 上下文大小指示器 + 清理/压缩菜单（2026-08-17）：
-                展示将随下次发送的会话 history 估算 token；点击展开操作菜单 */}
+                展示将随下次发送的会话 history 占模型窗口的百分比（窗口未知时回退 token 数）；点击展开操作菜单 */}
             <div className="relative flex-shrink-0">
               <button
                 type="button"
@@ -955,8 +960,8 @@ export function ChatInput(): JSX.Element {
                 disabled={busy}
                 title={
                   ctxLimit
-                    ? `将随下次发送的会话历史 ≈${historyTokens.toLocaleString()} / ${ctxLimit.toLocaleString()} tokens（达 ${Math.round(CTX_AUTO_COMPRESS_RATIO * 100)}% 会在发送前自动压缩；点击查看清理/压缩）`
-                    : `将随下次发送的会话历史 ≈${historyTokens.toLocaleString()} tokens（点击查看清理/压缩）`
+                    ? `将随下次发送的会话历史 ≈${historyTokens.toLocaleString()} / ${ctxLimit.toLocaleString()} tokens（占用 ${ctxPct}%，达 ${Math.round(CTX_AUTO_COMPRESS_RATIO * 100)}% 会在发送前自动压缩；点击查看清理/压缩）`
+                    : `将随下次发送的会话历史 ≈${historyTokens.toLocaleString()} tokens（模型窗口未知，暂按 token 显示；点击查看清理/压缩）`
                 }
                 className="flex h-7 items-center gap-1 rounded-full border px-2 text-[10px] transition-colors hover:opacity-80 disabled:opacity-50"
                 style={{
@@ -965,7 +970,7 @@ export function ChatInput(): JSX.Element {
                   backgroundColor: historyTokens >= ctxWarnTokens ? '#fffbeb' : '#ffffff',
                 }}
               >
-                🧠 ≈{formatChars(historyTokens)} tok
+                🧠 {formatCtxUsage(ctxPct, historyTokens)}
               </button>
               {ctxMenuOpen && (
                 <>
@@ -1106,4 +1111,11 @@ function shortFile(path: string): string {
 function formatChars(n: number): string {
   if (n < 1000) return `${n}`;
   return `${(n / 1000).toFixed(1)}k`;
+}
+
+/** 上下文占用文案：窗口已知显示百分比（>0 但不足 1% 显示 "<1%"），窗口未知回退 token 数 */
+function formatCtxUsage(pct: number | null, tokens: number): string {
+  if (pct == null) return `≈${formatChars(tokens)} tok`;
+  if (pct < 1 && tokens > 0) return '<1%';
+  return `${pct}%`;
 }

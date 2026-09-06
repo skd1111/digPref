@@ -338,8 +338,9 @@ def _confirmation_body(message: str) -> str:
 # 解析不出选项时用问题原文做单选项兜底（卡片另有自定义输入框）。
 
 # 字母选项标记：a/b/c…（大小写）后接 ．.、)）：: 或空格，且前面是
-# 行首/空白/分隔标点（防误伤普通单词里的单字母）
-_OPT_MARK_RE = re.compile(r"(?:^|[\s；;，,。:：])(([a-iA-I])[．.、)）:：\s])")
+# 行首/空白/分隔标点（防误伤普通单词里的单字母）；
+# 同时覆盖全角括号 （A） 格式（中文场景高频，#152）
+_OPT_MARK_RE = re.compile(r"(?:^|[\s；;，,。:：（])(([a-iA-I])[．.、)）:：\s）])")
 
 
 def _split_lettered_options(question: str) -> tuple[str, list[str]]:

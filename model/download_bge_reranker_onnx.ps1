@@ -16,7 +16,8 @@ foreach ($f in $files) {
     $url = "$base/$($f[0])"
     $out = Join-Path $dest $f[1]
     Write-Host "Downloading $($f[0]) ..."
-    Invoke-WebRequest -Uri $url -OutFile $out -TimeoutSec 600
+    curl -L -f -o $out $url
+    if ($LASTEXITCODE -ne 0) { throw "下载 $($f[0]) 失败" }
     Write-Host "  -> $out ($([math]::Round((Get-Item $out).Length / 1MB, 1)) MB)"
 }
 
@@ -26,7 +27,8 @@ foreach ($rel in $onnxCandidates) {
     $out = Join-Path $dest ($rel -replace '/', '\')
     try {
         Write-Host "Downloading $rel ..."
-        Invoke-WebRequest -Uri "$base/$rel" -OutFile $out -TimeoutSec 900
+        curl -L -f -o $out "$base/$rel"
+        if ($LASTEXITCODE -ne 0) { throw "curl failed" }
         Write-Host "  -> $out ($([math]::Round((Get-Item $out).Length / 1MB, 1)) MB)"
         $got = $true
         break

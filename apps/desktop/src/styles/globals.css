@@ -17,6 +17,8 @@
     background-color: theme('colors.vscode.editor-bg');
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "kern" 1, "liga" 1;
     /* 主界面文字默认可选中复制（2026-08-11）：会话记录/面板内容等；
        菜单栏/顶栏/页签等交互 chrome 由各组件自带 select-none 保持禁选 */
     user-select: text;
@@ -96,16 +98,6 @@
 
 /* —— Codex 风格思考动效（2026-08-07）—— */
 
-/* 思考星形图标：自转 + 呼吸缩放 */
-@keyframes thinking-spark {
-  0%   { transform: rotate(0deg) scale(1); }
-  50%  { transform: rotate(180deg) scale(0.8); }
-  100% { transform: rotate(360deg) scale(1); }
-}
-.animate-thinking-spark {
-  animation: thinking-spark 2.4s ease-in-out infinite;
-}
-
 /* 思考文字：渐变流光扫过 */
 @keyframes thinking-shimmer {
   0%   { background-position: 150% 0; }
@@ -130,20 +122,93 @@
 
 /* —— aicss 风格 AI 状态组件（2026-08-10）—— */
 
-/* 思考中：星芒 orb 外圈呼吸光晕 */
-@keyframes thinking-orb-glow {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(16, 163, 127, 0.25); }
-  50%      { box-shadow: 0 0 0 5px rgba(16, 163, 127, 0); }
+/* 科技感思考动效（2026-09-06 升级）：胶囊呼吸微光 + 弧光 orb 三层错速旋转 + 数据流均衡器 */
+
+/* 思考胶囊：边框 + 外发光呼吸 */
+@keyframes ai-thinking-glow {
+  0%, 100% { border-color: #e7e5e4; box-shadow: 0 0 0 0 rgba(16, 163, 127, 0); }
+  50%      { border-color: rgba(16, 163, 127, 0.5); box-shadow: 0 0 10px 0 rgba(16, 163, 127, 0.18); }
+}
+.ai-thinking {
+  animation: ai-thinking-glow 2.4s ease-in-out infinite;
+}
+
+/* 弧光环：锥形渐变雷达扫描式自转（mask 掏空中心只留 2px 环） */
+@keyframes ai-orb-spin {
+  to { transform: rotate(360deg); }
+}
+/* 核心：呼吸脉冲 */
+@keyframes ai-orb-pulse {
+  0%, 100% { transform: scale(0.72); opacity: 0.95; }
+  50%      { transform: scale(1); opacity: 0.55; }
 }
 .ai-thinking-orb {
+  position: relative;
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.ai-orb-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: conic-gradient(
+    from 0deg,
+    rgba(16, 163, 127, 0) 0deg,
+    rgba(16, 163, 127, 0.15) 200deg,
+    #10a37f 330deg,
+    #34d399 360deg
+  );
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+  animation: ai-orb-spin 1.15s linear infinite;
+}
+.ai-orb-core {
+  position: absolute;
+  inset: 4.5px;
+  border-radius: 9999px;
+  background: radial-gradient(circle at 35% 30%, #6ee7b7, #10a37f 65%, #0b7a5e);
+  box-shadow: 0 0 6px 1px rgba(16, 163, 127, 0.55);
+  animation: ai-orb-pulse 1.5s ease-in-out infinite;
+}
+/* 轨道粒子：慢速公转的发光卫星点 */
+.ai-orb-satellite {
+  position: absolute;
+  inset: 0;
+  animation: ai-orb-spin 2.6s linear infinite;
+}
+.ai-orb-satellite::after {
+  content: "";
+  position: absolute;
+  top: -2px;
+  left: 50%;
+  width: 3px;
+  height: 3px;
+  margin-left: -1.5px;
+  border-radius: 9999px;
+  background: #34d399;
+  box-shadow: 0 0 5px 1px rgba(52, 211, 153, 0.8);
+}
+
+/* 数据流均衡器：5 根错相伸缩的能量柱 */
+@keyframes ai-eq-bounce {
+  0%, 100% { transform: scaleY(0.25); opacity: 0.4; }
+  50%      { transform: scaleY(1); opacity: 1; }
+}
+.ai-thinking-eq {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 9999px;
-  background: rgba(16, 163, 127, 0.1);
-  animation: thinking-orb-glow 2.2s ease-in-out infinite;
+  gap: 2px;
+  height: 12px;
+}
+.ai-eq-bar {
+  width: 2.5px;
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #34d399, #10a37f);
+  transform-origin: center;
+  animation: ai-eq-bounce 0.9s ease-in-out infinite;
 }
 
 /* 联网搜索：地球图标缓慢自转 */

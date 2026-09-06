@@ -87,6 +87,8 @@ src-tauri/target/
 *.AppImage
 release/
 dist/
+build-all.bat
+build-with-msvc.bat
 
 # =========================
 # Local DB / Audit logs

@@ -86,6 +86,8 @@ def _is_time_query(prompt: str) -> bool:
 # 知识库/文档类查询关键词（RAG 优先作答的门控之一，2026-09-04）——
 # 与 rag_retrieve._RAG_TRIGGER_KEYWORDS 同源语义：命中说明这是查制度/文档/规范
 # 的知识型问题，知识库是其权威来源，不应退化到 shell 翻文件系统。
+# 2026-09-06 补「规则/审核/审查」：「提取出审核规则」这类短句不含旧表任何
+# 关键词，门控漏拦 → 知识库已命中仍弹「来源是哪个」追问（用户反馈）。
 _KB_DOC_KEYWORDS: tuple[str, ...] = (
     "知识库",
     "文档",
@@ -103,6 +105,18 @@ _KB_DOC_KEYWORDS: tuple[str, ...] = (
     "资料",
     "手册",
     "指引",
+    "规则",
+    "审核",
+    "审查",
+)
+
+# 意图细分类型排除表（2026-09-06）：这些类别语义上不是「查文档/制度」，
+# RAG 优先不得劫持（操作类走工具/HITL，接入类走槽位表，闲聊走模板）。
+# 类别用排除表而非白名单：「提取出审核规则」这类请求的 intent_category
+# 漂移大（knowledge_qa / content_generation / data_query 都出现过），
+# 白名单漏拦即复现「上传了文件还反问来源」。
+_KB_QUERY_EXCLUDED_CATEGORIES = frozenset(
+    {"task_execution", "model_onboard", "conn_test", "refusal", "chat"}
 )
 
 
@@ -134,12 +148,13 @@ def _is_knowledge_doc_query(state: AgentState, analysis: dict) -> bool:
 
     排除项（避免误伤真需要工具的查询）：
     - 已被工具型语义路由命中（db_query / ssh_execute / time_query，带 _route 标记）；
-    - intent_category 非 data_query；
+    - intent_category 属操作/接入/闲聊类（见 _KB_QUERY_EXCLUDED_CATEGORIES）；
     - 既无 doc_type 实体、文本也不含知识库/文档类关键词（如「查询订单表」）。
     """
     if "_route" in analysis:
         return False
-    if str(analysis.get("intent_category") or "") != "data_query":
+    category = str(analysis.get("intent_category") or "")
+    if category in _KB_QUERY_EXCLUDED_CATEGORIES:
         return False
     entities = analysis.get("entities") if isinstance(analysis.get("entities"), dict) else {}
     if str(entities.get("doc_type") or "").strip():
@@ -327,32 +342,47 @@ async def _decide(state: AgentState, llm: LMRouter, tool_specs: list[dict]) -> d
     """调用编排决策器并校验返回；失败 / fallback 返回 None（调用方走单 Agent）。"""
     from agent.graph.state import format_page_context
 
+    base: dict[str, Any] = {
+        "user_prompt": state.get("user_prompt", ""),
+        "plan": state.get("plan") or [],
+        "history": state.get("messages", []),
+        "available_subagents": AVAILABLE_SUBAGENT_CATALOG,
+        "available_tools": tool_specs,
+        # 页面上下文（2026-08-14）：让决策器看见当前页签/场景，
+        # 消除“连接”这类模糊动词的歧义
+        "page_context": format_page_context(state.get("page_context")),
+        "user_permissions": {
+            "can_read": True,
+            "can_write": bool(getattr(settings, "require_hitl_for_write", True)),
+        },
+        "cost_latency_policy": {
+            "max_subagents": getattr(settings, "multi_agent_max_subtasks", 6),
+            "task_timeout_sec": getattr(settings, "orchestrator_task_timeout_sec", 30),
+        },
+        "safety_policy": {
+            "writes_require_hitl": True,
+            "sensitive_local_only": True,
+            "tree_max_depth": 2,
+            "tree_max_nodes": 30,
+            "subagent_read_only": True,
+        },
+    }
+    # 知识库召回注入（2026-09-06）：决策器此前完全看不到 rag_retrieve 的召回，
+    # 「提取出审核规则」这类短句被判「未指明提取来源」→ ASK_USER 反问用户
+    # 已经上传过的文件。与 responder / native 循环同源修复：召回非空时拼进
+    # 决策 prompt（decompose.md §10.10），让决策器知道库里已有资料。
+    rag_addon = str(state.get("system_prompt_addon") or "").strip()
     try:
-        decision = await llm.decompose(
-            user_prompt=state.get("user_prompt", ""),
-            plan=state.get("plan") or [],
-            history=state.get("messages", []),
-            available_subagents=AVAILABLE_SUBAGENT_CATALOG,
-            available_tools=tool_specs,
-            # 页面上下文（2026-08-14）：让决策器看见当前页签/场景，
-            # 消除“连接”这类模糊动词的歧义
-            page_context=format_page_context(state.get("page_context")),
-            user_permissions={
-                "can_read": True,
-                "can_write": bool(getattr(settings, "require_hitl_for_write", True)),
-            },
-            cost_latency_policy={
-                "max_subagents": getattr(settings, "multi_agent_max_subtasks", 6),
-                "task_timeout_sec": getattr(settings, "orchestrator_task_timeout_sec", 30),
-            },
-            safety_policy={
-                "writes_require_hitl": True,
-                "sensitive_local_only": True,
-                "tree_max_depth": 2,
-                "tree_max_nodes": 30,
-                "subagent_read_only": True,
-            },
-        )
+        if rag_addon:
+            decision = await llm.decompose(**base, rag_context=rag_addon)
+        else:
+            decision = await llm.decompose(**base)
+    except TypeError:
+        # 注入替身不支持 rag_context 参数 → 去掉参数再调（向后兼容）
+        try:
+            decision = await llm.decompose(**base)
+        except Exception:
+            return None
     except Exception:
         return None
     if not isinstance(decision, dict) or decision.get("_fallback"):
@@ -513,39 +543,15 @@ def _intent_analysis_fast_path(state: AgentState) -> dict | None:
             ],
         }
 
-    # 追问：关键参数缺失且无法推断 → ASK_USER（规范 §2.4 / §14）
-    if analysis.get("need_clarification") and confidence >= 0.6:
-        message = str(analysis.get("clarification_message") or "").strip()
-        missing = [str(f) for f in (analysis.get("missing_fields") or [])]
-        if not message:
-            if missing:
-                message = "为了继续，请补充：" + "、".join(missing)
-            else:
-                message = "请补充关键信息后我再继续。"
-        return {
-            "decompose_decision": _ask_user_decision(message, missing),
-            "multi_agent": False,
-            "sub_agent_reports": [],
-            "trace": [
-                record_trace(
-                    "decompose",
-                    "ok",
-                    mode="ASK_USER",
-                    reason="intent_analysis_clarification",
-                )
-            ],
-        }
-
-    if confidence < 0.6:
-        return None  # 低置信度 → 交给编排决策器 LLM 复核
-
-    # RAG 优先作答（根因修复 2026-09-04）：文档/制度类查询且知识库已 BM25
-    # 命中相关资料 → 直接据库作答（MAIN_AGENT），不进工具循环用 shell 翻文件系统。
-    # 背景：用户问「找一下对公转账汇兑的规章制度」，bm25=80 命中却因召回未注入
-    # 而弹 A/B/C 澄清、继而 shell 全盘扫描卡死。带开关，可回退旧行为。
+    # RAG 优先作答（根因修复 2026-09-04；2026-09-06 前移到追问分支之前）：
+    # 文档/制度类查询且知识库已 BM25 命中相关资料 → 直接据库作答（MAIN_AGENT）。
+    # 位置红线：必须在 need_clarification→ASK_USER 之前——知识库（含用户上传的
+    # 参考资料）已命中即「来源」已具备，再追问「来源是哪个文件」是把用户已给
+    # 的东西反问回去（用户反馈：上传了文件还被问来源）。背景案例：
+    # 「找一下对公转账汇兑的规章制度」bm25=80 命中却弹 A/B/C 澄清、继而
+    # shell 全盘扫描卡死；「提取出审核规则」命中仍被决策器判来源缺失。带开关。
     if (
         getattr(settings, "rag_first_answer_enabled", True)
-        and analysis.get("need_tool")
         and _is_knowledge_doc_query(state, analysis)
         and _rag_has_relevant_hits(state)
     ):
@@ -574,6 +580,32 @@ def _intent_analysis_fast_path(state: AgentState) -> dict | None:
                 )
             ],
         }
+
+    # 追问：关键参数缺失且无法推断 → ASK_USER（规范 §2.4 / §14）
+    if analysis.get("need_clarification") and confidence >= 0.6:
+        message = str(analysis.get("clarification_message") or "").strip()
+        missing = [str(f) for f in (analysis.get("missing_fields") or [])]
+        if not message:
+            if missing:
+                message = "为了继续，请补充：" + "、".join(missing)
+            else:
+                message = "请补充关键信息后我再继续。"
+        return {
+            "decompose_decision": _ask_user_decision(message, missing),
+            "multi_agent": False,
+            "sub_agent_reports": [],
+            "trace": [
+                record_trace(
+                    "decompose",
+                    "ok",
+                    mode="ASK_USER",
+                    reason="intent_analysis_clarification",
+                )
+            ],
+        }
+
+    if confidence < 0.6:
+        return None  # 低置信度 → 交给编排决策器 LLM 复核
 
     # 需要工具 → 直达动态工具循环（规范 §5.2）——明确操作不需要规划：
     # 意图分析已给出明确信号时省掉编排决策器 LLM（本地模型缺席时 30s+）。

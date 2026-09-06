@@ -1920,6 +1920,7 @@ class LMRouter:
         available_subagents: list[dict] | None = None,
         available_tools: list[dict] | None = None,
         page_context: str = "",
+        rag_context: str = "",
         user_permissions: dict | None = None,
         cost_latency_policy: dict | None = None,
         safety_policy: dict | None = None,
@@ -1934,9 +1935,15 @@ class LMRouter:
         保守策略：mock 模式 / LLM 不可用 / 输出无法解析 → 返回 `_fallback=True` 的
         单 Agent 决策（调用方按单 Agent 路径执行）。
         判定接触用户原始内容 → task 固定走 `decompose`（_LOCAL_ONLY_TASKS 本地红线）。
+
+        rag_context（2026-09-06）：rag_retrieve 的知识库召回（state.system_prompt_
+        addon）。此前决策器看不到召回，「提取出审核规则」这类短句被判「来源
+        缺失」→ ASK_USER 反问用户已上传的文件；非空时注入 decompose.md §10.10。
         """
         if self._mock_mode:
             return _fallback_decision(plan)
+        from agent.llm.prompts import format_rag_block
+
         prompt = (
             SUBAGENT_ENABLEMENT_DECISION_PROMPT.replace("{{CURRENT_TIME}}", current_time_text())
             .replace("{{USER_INPUT}}", user_prompt[:4000])
@@ -1950,6 +1957,7 @@ class LMRouter:
                 json.dumps(available_tools or [], ensure_ascii=False)[:3000],
             )
             .replace("{{PAGE_CONTEXT}}", page_context or "（未提供）")
+            .replace("{{KNOWLEDGE_CONTEXT}}", format_rag_block(rag_context) or "（未提供）")
             .replace(
                 "{{USER_PERMISSIONS}}",
                 json.dumps(user_permissions or {}, ensure_ascii=False),

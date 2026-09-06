@@ -361,7 +361,7 @@ export function useAgentStream(): void {
         }
 
         case 'builtin_tool_done': {
-          // 工具执行结束 → 该 run 回到等模型返回（下一轮编排由模型决定）
+          // 工具执行结束 → 该 run 回到 thinking（等模型返回，下一轮编排由模型决定）
           const stB = useChatStore.getState();
           const runIdB = stB.attributeRun(evt.runId);
           if (runIdB) {
