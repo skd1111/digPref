@@ -164,11 +164,19 @@ class TestVersionStorage:
 
     def test_activate_switches_and_vector_retrieval_follows(self, kb):
         _seed_version(
-            kb, doc_id="g1v1", group_id="g1", version=1, is_active=True,
+            kb,
+            doc_id="g1v1",
+            group_id="g1",
+            version=1,
+            is_active=True,
             text="# 制度\n## 差旅\n差旅费报销标准每日三百元。",
         )
         _seed_version(
-            kb, doc_id="g1v2", group_id="g1", version=2, is_active=False,
+            kb,
+            doc_id="g1v2",
+            group_id="g1",
+            version=2,
+            is_active=False,
             text="# 制度\n## 差旅\n差旅费报销标准上调为每日五百元。",
         )
         # 初始 v1 生效：向量检索只命中 v1
@@ -187,11 +195,19 @@ class TestVersionStorage:
 
     def test_fts_and_text_channels_respect_active(self, kb):
         _seed_version(
-            kb, doc_id="g1v1", group_id="g1", version=1, is_active=True,
+            kb,
+            doc_id="g1v1",
+            group_id="g1",
+            version=1,
+            is_active=True,
             text="# 制度\n## 差旅\n差旅费报销标准每日三百元。",
         )
         _seed_version(
-            kb, doc_id="g1v2", group_id="g1", version=2, is_active=False,
+            kb,
+            doc_id="g1v2",
+            group_id="g1",
+            version=2,
+            is_active=False,
             text="# 制度\n## 差旅\n差旅费报销标准每日五百元新版。",
         )
         assert _hit_doc_ids(kb.search_by_fts("差旅报销", limit=5)) == {"g1v1"}
@@ -258,12 +274,22 @@ class TestVersionStorage:
 
     def test_set_category_updates_whole_group_and_chunks(self, kb):
         _seed_version(
-            kb, doc_id="g1v1", group_id="g1", version=1, is_active=False,
-            text="差旅报销旧", category="finance",
+            kb,
+            doc_id="g1v1",
+            group_id="g1",
+            version=1,
+            is_active=False,
+            text="差旅报销旧",
+            category="finance",
         )
         _seed_version(
-            kb, doc_id="g1v2", group_id="g1", version=2, is_active=True,
-            text="差旅报销新", category="finance",
+            kb,
+            doc_id="g1v2",
+            group_id="g1",
+            version=2,
+            is_active=True,
+            text="差旅报销新",
+            category="finance",
         )
         assert kb.set_category("g1v2", "legal") is True
         # 整组两个版本的 docs.category 都改
@@ -295,9 +321,14 @@ class TestVersionIngestion:
 
         # 新版本：is_active=False 建档，就绪后自动切换为生效，旧版本失活但保留
         v2 = tmp_path / "baoxiao_v2.md"
-        v2.write_text("# 报销制度\n## 差旅报销\n差旅费报销标准上调为每日五百元。\n", encoding="utf-8")
+        v2.write_text(
+            "# 报销制度\n## 差旅报销\n差旅费报销标准上调为每日五百元。\n", encoding="utf-8"
+        )
         doc2 = await ing.ingest_file(
-            str(v2), category="finance", group_id=gid, version=kb.next_version(gid),
+            str(v2),
+            category="finance",
+            group_id=gid,
+            version=kb.next_version(gid),
             is_active=False,
         )
         assert doc2["status"] == "ready" and doc2["version"] == 2 and doc2["is_active"] is True
@@ -447,9 +478,7 @@ class TestVersionApi:
         assert kb.get_doc("g1v1") is None and kb.get_doc("g1v2") is None
 
     def test_list_docs_active_only_shape(self, client, kb):
-        _seed_version(
-            kb, doc_id="g1v1", group_id="g1", version=1, is_active=True, text="差旅报销"
-        )
+        _seed_version(kb, doc_id="g1v1", group_id="g1", version=1, is_active=True, text="差旅报销")
         _seed_version(
             kb, doc_id="g1v2", group_id="g1", version=2, is_active=False, text="差旅报销新"
         )
@@ -461,8 +490,13 @@ class TestVersionApi:
 
     def test_set_category_endpoint(self, client, kb):
         _seed_version(
-            kb, doc_id="g1v1", group_id="g1", version=1, is_active=True,
-            text="差旅报销", category="finance",
+            kb,
+            doc_id="g1v1",
+            group_id="g1",
+            version=1,
+            is_active=True,
+            text="差旅报销",
+            category="finance",
         )
         r = client.post("/knowledge/v1/docs/g1v1/category", json={"category": "legal"})
         assert r.status_code == 200

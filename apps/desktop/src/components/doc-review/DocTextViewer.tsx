@@ -135,15 +135,6 @@ function RiskBar({
 }: {
   findings: DocFinding[];
 }): JSX.Element | null {
-  if (findings.length === 0) return null;
-
-  const LEVELS: { key: DocRiskLevel; label: string; color: string }[] = [
-    { key: "critical", label: "严重", color: "#b3261e" },
-    { key: "high", label: "高危", color: "#cd3131" },
-    { key: "medium", label: "中危", color: "#b25c1a" },
-    { key: "low", label: "低危", color: "#059669" },
-  ];
-
   const pages = useDocReviewStore((s) => s.detail?.pages ?? []);
   const selectFinding = useDocReviewStore((s) => s.selectFinding);
 
@@ -154,6 +145,15 @@ function RiskBar({
     }
     return m;
   }, [findings]);
+
+  if (findings.length === 0) return null;
+
+  const LEVELS: { key: DocRiskLevel; label: string; color: string }[] = [
+    { key: "critical", label: "严重", color: "#b3261e" },
+    { key: "high", label: "高危", color: "#cd3131" },
+    { key: "medium", label: "中危", color: "#b25c1a" },
+    { key: "low", label: "低危", color: "#059669" },
+  ];
 
   return (
     <div

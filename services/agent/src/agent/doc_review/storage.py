@@ -30,7 +30,7 @@ class DocReviewStorage:
         db = await aiosqlite.connect(self._db_path)
         await db.execute("PRAGMA journal_mode=WAL")
         await db.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
-        
+
         # 迁移：为旧版 findings 表补加 kb_refs_json 列（如果不存在）
         try:
             cur = await db.execute("PRAGMA table_info(findings)")
@@ -42,7 +42,7 @@ class DocReviewStorage:
                 )
         except Exception:
             pass  # 忽略迁移错误，不影响主流程
-        
+
         await db.commit()
         return db
 
