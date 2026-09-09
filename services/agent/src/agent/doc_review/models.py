@@ -136,6 +136,7 @@ class Finding(BaseModel):
     rule_ref: str | None = None
     evidence_text: str = ""
     positions: list[Position] = Field(default_factory=list)
+    kb_refs: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class AnalysisResult(BaseModel):

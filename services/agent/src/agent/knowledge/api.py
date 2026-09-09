@@ -187,6 +187,11 @@ class V1DocSummary(BaseModel):
     size_bytes: int = 0
     created_at: int = 0
     updated_at: int = 0
+    # 版本化：逻辑资料 group + 版本号 + 是否生效 + 组内版本总数
+    group_id: str = ""
+    version: int = 1
+    is_active: bool = True
+    version_count: int = 1
     # 已复制入库的源文件绝对路径（供前端点击预览）；未复制/文件丢失时为空串
     file_path: str = ""
 
@@ -213,6 +218,8 @@ class V1UploadRequest(BaseModel):
     file_path: str = Field(..., min_length=1, max_length=4096)
     category: str = ""
     metadata: dict[str, Any] | None = None
+    # 置位时：本次上传作为该文档所在逻辑资料的「新版本」（version+1，就绪后自动生效）
+    base_doc_id: str | None = None
 
 
 class V1UploadResponse(BaseModel):
@@ -222,6 +229,43 @@ class V1UploadResponse(BaseModel):
 
 class V1DeleteResponse(BaseModel):
     deleted: bool
+
+
+class V1VersionItem(BaseModel):
+    doc_id: str
+    group_id: str = ""
+    version: int = 1
+    status: str = "pending"
+    is_active: bool = False
+    chunk_count: int = 0
+    size_bytes: int = 0
+    file_name: str = ""
+    created_at: int = 0
+    updated_at: int = 0
+    error: str | None = None
+    file_path: str = ""
+
+
+class V1ListVersionsResponse(BaseModel):
+    group_id: str
+    active_doc_id: str = ""
+    versions: list[V1VersionItem]
+
+
+class V1ActivateResponse(BaseModel):
+    ok: bool
+    group_id: str = ""
+    active_doc_id: str = ""
+
+
+class V1SetCategoryRequest(BaseModel):
+    category: str = ""
+
+
+class V1SetCategoryResponse(BaseModel):
+    ok: bool
+    group_id: str = ""
+    category: str = ""
 
 
 class V1SearchRequest(BaseModel):
@@ -319,6 +363,10 @@ async def v1_list_docs(
                 size_bytes=int(d.get("size_bytes", 0) or 0),
                 created_at=int(d.get("created_at", 0) or 0),
                 updated_at=int(d.get("updated_at", 0) or 0),
+                group_id=str(d.get("group_id", "") or d["doc_id"]),
+                version=int(d.get("version", 1) or 1),
+                is_active=bool(d.get("is_active", True)),
+                version_count=int(d.get("version_count", 1) or 1),
                 file_path=_resolve_stored_path(d.get("source_relpath")),
             )
             for d in docs
@@ -327,12 +375,27 @@ async def v1_list_docs(
 
 
 async def _run_ingest(
-    path: str, doc_id: str, category: str, metadata: dict[str, Any] | None
+    path: str,
+    doc_id: str,
+    category: str,
+    metadata: dict[str, Any] | None,
+    *,
+    group_id: str | None = None,
+    version: int = 1,
+    is_active: bool = True,
 ) -> None:
     """后台导入（分块+向量化可能耗时）；ingest_file 内部已置 failed 状态。"""
     ing = _get_ingestion()
     try:
-        await ing.ingest_file(path, doc_id=doc_id, category=category, metadata=metadata)
+        await ing.ingest_file(
+            path,
+            doc_id=doc_id,
+            category=category,
+            metadata=metadata,
+            group_id=group_id,
+            version=version,
+            is_active=is_active,
+        )
     except IngestionError as exc:
         logger.warning("background ingest failed doc_id=%s: %s", doc_id, exc)
     except Exception:
@@ -341,7 +404,11 @@ async def _run_ingest(
 
 @router.post("/v1/docs/upload", response_model=V1UploadResponse)
 async def v1_upload_doc(body: V1UploadRequest) -> V1UploadResponse:
-    """上传参考资料：同步预校验 + 建档，后台异步分块/向量化（前端轮询状态）。"""
+    """上传参考资料：同步预校验 + 建档，后台异步分块/向量化（前端轮询状态）。
+
+    base_doc_id 置位时作为该文档所在逻辑资料的新版本（version+1，索引期间旧版本
+    仍生效，就绪后自动切换）；否则为全新单版本资料。
+    """
     import uuid
 
     path = Path(body.file_path)
@@ -356,8 +423,23 @@ async def v1_upload_doc(body: V1UploadRequest) -> V1UploadResponse:
         size = 0
     if size > int(settings.rag_max_file_mb) * 1024 * 1024:
         raise HTTPException(413, f"file too large (> {settings.rag_max_file_mb}MB)")
+
+    storage = _get_storage()
     doc_id = uuid.uuid4().hex
-    _get_storage().insert_doc(
+    # 版本归组：base_doc_id 置位 → 加入其 group 作为下一版本，索引期间不生效（is_active=0）
+    if body.base_doc_id:
+        base = storage.get_doc(body.base_doc_id)
+        if base is None:
+            raise HTTPException(404, f"base doc not found: {body.base_doc_id}")
+        group_id = str(base.get("group_id") or base["doc_id"])
+        version = storage.next_version(group_id)
+        is_active = False
+    else:
+        group_id = doc_id
+        version = 1
+        is_active = True
+
+    storage.insert_doc(
         doc_id=doc_id,
         title=path.stem,
         file_name=path.name,
@@ -366,19 +448,96 @@ async def v1_upload_doc(body: V1UploadRequest) -> V1UploadResponse:
         size_bytes=size,
         status="indexing",
         metadata=body.metadata or {},
+        group_id=group_id,
+        version=version,
+        is_active=is_active,
     )
-    task = asyncio.create_task(_run_ingest(str(path), doc_id, body.category or "", body.metadata))
+    task = asyncio.create_task(
+        _run_ingest(
+            str(path),
+            doc_id,
+            body.category or "",
+            body.metadata,
+            group_id=group_id,
+            version=version,
+            is_active=is_active,
+        )
+    )
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
     return V1UploadResponse(doc_id=doc_id, status="indexing")
 
 
 @router.delete("/v1/docs/{doc_id}", response_model=V1DeleteResponse)
-async def v1_delete_doc(doc_id: str) -> V1DeleteResponse:
-    """硬删除：级联清 chunks + FTS5 + 向量 + parents + 复制文件。"""
+async def v1_delete_doc(doc_id: str, all_versions: bool = False) -> V1DeleteResponse:
+    """硬删除：级联清 chunks + FTS5 + 向量 + parents + 复制文件。
+
+    all_versions=True → 删该逻辑资料的全部版本；否则只删该版本（若删的是生效版本，
+    自动切换到同组最新剩余版本）。
+    """
     storage = _get_storage()
-    deleted = storage.hard_delete_doc(doc_id, delete_file=True)
+    deleted = storage.hard_delete_doc(doc_id, delete_file=True, all_versions=all_versions)
     return V1DeleteResponse(deleted=deleted)
+
+
+@router.get("/v1/docs/{doc_id}/versions", response_model=V1ListVersionsResponse)
+async def v1_list_versions(doc_id: str) -> V1ListVersionsResponse:
+    """列出该文档所属逻辑资料的全部版本（version 倒序）+ 当前生效版本。"""
+    storage = _get_storage()
+    doc = storage.get_doc(doc_id)
+    if doc is None:
+        raise HTTPException(404, f"doc not found: {doc_id}")
+    group_id = str(doc.get("group_id") or doc["doc_id"])
+    versions = storage.list_group_versions(group_id)
+    active = next((str(v["doc_id"]) for v in versions if v.get("is_active")), "")
+    return V1ListVersionsResponse(
+        group_id=group_id,
+        active_doc_id=active,
+        versions=[
+            V1VersionItem(
+                doc_id=str(v["doc_id"]),
+                group_id=str(v.get("group_id") or group_id),
+                version=int(v.get("version", 1) or 1),
+                status=str(v.get("status", "pending")),
+                is_active=bool(v.get("is_active", False)),
+                chunk_count=int(v.get("chunk_count", 0) or 0),
+                size_bytes=int(v.get("size_bytes", 0) or 0),
+                file_name=str(v.get("file_name", "")),
+                created_at=int(v.get("created_at", 0) or 0),
+                updated_at=int(v.get("updated_at", 0) or 0),
+                error=v.get("error"),
+                file_path=_resolve_stored_path(v.get("source_relpath")),
+            )
+            for v in versions
+        ],
+    )
+
+
+@router.post("/v1/docs/{doc_id}/activate", response_model=V1ActivateResponse)
+async def v1_activate_version(doc_id: str) -> V1ActivateResponse:
+    """把指定版本设为其逻辑资料的唯一生效版本（“指定用某个旧版本”入口，O(1) 翻标志位）。"""
+    storage = _get_storage()
+    doc = storage.get_doc(doc_id)
+    if doc is None:
+        raise HTTPException(404, f"doc not found: {doc_id}")
+    if not storage.activate_version(doc_id):
+        raise HTTPException(409, f"activate failed: {doc_id}")
+    group_id = str(doc.get("group_id") or doc["doc_id"])
+    return V1ActivateResponse(ok=True, group_id=group_id, active_doc_id=doc_id)
+
+
+@router.post("/v1/docs/{doc_id}/category", response_model=V1SetCategoryResponse)
+async def v1_set_category(doc_id: str, body: V1SetCategoryRequest) -> V1SetCategoryResponse:
+    """修改该资料（整组全部版本）的分类；同步刷新子块 category 以对齐按类检索。"""
+    storage = _get_storage()
+    doc = storage.get_doc(doc_id)
+    if doc is None:
+        raise HTTPException(404, f"doc not found: {doc_id}")
+    cat = str(body.category or "")
+    if not storage.set_category(doc_id, cat):
+        raise HTTPException(409, f"set category failed: {doc_id}")
+    group_id = str(doc.get("group_id") or doc["doc_id"])
+    return V1SetCategoryResponse(ok=True, group_id=group_id, category=cat)
 
 
 @router.post("/v1/search", response_model=V1SearchResponse)

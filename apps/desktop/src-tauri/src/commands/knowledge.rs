@@ -7,30 +7,66 @@ use crate::error::{AppError, AppResult};
 use serde_json::{json, Value};
 use std::time::Duration;
 
-#[tauri::command]
-pub async fn knowledge(args: Value) -> AppResult<Value> {
-    let op = args
-        .get("_op")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::Config("knowledge: missing _op field".into()))?;
-    let base_url = std::env::var("EAIDE_AGENT_BASE_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:8765".to_string());
-    let doc_id = args.get("doc_id").and_then(|v| v.as_str());
-
-    let (path, method, body): (String, &str, Option<Value>) = match op {
+/// 把 `_op` + args 解析为 (相对路径, HTTP 方法, 请求体)；抽成独立纯函数便于单测路径构造。
+fn resolve_request(
+    op: &str,
+    args: &Value,
+    doc_id: Option<&str>,
+) -> AppResult<(String, &'static str, Option<Value>)> {
+    let (path, method, body): (String, &'static str, Option<Value>) = match op {
         "kb_upload" => (
             "/knowledge/v1/docs/upload".to_string(),
             "POST",
             Some(json!({
                 "file_path": args.get("file_path").and_then(|v| v.as_str()).unwrap_or(""),
                 "category": args.get("category").and_then(|v| v.as_str()).unwrap_or(""),
+                // 置位时作为该资料的新版本（空串 → 后端按全新单版本处理）
+                "base_doc_id": args.get("base_doc_id").and_then(|v| v.as_str()).unwrap_or(""),
             })),
         ),
         "kb_list" => ("/knowledge/v1/docs".to_string(), "GET", None),
+        "kb_versions" => {
+            let id = doc_id.ok_or_else(|| {
+                AppError::Config("knowledge.kb_versions: missing doc_id".into())
+            })?;
+            (format!("/knowledge/v1/docs/{}/versions", id), "GET", None)
+        }
+        "kb_activate" => {
+            let id = doc_id.ok_or_else(|| {
+                AppError::Config("knowledge.kb_activate: missing doc_id".into())
+            })?;
+            (
+                format!("/knowledge/v1/docs/{}/activate", id),
+                "POST",
+                Some(json!({})),
+            )
+        }
+        "kb_set_category" => {
+            let id = doc_id.ok_or_else(|| {
+                AppError::Config("knowledge.kb_set_category: missing doc_id".into())
+            })?;
+            (
+                format!("/knowledge/v1/docs/{}/category", id),
+                "POST",
+                Some(json!({
+                    "category": args.get("category").and_then(|v| v.as_str()).unwrap_or(""),
+                })),
+            )
+        }
         "kb_delete" => {
             let id = doc_id
                 .ok_or_else(|| AppError::Config("knowledge.kb_delete: missing doc_id".into()))?;
-            (format!("/knowledge/v1/docs/{}", id), "DELETE", None)
+            // all_versions=true → 删该逻辑资料全部版本（拼查询串）
+            let all = args
+                .get("all_versions")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let p = if all {
+                format!("/knowledge/v1/docs/{}?all_versions=true", id)
+            } else {
+                format!("/knowledge/v1/docs/{}", id)
+            };
+            (p, "DELETE", None)
         }
         "kb_search" => (
             "/knowledge/v1/search".to_string(),
@@ -51,6 +87,19 @@ pub async fn knowledge(args: Value) -> AppResult<Value> {
         ),
         _ => return Err(AppError::Config(format!("knowledge: unknown _op: {}", op))),
     };
+    Ok((path, method, body))
+}
+
+#[tauri::command]
+pub async fn knowledge(args: Value) -> AppResult<Value> {
+    let op = args
+        .get("_op")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::Config("knowledge: missing _op field".into()))?;
+    let base_url = std::env::var("EAIDE_AGENT_BASE_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:8765".to_string());
+    let doc_id = args.get("doc_id").and_then(|v| v.as_str());
+    let (path, method, body) = resolve_request(op, &args, doc_id)?;
 
     let url = format!("{}{}", base_url, path);
     let client = reqwest::Client::builder()
@@ -99,5 +148,58 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(knowledge(json!({ "_op": "bogus" })));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_resolve_versions_and_activate_paths() {
+        let (p, m, _) = resolve_request("kb_versions", &json!({}), Some("abc")).unwrap();
+        assert_eq!(p, "/knowledge/v1/docs/abc/versions");
+        assert_eq!(m, "GET");
+        let (p2, m2, _) = resolve_request("kb_activate", &json!({}), Some("abc")).unwrap();
+        assert_eq!(p2, "/knowledge/v1/docs/abc/activate");
+        assert_eq!(m2, "POST");
+    }
+
+    #[test]
+    fn test_resolve_delete_all_versions_query() {
+        let (p, m, _) =
+            resolve_request("kb_delete", &json!({ "all_versions": true }), Some("abc")).unwrap();
+        assert_eq!(p, "/knowledge/v1/docs/abc?all_versions=true");
+        assert_eq!(m, "DELETE");
+        // 缺省/false → 不带查询串（只删该版本）
+        let (p2, _, _) = resolve_request("kb_delete", &json!({}), Some("abc")).unwrap();
+        assert_eq!(p2, "/knowledge/v1/docs/abc");
+    }
+
+    #[test]
+    fn test_resolve_upload_carries_base_doc_id() {
+        let (_, _, body) = resolve_request(
+            "kb_upload",
+            &json!({ "file_path": "/x.md", "category": "legal", "base_doc_id": "d1" }),
+            None,
+        )
+        .unwrap();
+        let b = body.unwrap();
+        assert_eq!(b["base_doc_id"], "d1");
+        assert_eq!(b["file_path"], "/x.md");
+        assert_eq!(b["category"], "legal");
+    }
+
+    #[test]
+    fn test_resolve_missing_doc_id_errors() {
+        assert!(resolve_request("kb_versions", &json!({}), None).is_err());
+        assert!(resolve_request("kb_activate", &json!({}), None).is_err());
+        assert!(resolve_request("kb_set_category", &json!({}), None).is_err());
+        assert!(resolve_request("kb_delete", &json!({}), None).is_err());
+    }
+
+    #[test]
+    fn test_resolve_set_category_path_and_body() {
+        let (p, m, body) =
+            resolve_request("kb_set_category", &json!({ "category": "legal" }), Some("abc"))
+                .unwrap();
+        assert_eq!(p, "/knowledge/v1/docs/abc/category");
+        assert_eq!(m, "POST");
+        assert_eq!(body.unwrap()["category"], "legal");
     }
 }

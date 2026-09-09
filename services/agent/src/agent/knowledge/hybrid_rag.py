@@ -191,8 +191,13 @@ class HybridRetriever:
         filter: dict[str, Any] | None = None,
         expand_parent: bool = True,
         llm: LLMFunc | None = None,
+        use_rerank: bool | None = None,
     ) -> list[HybridHit]:
-        """混合检索 Top-K。任何通道故障都 best-effort 降级，不抛出。"""
+        """混合检索 Top-K。任何通道故障都 best-effort 降级，不抛出。
+
+        use_rerank=False 时跳过 cross-encoder 重排（kb_refs 等 best-effort 场景），
+        保持 RRF 融合序，每次检索从 ~7s 降到 <200ms。
+        """
         t0 = time.perf_counter()
         query = (query or "").strip()
         if not query:
@@ -272,13 +277,15 @@ class HybridRetriever:
         )
 
         # --- 检索后补救：ONNX reranker 重排（不可用则保持 RRF 序）---
+        # use_rerank=False 时跳过（kb_refs 等对排序精度要求不高的场景）
+        rerank_enabled = settings.rag_rerank_enabled if use_rerank is None else use_rerank
         cand_seqs = [seq for seq, _ in candidates]
         chunks = self.storage.get_chunks_by_seq(cand_seqs)
         # 先取父块（rerank 用父块文本，信息更全）
         parent_map = self._load_parents(chunks) if expand_parent else {}
         score_by_seq = dict(candidates)
         t_rerank = time.perf_counter()
-        if settings.rag_rerank_enabled and cand_seqs:
+        if rerank_enabled and cand_seqs:
             reranker = self._get_reranker()
             if reranker is not None:
                 docs: list[str] = []
@@ -344,7 +351,7 @@ class HybridRetriever:
             len(bm25_rank),
             len(vec_rank),
             len(fused),
-            settings.rag_rerank_enabled,
+            rerank_enabled,
             len(results),
             (time.perf_counter() - t0) * 1000,
             rerank_elapsed * 1000,

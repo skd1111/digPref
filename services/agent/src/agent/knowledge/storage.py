@@ -44,6 +44,9 @@ CREATE TABLE IF NOT EXISTS docs (
     chunk_count    INTEGER NOT NULL DEFAULT 0,
     error          TEXT,
     metadata_json  TEXT NOT NULL DEFAULT '{}',
+    group_id       TEXT NOT NULL DEFAULT '',
+    version        INTEGER NOT NULL DEFAULT 1,
+    is_active      INTEGER NOT NULL DEFAULT 1,
     created_at     INTEGER NOT NULL,
     updated_at     INTEGER NOT NULL,
     deleted_at     INTEGER
@@ -108,6 +111,14 @@ _CHUNK_COLUMNS: tuple[tuple[str, str], ...] = (
     ("source_type", "TEXT NOT NULL DEFAULT 'markdown'"),
 )
 
+# docs 表版本化列（逻辑资料 group_id + 版本号 version + 是否生效 is_active）。
+# 旧库缺列时 ALTER 补，随后一次性回填：每条既有文档自成单版本 group（行为不变）。
+_DOCS_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("group_id", "TEXT NOT NULL DEFAULT ''"),
+    ("version", "INTEGER NOT NULL DEFAULT 1"),
+    ("is_active", "INTEGER NOT NULL DEFAULT 1"),
+)
+
 
 def _attr(obj: Any, name: str, default: Any = None) -> Any:
     """从对象直接属性或其 metadata dict 取值（兼容 KnowledgeChunk 与富分块对象）。"""
@@ -139,6 +150,13 @@ class KnowledgeStorage:
         except sqlite3.Error as exc:  # pragma: no cover - FTS5 缺失极罕见
             logger.warning("[KB storage] FTS5 unavailable: %s", exc)
         self._migrate_columns(conn)
+        self._migrate_docs_columns(conn)
+        # idx_docs_group 引用版本化新列，必须在 _migrate_docs_columns 补列之后建
+        # （旧库 docs 已存在时 CREATE TABLE IF NOT EXISTS 会跳过，列由 ALTER 补齐）。
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_docs_group ON docs (group_id, is_active)")
+        except sqlite3.Error as exc:  # pragma: no cover - 索引建失败不阻断读写
+            logger.debug("[KB storage] create idx_docs_group failed: %s", exc)
         return conn
 
     @staticmethod
@@ -150,6 +168,28 @@ class KnowledgeStorage:
                     conn.execute(f"ALTER TABLE chunks ADD COLUMN {name} {decl}")
                 except sqlite3.Error as exc:  # pragma: no cover
                     logger.debug("[KB storage] add column %s failed: %s", name, exc)
+
+    @staticmethod
+    def _migrate_docs_columns(conn: sqlite3.Connection) -> None:
+        """docs 表版本化列渐进迁移；首次补 group_id 后回填旧库（每条文档自成单版本组）。"""
+        existing = {r[1] for r in conn.execute("PRAGMA table_info(docs)")}
+        added_group = False
+        for name, decl in _DOCS_COLUMNS:
+            if name not in existing:
+                try:
+                    conn.execute(f"ALTER TABLE docs ADD COLUMN {name} {decl}")
+                    if name == "group_id":
+                        added_group = True
+                except sqlite3.Error as exc:  # pragma: no cover
+                    logger.debug("[KB storage] add docs column %s failed: %s", name, exc)
+        if added_group:
+            # 旧库回填：group_id 缺省=自身 doc_id，version=1，is_active=1（完全保持既有行为）
+            conn.execute(
+                "UPDATE docs SET group_id = doc_id WHERE group_id = '' OR group_id IS NULL"
+            )
+            conn.execute("UPDATE docs SET version = 1 WHERE version IS NULL")
+            conn.execute("UPDATE docs SET is_active = 1 WHERE is_active IS NULL")
+            conn.commit()
 
     # ---- 迁移健康度（模型/维度漂移检测）--------------------------------------
 
@@ -212,19 +252,24 @@ class KnowledgeStorage:
         size_bytes: int = 0,
         status: str = "pending",
         metadata: dict[str, Any] | None = None,
+        group_id: str | None = None,
+        version: int = 1,
+        is_active: bool | int = 1,
     ) -> None:
         now = int(time.time())
+        gid = str(group_id or doc_id)
         with self._connect() as conn:
             conn.execute(
                 "INSERT INTO docs (doc_id, title, file_name, source_type, source_relpath,"
                 " category, size_bytes, status, chunk_count, error, metadata_json,"
-                " created_at, updated_at, deleted_at) VALUES (?,?,?,?,?,?,?,?,0,NULL,?,?,?,NULL)"
+                " group_id, version, is_active, created_at, updated_at, deleted_at)"
+                " VALUES (?,?,?,?,?,?,?,?,0,NULL,?,?,?,?,?,?,NULL)"
                 " ON CONFLICT(doc_id) DO UPDATE SET title=excluded.title,"
                 " file_name=excluded.file_name, source_type=excluded.source_type,"
                 " source_relpath=excluded.source_relpath, category=excluded.category,"
                 " size_bytes=excluded.size_bytes, status=excluded.status,"
-                " metadata_json=excluded.metadata_json, updated_at=excluded.updated_at,"
-                " deleted_at=NULL",
+                " metadata_json=excluded.metadata_json, group_id=excluded.group_id,"
+                " version=excluded.version, updated_at=excluded.updated_at, deleted_at=NULL",
                 (
                     doc_id,
                     title,
@@ -235,6 +280,9 @@ class KnowledgeStorage:
                     int(size_bytes),
                     status,
                     json.dumps(metadata or {}, ensure_ascii=False),
+                    gid,
+                    int(version),
+                    1 if is_active else 0,
                     now,
                     now,
                 ),
@@ -285,6 +333,9 @@ class KnowledgeStorage:
             "chunk_count": row["chunk_count"],
             "error": row["error"],
             "metadata": json.loads(row["metadata_json"] or "{}"),
+            "group_id": row["group_id"] or row["doc_id"],
+            "version": int(row["version"] or 1),
+            "is_active": bool(row["is_active"]),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "deleted_at": row["deleted_at"],
@@ -321,29 +372,48 @@ class KnowledgeStorage:
         offset: int = 0,
         *,
         include_deleted: bool = False,
+        active_only: bool = True,
     ) -> list[dict[str, Any]]:
-        sql = "SELECT * FROM docs"
+        """列出文档；默认每个逻辑资料只返回其生效版本（active_only），并附 version_count。"""
         clauses: list[str] = []
         params: list[Any] = []
         if not include_deleted:
-            clauses.append("deleted_at IS NULL")
+            clauses.append("d.deleted_at IS NULL")
+        if active_only:
+            clauses.append("d.is_active = 1")
         if source_type:
-            clauses.append("source_type = ?")
+            clauses.append("d.source_type = ?")
             params.append(source_type)
-        if clauses:
-            sql += " WHERE " + " AND ".join(clauses)
-        sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = (
+            "SELECT d.*, (SELECT COUNT(*) FROM docs d2 WHERE d2.group_id = d.group_id"
+            " AND d2.deleted_at IS NULL) AS version_count"
+            f" FROM docs d{where} ORDER BY d.created_at DESC LIMIT ? OFFSET ?"
+        )
         params.extend([int(limit), int(offset)])
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
-        return [self._doc_from_row(r) for r in rows]
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = self._doc_from_row(r)
+            d["version_count"] = int(r["version_count"] or 1)
+            out.append(d)
+        return out
 
-    def count_docs(self, source_type: str | None = None, *, include_deleted: bool = False) -> int:
+    def count_docs(
+        self,
+        source_type: str | None = None,
+        *,
+        include_deleted: bool = False,
+        active_only: bool = True,
+    ) -> int:
         sql = "SELECT COUNT(*) FROM docs"
         clauses: list[str] = []
         params: list[Any] = []
         if not include_deleted:
             clauses.append("deleted_at IS NULL")
+        if active_only:
+            clauses.append("is_active = 1")
         if source_type:
             clauses.append("source_type = ?")
             params.append(source_type)
@@ -382,8 +452,46 @@ class KnowledgeStorage:
             conn.commit()
             return (cur.rowcount or 0) > 0
 
-    def hard_delete_doc(self, doc_id: str, *, delete_file: bool = False) -> bool:
-        """级联硬删除：chunks(+FTS+vec) → parents → docs 行（可选删复制文件）。"""
+    def hard_delete_doc(
+        self, doc_id: str, *, delete_file: bool = False, all_versions: bool = False
+    ) -> bool:
+        """级联硬删除：chunks(+FTS+vec) → parents → docs 行（可选删复制文件）。
+
+        all_versions=True → 删同一逻辑资料(group)的全部版本；否则只删该版本，
+        若删的是生效版本，删后自动把同组最新剩余版本设为生效（group 删空则无生效版本）。
+        """
+        gid = self.group_id_of(doc_id)
+        if all_versions:
+            with self._connect() as conn:
+                ids = [
+                    str(r[0])
+                    for r in conn.execute(
+                        "SELECT doc_id FROM docs WHERE group_id = ?", (gid,)
+                    ).fetchall()
+                ]
+            deleted = False
+            for did in ids:
+                deleted = self._hard_delete_one(did, delete_file=delete_file) or deleted
+            return deleted
+
+        was_active = False
+        with self._connect() as conn:
+            row = conn.execute("SELECT is_active FROM docs WHERE doc_id = ?", (doc_id,)).fetchone()
+            was_active = bool(row[0]) if row is not None else False
+        deleted = self._hard_delete_one(doc_id, delete_file=delete_file)
+        if deleted and was_active:
+            with self._connect() as conn:
+                nxt = conn.execute(
+                    "SELECT doc_id FROM docs WHERE group_id = ? AND deleted_at IS NULL"
+                    " ORDER BY version DESC LIMIT 1",
+                    (gid,),
+                ).fetchone()
+            if nxt is not None:
+                self.activate_version(str(nxt[0]))
+        return deleted
+
+    def _hard_delete_one(self, doc_id: str, *, delete_file: bool = False) -> bool:
+        """硬删单个版本文档：chunks(+FTS+vec) → parents → docs 行（可选删复制文件）。"""
         self.delete_chunks_by_doc(doc_id)
         with self._connect() as conn:
             row = conn.execute(
@@ -402,6 +510,90 @@ class KnowledgeStorage:
             except OSError as exc:
                 logger.warning("[KB storage] delete copied file failed: %s", exc)
         return (cur.rowcount or 0) > 0
+
+    # ---- 版本管理（逻辑资料 group → 多版本；检索只命中生效版本）-------------
+
+    def group_id_of(self, doc_id: str) -> str:
+        """该文档所属逻辑资料 group_id；无记录/未回填时以自身 doc_id 为组。"""
+        with self._connect() as conn:
+            row = conn.execute("SELECT group_id FROM docs WHERE doc_id = ?", (doc_id,)).fetchone()
+        if row is not None and row[0]:
+            return str(row[0])
+        return doc_id
+
+    def next_version(self, group_id: str) -> int:
+        """组内下一个版本号（max(version)+1；含已软删版本以避免号段回退复用）。"""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(version), 0) + 1 FROM docs WHERE group_id = ?", (group_id,)
+            ).fetchone()
+        return int(row[0]) if row is not None else 1
+
+    def version_count(self, group_id: str) -> int:
+        """组内未删版本数。"""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM docs WHERE group_id = ? AND deleted_at IS NULL", (group_id,)
+            ).fetchone()
+        return int(row[0]) if row is not None else 0
+
+    def list_group_versions(self, group_id: str) -> list[dict[str, Any]]:
+        """组内全部未删版本（version 倒序）；供前端「版本历史」展示。"""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM docs WHERE group_id = ? AND deleted_at IS NULL"
+                " ORDER BY version DESC",
+                (group_id,),
+            ).fetchall()
+        return [self._doc_from_row(r) for r in rows]
+
+    def activate_version(self, doc_id: str) -> bool:
+        """把指定版本设为其 group 的唯一生效版本（同组其余未删版本置 is_active=0）。
+
+        仅翻标志位：所有版本的分块/向量常驻库中，切换生效版本 O(1)、无需重建索引。
+        """
+        now = int(time.time())
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT group_id FROM docs WHERE doc_id = ? AND deleted_at IS NULL", (doc_id,)
+            ).fetchone()
+            if row is None:
+                return False
+            gid = str(row[0] or doc_id)
+            conn.execute(
+                "UPDATE docs SET is_active = 0, updated_at = ?"
+                " WHERE group_id = ? AND doc_id != ? AND deleted_at IS NULL",
+                (now, gid, doc_id),
+            )
+            cur = conn.execute(
+                "UPDATE docs SET is_active = 1, updated_at = ?"
+                " WHERE doc_id = ? AND deleted_at IS NULL",
+                (now, doc_id),
+            )
+            conn.commit()
+            return (cur.rowcount or 0) > 0
+
+    def set_category(self, doc_id: str, category: str) -> bool:
+        """修改某文档所属逻辑资料（整组全部版本）的分类，同步刷新其子块 category。
+
+        分类是「一份资料」的属性，故按 group 统一更新（含各版本 docs 行与其 chunks），
+        切换生效版本后分类保持一致；chunks.category 供检索按类过滤。
+        """
+        gid = self.group_id_of(doc_id)
+        cat = str(category or "")
+        now = int(time.time())
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE docs SET category = ?, updated_at = ? WHERE group_id = ?",
+                (cat, now, gid),
+            )
+            conn.execute(
+                "UPDATE chunks SET category = ? WHERE doc_id IN"
+                " (SELECT doc_id FROM docs WHERE group_id = ?)",
+                (cat, gid),
+            )
+            conn.commit()
+            return (cur.rowcount or 0) > 0
 
     # ---- 父块 ---------------------------------------------------------------
 
@@ -592,8 +784,10 @@ class KnowledgeStorage:
         params: list[Any] = []
         cat = filter.get("category")
         if cat:
-            clauses.append(f"{alias}.category = ?")
-            params.append(str(cat))
+            # 标量→等值；列表→IN(...)（用于「某分类 + 未分类('')通用」一并纳入）
+            cat_vals = [str(v) for v in (cat if isinstance(cat, (list, tuple)) else [cat])]
+            clauses.append(f"{alias}.category IN ({','.join('?' * len(cat_vals))})")
+            params.extend(cat_vals)
         st = filter.get("source_type")
         if st:
             vals = list(st) if isinstance(st, (list, tuple)) else [st]
@@ -612,6 +806,14 @@ class KnowledgeStorage:
     _NOT_DELETED = (
         " AND NOT EXISTS (SELECT 1 FROM docs d WHERE d.doc_id = c.doc_id"
         " AND d.deleted_at IS NOT NULL)"
+    )
+
+    # 检索可命中：在排除软删的基础上再排除「非生效版本」(is_active=0)。
+    # 所有版本的分块/向量常驻库中，但只有生效版本参与召回；切换生效版本仅翻标志位。
+    # 注：reindex 走 _NOT_DELETED（覆盖全部版本重嵌入），保证切到任意旧版本向量都可用。
+    _RETRIEVABLE = (
+        " AND NOT EXISTS (SELECT 1 FROM docs d WHERE d.doc_id = c.doc_id"
+        " AND (d.deleted_at IS NOT NULL OR d.is_active = 0))"
     )
 
     def search_by_vector(
@@ -639,7 +841,7 @@ class KnowledgeStorage:
             rows = conn.execute(
                 f"SELECT c.*, {cosine} AS sim FROM chunks c "
                 f"JOIN {_CHUNK_VEC_TABLE} v ON v.rowid = c.seq "
-                f"WHERE {cosine} >= ?{self._NOT_DELETED}{and_clause} "
+                f"WHERE {cosine} >= ?{self._RETRIEVABLE}{and_clause} "
                 f"ORDER BY sim DESC LIMIT ?",
                 (blob, blob, float(similarity_threshold), *params, int(top_k)),
             ).fetchall()
@@ -670,7 +872,7 @@ class KnowledgeStorage:
                 rows = conn.execute(
                     f"SELECT c.*, bm25({_FTS_TABLE}) AS rank FROM {_FTS_TABLE} "
                     f"JOIN chunks c ON c.seq = {_FTS_TABLE}.rowid "
-                    f"WHERE {_FTS_TABLE} MATCH ?{self._NOT_DELETED}{and_clause} "
+                    f"WHERE {_FTS_TABLE} MATCH ?{self._RETRIEVABLE}{and_clause} "
                     f"ORDER BY rank ASC LIMIT ?",
                     (match, *params, int(limit)),
                 ).fetchall()
@@ -704,7 +906,7 @@ class KnowledgeStorage:
         and_clause, params = self._filter_and(filt)
         with self._connect() as conn:
             rows = conn.execute(
-                f"SELECT c.* FROM chunks c WHERE c.content LIKE ?{self._NOT_DELETED}{and_clause} "
+                f"SELECT c.* FROM chunks c WHERE c.content LIKE ?{self._RETRIEVABLE}{and_clause} "
                 f"ORDER BY c.seq LIMIT ?",
                 (f"%{text}%", *params, int(limit)),
             ).fetchall()
@@ -757,11 +959,12 @@ class KnowledgeStorage:
         with self._connect() as conn:
             total_chunks = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
             total_docs = conn.execute(
-                "SELECT COUNT(*) FROM docs WHERE deleted_at IS NULL"
+                "SELECT COUNT(*) FROM docs WHERE deleted_at IS NULL AND is_active = 1"
             ).fetchone()[0]
             by_source: dict[str, int] = {}
             for r in conn.execute(
-                "SELECT source_type, COUNT(*) FROM docs WHERE deleted_at IS NULL GROUP BY source_type"
+                "SELECT source_type, COUNT(*) FROM docs WHERE deleted_at IS NULL"
+                " AND is_active = 1 GROUP BY source_type"
             ).fetchall():
                 by_source[str(r[0])] = int(r[1])
         return KnowledgeStats(
@@ -781,7 +984,7 @@ class KnowledgeStorage:
         """库内是否有可检索子块（排除软删文档）——供检索前快速短路。"""
         with self._connect() as conn:
             row = conn.execute(
-                f"SELECT 1 FROM chunks c WHERE 1=1{self._NOT_DELETED} LIMIT 1"
+                f"SELECT 1 FROM chunks c WHERE 1=1{self._RETRIEVABLE} LIMIT 1"
             ).fetchone()
         return row is not None
 

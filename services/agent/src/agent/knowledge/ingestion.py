@@ -120,8 +120,16 @@ class KnowledgeIngestion:
         doc_id: str | None = None,
         copy: bool = True,
         llm: Any | None = None,
+        group_id: str | None = None,
+        version: int = 1,
+        is_active: bool = True,
     ) -> dict[str, Any]:
-        """导入单个文件；返回文档摘要 dict。失败置 status=failed 并抛 IngestionError。"""
+        """导入单个文件；返回文档摘要 dict。失败置 status=failed 并抛 IngestionError。
+
+        版本化：group_id/version 标识该文件在「逻辑资料」中的版本；新版本传
+        is_active=False 建档（索引期间旧生效版本仍可检索），就绪后由 activate_version
+        原子切换为唯一生效版本（无空窗、无需重建索引）。
+        """
         src = Path(path)
         if not src.exists():
             raise IngestionError(f"文件不存在: {src}")
@@ -164,6 +172,9 @@ class KnowledgeIngestion:
             size_bytes=size,
             status="indexing",
             metadata=meta,
+            group_id=group_id,
+            version=version,
+            is_active=is_active,
         )
         try:
             from agent.doc_review.parser import parse_document
@@ -195,12 +206,24 @@ class KnowledgeIngestion:
                 doc_id, children, parent_map, prefix_by_parent, category, suffix.lstrip(".")
             )
             self.storage.set_doc_status(doc_id, "ready", chunk_count=len(children))
+            # 新版本安全切换：索引就绪后才把该版本设为生效（就绪前旧版本仍可检索，无空窗）；
+            # 全新单版本上传时为幂等（自身即唯一生效版本）。
+            try:
+                self.storage.activate_version(doc_id)
+            except Exception:  # pragma: no cover - 切换失败不阻断入库结果
+                logger.debug("activate_version failed doc_id=%s", doc_id, exc_info=True)
             try:
                 from agent.audit.store import audit
 
                 await audit(
                     "knowledge.doc_imported",
-                    {"doc_id": doc_id, "file_name": src.name, "chunks": len(children)},
+                    {
+                        "doc_id": doc_id,
+                        "file_name": src.name,
+                        "chunks": len(children),
+                        "group_id": group_id or doc_id,
+                        "version": int(version),
+                    },
                 )
             except Exception:
                 logger.debug("knowledge audit write skipped", exc_info=True)

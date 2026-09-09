@@ -3,6 +3,38 @@
 > 本文件是项目唯一的版本变更记录台账。每??Phase 交付或重大变更时必须在此追加记录??
 ---
 
+## 2026-09-09
+
+### v2.137 — 知识库按分类检索 P1（文档审核 risk_type→分类软优先 + 未分类通用 + 命中不足放宽兜底）
+
+- **背景**：知识库分类此前只是「存储+展示」标签，三条自动 RAG 链路（聊天/文档审核/运营问答）检索时都不带分类，跨类素材混召回。参考 Dify（元数据过滤三模式）、LlamaIndex（MetadataFilters 预过滤）与生产通用「预过滤 + 适量放宽」实践，先做价值最高、映射最干净的文档审核链路。
+- **改动**：
+  - **未分类=通用**：[storage.py](../services/agent/src/agent/knowledge/storage.py) `_filter_and` 的 category 过滤支持列表 → `IN (...)`，检索时传 `[映射类, '']` 把「同类 + 未分类」一并纳入，未归类素材不会因按类检索而消失；标量 category 仍精确等值（向后兼容）。
+  - **命中不足放宽兜底**：[retriever.py](../services/agent/src/agent/knowledge/retriever.py) `retrieve` 新增 `filter_relax_below`——带分类过滤但命中数低于阈值时，去掉分类再检索补齐到 top_k（同类命中仍排在前），杜绝按类漏召回。
+  - **文档审核 risk_type→分类映射**：[doc_review/api.py](../services/agent/src/agent/doc_review/api.py) 新增 `_RISK_TYPE_TO_KB_CATEGORY`（financial→finance，legal/compliance/data_security 同名），`_attach_kb_refs` 按每条 finding 的 risk_type 传 `filter={category:[映射类,'']} + filter_relax_below`；无 risk_type/未映射/开关关闭时调用与既有完全一致（不传 filter）。开关 `doc_review_kb_category_filter_enabled`（默认开，[config.py](../services/agent/src/agent/config.py)）。
+- **影响**：文档审核的「知识库依据」按风险类型软优先召回同类+未分类素材，命中不足自动放宽到全库——精准度提升且零召回损失。聊天/运营问答链路不变（P2/P3 再议）。默认开启，可经设置关闭。Agent 侧改动需重启/重新打包生效。
+- **验证**：新增 [test_knowledge_category_filter.py](../services/agent/tests/test_knowledge_category_filter.py) 9 例（列表过滤含未分类/标量兼容/放宽兜底/risk_type 映射/开关关闭不传 filter）；既有 kb_refs 3 例 + 知识库 60 例回归全绿；`ruff check`/`ruff format --check`/`mypy --strict`（knowledge 模块）通过。
+
+---
+
+## 2026-09-08
+
+### v2.136 — 知识库文件版本管理（逻辑资料 group → 多版本 + 全局唯一生效版本）+ 分类可编辑
+
+- **背景**：知识库上传的文件此前没有版本概念——更新一份制度/法规只能删掉重传，历史版本无法留存；也无法「指定用某个旧版本」作为检索依据。用户需要在保留历史版本的同时，既能一键更新到新版，又能随时切回任意旧版。
+- **改动**：
+  - **数据模型**：[storage.py](../services/agent/src/agent/knowledge/storage.py) `docs` 表新增 `group_id`（逻辑资料）/`version`（版本号）/`is_active`（是否生效）三列 + `idx_docs_group` 索引；渐进式 `ALTER` 迁移并回填旧库（每条既有文档自成单版本组，`group_id=doc_id`、`version=1`、`is_active=1`，行为零变化）。新增 `group_id_of`/`next_version`/`version_count`/`list_group_versions`/`activate_version`，`hard_delete_doc` 支持 `all_versions` 整组删除 + 删生效版本后自动切最新剩余。
+  - **检索只命中生效版本（关键）**：新增 `_RETRIEVABLE` 子句（在排除软删基础上再排除 `is_active=0`），应用于 `search_by_vector`/`search_by_fts`/`search_by_text`/`has_chunks`。因过滤下沉到 storage 层，聊天 `rag_retrieve`、文档审核 `_attach_kb_refs`、运营问答 `case_ask`、`/v1/search` 四处调用点**零改动**自动只召回生效版本；`iter_chunks_for_reindex` 仍覆盖全部版本（漂移重建后切到任意旧版本向量都可用）。所有版本的分块/向量常驻库中，切换生效版本仅翻标志位——**O(1)、无需重建索引**。
+  - **导入编排**：[ingestion.py](../services/agent/src/agent/knowledge/ingestion.py) `ingest_file` 增 `group_id`/`version`/`is_active`；新版本以 `is_active=0` 建档（索引期间旧版本仍可检索、无空窗），就绪后 `activate_version` 原子切换；索引失败停在 `failed/非生效`，旧版本不受影响。
+  - **API**：[api.py](../services/agent/src/agent/knowledge/api.py) `V1UploadRequest` 增 `base_doc_id`（置位即作为该资料新版本）；`V1DocSummary` 增 `group_id`/`version`/`is_active`/`version_count`；新增 `GET /v1/docs/{id}/versions`（版本历史）与 `POST /v1/docs/{id}/activate`（指定用某版本）；`DELETE /v1/docs/{id}` 增 `all_versions` 查询参。
+  - **IPC**：[knowledge.rs](../apps/desktop/src-tauri/src/commands/knowledge.rs) `_op` 解析抽成纯函数 `resolve_request` 便于单测，新增 `kb_versions`/`kb_activate`，`kb_upload` 带 `base_doc_id`、`kb_delete` 带 `all_versions`；[invoke.ts](../apps/desktop/src/ipc/invoke.ts) 镜像新增 `KbVersionItem`/`kbVersions`/`kbActivate` 及 `kbUpload`/`kbDelete` 新参。
+  - **前端**：[KbPanel.tsx](../apps/desktop/src/components/doc-review/KbPanel.tsx) 列表一行一份逻辑资料，多版本显示 `v{n}·共N版` 徽标；每行新增「更新版本」「版本历史」；版本历史子表列出全部版本（生效/已归档标记 + 状态/分块/大小/时间），支持「设为生效」「预览」「删除此版本」；主行「删除」改为删整份资料（含全部版本）；新版本索引期间单独轮询、就绪生效后自动刷新。
+  - **分类可编辑**：[storage.py](../services/agent/src/agent/knowledge/storage.py) 新增 `set_category`（按 group 统一更新全部版本的 `docs.category` 与 `chunks.category`，切换生效版本后分类一致、并对齐按类检索）；[api.py](../services/agent/src/agent/knowledge/api.py) 新增 `POST /v1/docs/{id}/category`；[knowledge.rs](../apps/desktop/src-tauri/src/commands/knowledge.rs) 增 `kb_set_category`、[invoke.ts](../apps/desktop/src/ipc/invoke.ts) 增 `kbSetCategory`；[KbPanel.tsx](../apps/desktop/src/components/doc-review/KbPanel.tsx) 分类列由静态文本改为下拉，随时改分类（上传时选默认分类的能力本就已有）。
+- **影响**：知识库支持一份资料多版本共存——更新即新增版本并自动生效，旧版本完整留存可随时切回（瞬时、无需重建索引）；聊天与文档审核始终只引用当前生效版本，避免新旧混引。每份资料的分类可在列表内直接修改（作用于全部版本）。旧 `kb.db` 打开即自动迁移，复制即迁移红线不变。Agent 侧改动需重启/重新打包在生产客户端生效。
+- **验证**：后端新增 [test_knowledge_versions.py](../services/agent/tests/test_knowledge_versions.py) 23 例（迁移回填/切换生效/三通道检索过滤/reindex 覆盖全版本/删除自动切换/分类整组更新/API 端点），连同既有 `test_knowledge_hybrid_rag.py`+`test_vector_store.py` 共 69 例全绿；`ruff check`/`mypy --strict` 通过。前端 [kbPanel.test.tsx](../apps/desktop/tests/kbPanel.test.tsx) 10 例（含版本徽标/更新版本/设为生效/删除单版本/改分类）全绿、`tsc --noEmit`/`eslint` 无错。Rust `cargo test --lib commands::knowledge` 7 例通过（含 `resolve_request` 路径/`all_versions` 查询串/`base_doc_id`/`category` 构造）。
+
+---
+
 ## 2026-09-06
 
 ### v2.135 — 知识库召回接入编排决策器 + 抑制「来源缺失」式错误追问 + 文档审核 OCR 异步化/耗时统计 + thinking 指示器 + 构建脚本整理（bump 0.1.5）

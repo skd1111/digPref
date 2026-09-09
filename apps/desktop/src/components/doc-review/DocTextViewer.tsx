@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   useDocReviewStore,
   DOC_REVIEW_RISK_COLORS,
@@ -14,6 +14,44 @@ function scrollToFindingCard(findingId: string): void {
   void (el as HTMLElement).offsetWidth; // 强制重排，保证连续点击时动画重播
   el.classList.add("finding-card-flash");
   window.setTimeout(() => el.classList.remove("finding-card-flash"), 2200);
+}
+
+import type {
+  DocFinding,
+  DocPage,
+  DocPosition,
+  DocRiskLevel,
+} from "@eaide/shared-protocol";
+
+/** 根据 position 计算行号（页内行号，基于 block 文本换行符） */
+export function computeLineNumber(
+  pages: DocPage[],
+  positions: DocPosition[],
+): { pageNo: number; line: number }[] {
+  if (!positions.length) return [];
+  const results: { pageNo: number; line: number }[] = [];
+  for (const pos of positions) {
+    const page = pages.find((p) => p.page_no === pos.page_no);
+    if (!page) continue;
+    const block = page.blocks.find((b) => b.block_id === pos.block_id);
+    if (!block) continue;
+    const offsetInBlock = pos.start - block.start;
+    const textBefore = block.text.slice(0, Math.max(0, offsetInBlock));
+    const line = (textBefore.match(/\n/g) || []).length + 1;
+    results.push({ pageNo: pos.page_no, line });
+  }
+  return results;
+}
+
+/** 跳转到指定块并闪烁强调 */
+export function jumpToBlock(blockId: string): void {
+  const el = document.getElementById(`block-${blockId}`);
+  if (!el) return;
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  el.classList.remove("finding-mark-flash");
+  void (el as HTMLElement).offsetWidth;
+  el.classList.add("finding-mark-flash");
+  window.setTimeout(() => el.classList.remove("finding-mark-flash"), 2200);
 }
 
 const ANALYZING_STAGE_LABELS: Record<string, string> = {
@@ -87,6 +125,206 @@ function AnalyzingOverlay({
           />
         </div>
       </div>
+    </div>
+  );
+}
+
+/** 风险维度悬浮导航条：sticky 置顶 + 悬浮展开每条风险预览 + 点击定位 */
+function RiskBar({
+  findings,
+}: {
+  findings: DocFinding[];
+}): JSX.Element | null {
+  if (findings.length === 0) return null;
+
+  const LEVELS: { key: DocRiskLevel; label: string; color: string }[] = [
+    { key: "critical", label: "严重", color: "#b3261e" },
+    { key: "high", label: "高危", color: "#cd3131" },
+    { key: "medium", label: "中危", color: "#b25c1a" },
+    { key: "low", label: "低危", color: "#059669" },
+  ];
+
+  const pages = useDocReviewStore((s) => s.detail?.pages ?? []);
+  const selectFinding = useDocReviewStore((s) => s.selectFinding);
+
+  const byLevel = useMemo(() => {
+    const m: Record<string, DocFinding[]> = {};
+    for (const f of findings) {
+      (m[f.risk_level] ??= []).push(f);
+    }
+    return m;
+  }, [findings]);
+
+  return (
+    <div
+      className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b px-4 py-2"
+      style={{
+        backgroundColor: "#ffffff",
+        borderColor: "#e0e0e0",
+        boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+      }}
+    >
+      <span className="text-2xs font-semibold" style={{ color: "#616161" }}>
+        风险概览
+      </span>
+      {LEVELS.filter((l) => (byLevel[l.key]?.length ?? 0) > 0).map((lv) => (
+        <RiskBadge
+          key={lv.key}
+          label={lv.label}
+          color={lv.color}
+          findings={byLevel[lv.key] ?? []}
+          pages={pages}
+          selectFinding={selectFinding}
+        />
+      ))}
+      <span className="ml-auto text-2xs" style={{ color: "#9e9e9e" }}>
+        共 {findings.length} 条
+      </span>
+    </div>
+  );
+}
+
+/** 单个风险维度徽章 + 悬浮预览列表 */
+function RiskBadge({
+  label,
+  color,
+  findings,
+  pages,
+  selectFinding,
+}: {
+  label: string;
+  color: string;
+  findings: DocFinding[];
+  pages: DocPage[];
+  selectFinding: (id: string | null) => void;
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const [popupPos, setPopupPos] = useState<{ left: number; top: number } | null>(
+    null,
+  );
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const badgeRef = useRef<HTMLButtonElement>(null);
+
+  const startClose = (): void => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setOpen(false), 220);
+  };
+  const cancelClose = (): void => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  };
+
+  useEffect(
+    () => () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    },
+    [],
+  );
+
+  const onEnter = (): void => {
+    cancelClose();
+    if (badgeRef.current) {
+      const rect = badgeRef.current.getBoundingClientRect();
+      const left = Math.min(rect.left, window.innerWidth - 300);
+      setPopupPos({ left, top: rect.bottom + 4 });
+    }
+    setOpen(true);
+  };
+
+  const onItemClick = (f: DocFinding): void => {
+    setOpen(false);
+    scrollToFindingCard(f.finding_id);
+    if (f.positions.length > 0) {
+      jumpToBlock(f.positions[0].block_id);
+    }
+    selectFinding(f.finding_id);
+  };
+
+  return (
+    <div onMouseEnter={onEnter} onMouseLeave={startClose}>
+      <button
+        ref={badgeRef}
+        type="button"
+        className="flex cursor-pointer items-center gap-1 rounded px-2.5 py-1 text-2xs font-bold transition-shadow hover:shadow-sm"
+        style={{ backgroundColor: `${color}1a`, color }}
+      >
+        {label}
+        <span
+          className="flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold"
+          style={{ backgroundColor: color, color: "#fff" }}
+        >
+          {findings.length}
+        </span>
+      </button>
+
+      {open && popupPos && (
+        <div
+          onMouseEnter={cancelClose}
+          onMouseLeave={startClose}
+          className="fixed z-50 max-h-[320px] w-[280px] overflow-auto rounded-md border shadow-xl"
+          style={{
+            left: popupPos.left,
+            top: popupPos.top,
+            backgroundColor: "#ffffff",
+            borderColor: "#d4d4d4",
+          }}
+        >
+          <div
+            className="sticky top-0 border-b px-3 py-1.5 text-2xs font-semibold"
+            style={{
+              backgroundColor: "#fafafa",
+              borderColor: "#e8e8e8",
+              color,
+            }}
+          >
+            {label}风险 · {findings.length} 条
+          </div>
+          {findings.map((f) => {
+            const locs = computeLineNumber(pages, f.positions);
+            const locStr =
+              locs.length > 0
+                ? `P${locs[0].pageNo} L${locs[0].line}`
+                : "";
+            const preview =
+              f.title.length > 22
+                ? `${f.title.slice(0, 22)}…`
+                : f.title;
+            return (
+              <div
+                key={f.finding_id}
+                role="button"
+                tabIndex={0}
+                onClick={() => onItemClick(f)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") onItemClick(f);
+                }}
+                className="cursor-pointer border-b px-3 py-2 last:border-b-0 hover:bg-[#f5f5f5]"
+                style={{ borderColor: "#f0f0f0" }}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span
+                    className="flex-1 truncate text-2xs"
+                    style={{ color: "#1f1f1f" }}
+                    title={f.title}
+                  >
+                    {preview}
+                  </span>
+                  {locStr && (
+                    <span
+                      className="shrink-0 font-mono text-[10px]"
+                      style={{ color: "#9e9e9e" }}
+                    >
+                      {locStr}
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -313,17 +551,7 @@ export function DocTextViewer(): JSX.Element {
       >
         <AnalysisErrorBanner />
         <AnalysisDoneDialog />
-        <div className="mb-3 flex flex-wrap gap-2">
-          {(["critical", "high", "medium", "low"] as const).map((lv) => (
-            <span
-              key={lv}
-              className="rounded px-2 py-0.5 text-2xs"
-              style={{ backgroundColor: DOC_REVIEW_RISK_COLORS[lv].bg }}
-            >
-              {lv}
-            </span>
-          ))}
-        </div>
+        <RiskBar findings={findings} />
         {detail.pages.map((page) => (
           <section key={page.page_no} className="mb-6">
             <h4
@@ -337,6 +565,7 @@ export function DocTextViewer(): JSX.Element {
               return (
                 <p
                   key={block.block_id}
+                  id={`block-${block.block_id}`}
                   className="mb-3 whitespace-pre-line"
                   style={{ lineHeight: 1.8 }}
                 >

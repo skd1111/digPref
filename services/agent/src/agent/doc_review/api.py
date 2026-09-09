@@ -38,13 +38,27 @@ _run_progress: dict[str, float] = {}
 # 分析耗时明细（run_id → dict）：内存态，done 时填充；Agent 重启归零
 _run_timings: dict[str, dict[str, float]] = {}
 
+# finding.risk_type → 知识库分类（KB 分类用 finance，RiskType 用 financial，故需显式映射；
+# 其余同名）。检索时把「映射类 + 未分类('')」一并纳入——未分类视为通用、始终可召回。
+_RISK_TYPE_TO_KB_CATEGORY: dict[str, str] = {
+    "financial": "finance",
+    "legal": "legal",
+    "compliance": "compliance",
+    "data_security": "data_security",
+}
 
-async def _attach_kb_refs(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+
+async def _attach_kb_refs(
+    findings: list[dict[str, Any]], *, use_rerank: bool = False
+) -> list[dict[str, Any]]:
     """为每条 finding 附加「知识库依据」kb_refs —— 来源为**用户上传的本地 RAG 知识库**。
 
     对每条 finding 用其 title/description/evidence_text 做一次混合检索，命中转成
     kb_refs（source/heading/excerpt/matched_terms/file_path），file_path 指回上传源文件
     供前端点击预览。未启用 RAG / 库空 / 检索异常 → kb_refs=[]（best-effort，不阻断）。
+
+    use_rerank=False（默认）跳过 cross-encoder 重排，每次检索从 ~7s 降到 <200ms；
+    kb_refs 只是前端展示参考，不需要 reranker 级别的排序精度。
     """
     for item in findings:
         item.setdefault("kb_refs", [])
@@ -69,9 +83,18 @@ async def _attach_kb_refs(findings: list[dict[str, Any]]) -> list[dict[str, Any]
             ).strip()
             if not query:
                 return 0
+            # 按 finding 的 risk_type 映射到 KB 分类做软优先检索：同类 + 未分类('')通用一并
+            # 纳入，命中不足 top_k 时放宽到全库补齐（预过滤+放宽，不因分类漏召回）。
+            # 无 risk_type / 未映射 / 开关关闭 → 不传 filter，调用与既有行为完全一致。
+            extra: dict[str, Any] = {}
+            if settings.doc_review_kb_category_filter_enabled:
+                cat = _RISK_TYPE_TO_KB_CATEGORY.get(str(item.get("risk_type", "") or ""))
+                if cat:
+                    extra["filter"] = {"category": [cat, ""]}
+                    extra["filter_relax_below"] = 3
             async with sem:
                 try:
-                    ctx = await retriever.retrieve(query, top_k=3)
+                    ctx = await retriever.retrieve(query, top_k=3, use_rerank=use_rerank, **extra)
                 except Exception:
                     logger.debug("doc_review kb_refs rag retrieve failed", exc_info=True)
                     return 0
@@ -100,6 +123,22 @@ async def _attach_kb_refs(findings: list[dict[str, Any]]) -> list[dict[str, Any]
         refs_total,
         (time.perf_counter() - t0) * 1000,
     )
+    return findings
+
+
+async def _attach_kb_refs_if_missing(
+    findings: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """对没有已存储 kb_refs 的 finding 补充计算（向后兼容旧数据）。
+
+    新分析的 findings 已在分析完成时持久化 kb_refs，GET 时直接读库；
+    只有旧数据（kb_refs 为空列表且未存储）才触发实时计算。
+    """
+    missing = [f for f in findings if not f.get("kb_refs")]
+    if not missing:
+        return findings
+    # 只对缺失的子集计算，结果就地写入各 item 的 kb_refs
+    await _attach_kb_refs(missing)
     return findings
 
 
@@ -148,7 +187,7 @@ async def get_document(doc_id: str) -> dict[str, Any]:
     doc["doc_category"] = latest["doc_category"] if latest else None
     doc["risk_types"] = latest["risk_types"] if latest else []
     doc["summary"] = latest["summary"] if latest else None
-    doc["findings"] = await _attach_kb_refs(await storage.list_findings(doc_id))
+    doc["findings"] = await _attach_kb_refs_if_missing(await storage.list_findings(doc_id))
     return doc
 
 
@@ -278,6 +317,28 @@ async def _run_analysis(storage: DocReviewStorage, doc_id: str, run_id: str) -> 
             model_name=model_name,
             created_at=datetime.now(timezone.utc).isoformat(),
         )
+        # 分析完成后计算 kb_refs 并持久化到数据库，避免每次 GET 详情时重算（32 findings ≈ 60s）
+        t_kb = time.perf_counter()
+        findings_dicts = [
+            {
+                "finding_id": f.finding_id,
+                "risk_type": f.risk_type.value,
+                "risk_level": f.risk_level.value,
+                "title": f.title,
+                "description": f.description,
+                "suggestion": f.suggestion,
+                "rule_ref": f.rule_ref,
+                "evidence_text": f.evidence_text,
+                "kb_refs": [],
+            }
+            for f in findings
+        ]
+        await _attach_kb_refs(findings_dicts)
+        kb_refs_elapsed_ms = int((time.perf_counter() - t_kb) * 1000)
+        # 把 kb_refs 写回 Finding 对象（供 build_analysis_result 之后的存储使用）
+        kb_refs_by_id = {d["finding_id"]: d["kb_refs"] for d in findings_dicts}
+        for f in findings:
+            f.kb_refs = kb_refs_by_id.get(f.finding_id, [])
         await storage.insert_findings(
             run_id,
             doc_id,
@@ -293,6 +354,9 @@ async def _run_analysis(storage: DocReviewStorage, doc_id: str, run_id: str) -> 
                     "evidence_text": f.evidence_text,
                     "positions_json": json.dumps(
                         [p.model_dump() for p in f.positions], ensure_ascii=False
+                    ),
+                    "kb_refs_json": json.dumps(
+                        kb_refs_by_id.get(f.finding_id, []), ensure_ascii=False
                     ),
                 }
                 for f in findings
@@ -331,6 +395,7 @@ async def _run_analysis(storage: DocReviewStorage, doc_id: str, run_id: str) -> 
             "retrieval_ms": rag_elapsed_ms,
             "rerank_ms": rag_rerank_ms,
             "model_ms": model_elapsed_ms,
+            "kb_refs_ms": kb_refs_elapsed_ms,
         }
         logger.info(
             "doc_review run done doc_id=%s run_id=%s findings=%d total_elapsed=%.1fs",
@@ -370,7 +435,7 @@ async def list_findings(doc_id: str, run_id: str | None = None) -> dict[str, Any
         key=lambda f: {"low": 0, "medium": 1, "high": 2, "critical": 3}[f["risk_level"]],
         reverse=True,
     )
-    entries = await _attach_kb_refs(entries)
+    entries = await _attach_kb_refs_if_missing(entries)
     return {"doc_id": doc_id, "run_id": run_id, "count": len(entries), "findings": entries}
 
 
@@ -386,7 +451,7 @@ async def export_word(doc_id: str, mode: str = "risks_only") -> Response:
     latest = await storage.latest_run(doc_id)
     if latest is None or latest["status"] != "done":
         raise HTTPException(status_code=409, detail="分析尚未完成，无法导出")
-    findings = await _attach_kb_refs(await storage.list_findings(doc_id))
+    findings = await _attach_kb_refs_if_missing(await storage.list_findings(doc_id))
     try:
         from agent.doc_review.exporter import build_export_docx
 

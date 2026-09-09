@@ -103,9 +103,16 @@ class RAGRetriever:
         source_type_filter: Any = None,
         similarity_threshold: float | None = None,
         llm: Any | None = None,
+        use_rerank: bool | None = None,
+        filter_relax_below: int | None = None,
         **_: Any,
     ) -> Any:
-        """混合检索 -> RAGContext（results + formatted_prompt）。best-effort 不抛出。"""
+        """混合检索 -> RAGContext（results + formatted_prompt）。best-effort 不抛出。
+
+        use_rerank=False 时跳过 cross-encoder 重排，用于 kb_refs 等对排序精度要求不高的场景。
+        filter_relax_below>0 且带 category 过滤时：命中不足该阈值则去掉分类再检索补齐到
+        top_k（预过滤+放宽，防按类漏召回；同类命中仍排在前）。
+        """
         from agent.knowledge.models import KnowledgeChunk, RAGContext, RetrievalResult
 
         t0 = time.perf_counter()
@@ -114,7 +121,23 @@ class RAGRetriever:
             filt["source_type"] = source_type_filter
         k = int(top_k or self.top_k)
         try:
-            hits = await self._hybrid.search(query, top_k=k, filter=filt or None, llm=llm)
+            hits = await self._hybrid.search(
+                query, top_k=k, filter=filt or None, llm=llm, use_rerank=use_rerank
+            )
+            # 分类过滤放宽兜底（预过滤+放宽）：带 category 过滤但命中不足阈值时，去掉
+            # category 再检索补齐到 top_k，避免因分类漏召回（同类命中仍排在前面）。
+            if filter_relax_below and filt.get("category") and len(hits) < int(filter_relax_below):
+                relaxed = {kk: vv for kk, vv in filt.items() if kk != "category"}
+                more = await self._hybrid.search(
+                    query, top_k=k, filter=relaxed or None, llm=llm, use_rerank=use_rerank
+                )
+                seen = {h.chunk_id for h in hits}
+                for h in more:
+                    if len(hits) >= k:
+                        break
+                    if h.chunk_id not in seen:
+                        hits.append(h)
+                        seen.add(h.chunk_id)
         except Exception as exc:
             logger.warning("rag retrieve failed: %s", exc)
             return RAGContext(query=query, backend="hybrid", elapsed_ms=0)

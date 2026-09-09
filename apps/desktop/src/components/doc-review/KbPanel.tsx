@@ -5,11 +5,11 @@
  * （SQLite FTS5 BM25 + sqlite-vec 向量 + RRF + ONNX reranker）召回注入提示词。
  * 上传走本地路径（Tauri 对话框/多选），文件复制入库，数据落安装目录 knowledge/，复制即迁移。
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useNavigate } from 'react-router-dom';
 import { ipc } from '@/ipc/invoke';
-import type { KbDocSummary, KbStatus } from '@/ipc/invoke';
+import type { KbDocSummary, KbStatus, KbVersionItem } from '@/ipc/invoke';
 import { previewLocalFile } from '@/store/officePreviewStore';
 
 const SUPPORTED_EXTENSIONS = [
@@ -44,6 +44,14 @@ function fmtSize(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
+/** unix 秒 -> 本地时间短格式（版本历史上传时间）。 */
+function fmtTime(ts: number): string {
+  if (!ts) return '—';
+  const dt = new Date(ts * 1000);
+  const p = (x: number): string => String(x).padStart(2, '0');
+  return `${dt.getFullYear()}-${p(dt.getMonth() + 1)}-${p(dt.getDate())} ${p(dt.getHours())}:${p(dt.getMinutes())}`;
+}
+
 export function KbPanel(): JSX.Element {
   const navigate = useNavigate();
   const [docs, setDocs] = useState<KbDocSummary[]>([]);
@@ -53,6 +61,10 @@ export function KbPanel(): JSX.Element {
   const [reindexing, setReindexing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<number | null>(null);
+  // 版本历史：当前展开的逻辑资料 group + 其全部版本（检索仅命中「生效」版本）
+  const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
+  const [versions, setVersions] = useState<KbVersionItem[]>([]);
+  const [versionsBusy, setVersionsBusy] = useState(false);
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -82,6 +94,29 @@ export function KbPanel(): JSX.Element {
       }
     };
   }, [docs, reindexing, refresh]);
+
+  // 展开的版本组内有版本在索引 → 轮询版本历史 + 主列表，直到落定
+  // （新版本索引期间 is_active=0 不入主列表，故需单独轮询以在就绪生效后刷新）
+  useEffect(() => {
+    const anchor = versions[0]?.doc_id;
+    const busyVersions =
+      expandedGroup !== null &&
+      !!anchor &&
+      versions.some((v) => v.status === 'indexing' || v.status === 'pending');
+    if (!busyVersions || !anchor) return;
+    const t = window.setInterval(() => {
+      void (async () => {
+        try {
+          const r = await ipc.kbVersions(anchor);
+          setVersions(r.versions ?? []);
+          await refresh();
+        } catch {
+          /* 轮询失败静默，下一轮重试 */
+        }
+      })();
+    }, 1500);
+    return () => window.clearInterval(t);
+  }, [expandedGroup, versions, refresh]);
 
   useEffect(() => {
     let cancelled = false;
@@ -135,13 +170,125 @@ export function KbPanel(): JSX.Element {
     await refresh();
   };
 
-  const onDelete = async (docId: string): Promise<void> => {
-    if (!window.confirm('删除该参考资料及其索引？')) return;
+  const onDelete = async (doc: KbDocSummary): Promise<void> => {
+    const n =
+      (doc.version_count ?? 1) > 1 ? `及其全部 ${doc.version_count} 个版本` : '及其索引';
+    if (!window.confirm(`删除该参考资料${n}？`)) return;
     try {
-      await ipc.kbDelete(docId);
+      await ipc.kbDelete(doc.id, true);
+      if (expandedGroup === doc.group_id) {
+        setExpandedGroup(null);
+        setVersions([]);
+      }
       await refresh();
     } catch (e) {
       setError(`删除失败 · ${String(e)}`);
+    }
+  };
+
+  // 加载并展开某资料的版本历史（用组内任一 doc_id 查，后端按 group 归并）
+  const loadVersions = async (docId: string, group: string): Promise<void> => {
+    setVersionsBusy(true);
+    try {
+      const r = await ipc.kbVersions(docId);
+      setVersions(r.versions ?? []);
+      setExpandedGroup(group);
+    } catch (e) {
+      setError(`读取版本历史失败 · ${String(e)}`);
+    }
+    setVersionsBusy(false);
+  };
+
+  const onToggleVersions = async (doc: KbDocSummary): Promise<void> => {
+    if (expandedGroup === doc.group_id) {
+      setExpandedGroup(null);
+      setVersions([]);
+      return;
+    }
+    await loadVersions(doc.id, doc.group_id);
+  };
+
+  // 更新版本：选一个新文件作为该资料的下一版本（索引期间旧版本仍生效，就绪后自动切换）
+  const onUpdateVersion = async (doc: KbDocSummary): Promise<void> => {
+    setError(null);
+    let picked: string | string[] | null = null;
+    try {
+      picked = await open({
+        multiple: false,
+        filters: [{ name: '参考资料', extensions: SUPPORTED_EXTENSIONS }],
+      });
+    } catch (e) {
+      setError(`打开文件对话框失败 · ${String(e)}`);
+      return;
+    }
+    if (!picked) return;
+    const path = Array.isArray(picked) ? picked[0] : picked;
+    if (!SUPPORTED_EXTENSIONS.includes(extOf(path))) {
+      setError('没有受支持的文件（pdf/docx/doc/txt/md/csv/html/xlsx/pptx）');
+      return;
+    }
+    setBusy(true);
+    try {
+      await ipc.kbUpload(path, doc.category, doc.id);
+      await loadVersions(doc.id, doc.group_id); // 展开以观察新版本索引进度
+    } catch (e) {
+      setError(`更新版本失败 · ${String(e)}`);
+    }
+    setBusy(false);
+    await refresh();
+  };
+
+  // 设为生效：把某个（可能是旧的）版本切为唯一生效版本（O(1)、无需重建索引）
+  const onActivate = async (versionDocId: string, group: string): Promise<void> => {
+    try {
+      await ipc.kbActivate(versionDocId);
+      await loadVersions(versionDocId, group);
+      await refresh();
+    } catch (e) {
+      setError(`切换生效版本失败 · ${String(e)}`);
+    }
+  };
+
+  // 删除单个版本（其余版本保留；若删的是生效版本，后端自动切最新剩余）
+  const onDeleteVersion = async (versionDocId: string, group: string): Promise<void> => {
+    if (!window.confirm('删除该版本？（同资料其余版本保留）')) return;
+    try {
+      await ipc.kbDelete(versionDocId, false);
+      const survivors = versions.filter((v) => v.doc_id !== versionDocId);
+      if (survivors.length > 0) {
+        await loadVersions(survivors[0].doc_id, group);
+      } else {
+        setExpandedGroup(null);
+        setVersions([]);
+      }
+      await refresh();
+    } catch (e) {
+      setError(`删除版本失败 · ${String(e)}`);
+    }
+  };
+
+  // 预览某个版本的源文件
+  const onPreviewVersion = async (v: KbVersionItem): Promise<void> => {
+    if (!v.file_path) {
+      setError('该版本没有可预览的源文件（可能未复制入库或文件已丢失）');
+      return;
+    }
+    try {
+      await previewLocalFile(v.file_path);
+    } catch (e) {
+      setError(`预览失败 · ${String(e)}`);
+    }
+  };
+
+  // 修改分类（作用于整份资料的全部版本，后端同步刷新子块 category）
+  const onChangeCategory = async (doc: KbDocSummary, category: string): Promise<void> => {
+    setError(null);
+    try {
+      await ipc.kbSetCategory(doc.id, category);
+      await refresh();
+      if (expandedGroup === doc.group_id) await loadVersions(doc.id, doc.group_id);
+    } catch (e) {
+      setError(`修改分类失败 · ${String(e)}`);
     }
   };
 
@@ -283,63 +430,231 @@ export function KbPanel(): JSX.Element {
             <tbody>
               {docs.map((d) => {
                 const meta = STATUS_META[d.status] ?? { label: d.status, color: '#616161' };
+                const vc = d.version_count ?? 1;
+                const expanded = expandedGroup !== null && expandedGroup === d.group_id;
                 return (
-                  <tr key={d.id} style={{ borderBottom: '1px solid #f0f0f0' }}>
-                    <td className="px-2 py-1.5" style={{ color: '#1f1f1f' }}>
-                      {d.file_path ? (
+                  <Fragment key={d.id}>
+                    <tr style={{ borderBottom: '1px solid #f0f0f0' }}>
+                      <td className="px-2 py-1.5" style={{ color: '#1f1f1f' }}>
+                        <div className="flex items-center gap-1.5">
+                          {d.file_path ? (
+                            <button
+                              type="button"
+                              onClick={() => void onPreview(d)}
+                              className="cursor-pointer text-left font-semibold underline decoration-dotted underline-offset-2 hover:text-[#0e639c]"
+                              title={`${d.file_path}\n点击预览源文件`}
+                              style={{ color: '#1f1f1f' }}
+                            >
+                              {d.file_name || d.title}
+                            </button>
+                          ) : (
+                            <span className="font-semibold" title={d.file_name || d.title}>
+                              {d.file_name || d.title}
+                            </span>
+                          )}
+                          {vc > 1 && (
+                            <span
+                              className="rounded px-1.5 py-0.5 text-2xs"
+                              style={{ backgroundColor: '#eef3f8', color: '#0e639c' }}
+                              title={`该资料共 ${vc} 个版本，当前生效 v${d.version}`}
+                            >
+                              v{d.version} · 共{vc}版
+                            </span>
+                          )}
+                        </div>
+                        {d.status === 'failed' && d.error && (
+                          <div className="mt-0.5" style={{ color: '#cd3131' }} title={d.error}>
+                            {d.error}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-2 py-1.5" style={{ color: '#616161' }}>
+                        <select
+                          value={d.category ?? ''}
+                          onChange={(e) => void onChangeCategory(d, e.target.value)}
+                          className="rounded border px-1.5 py-0.5 text-2xs outline-none"
+                          style={{
+                            borderColor: '#d4d4d4',
+                            backgroundColor: '#ffffff',
+                            color: '#333333',
+                          }}
+                          title="修改该资料的分类（作用于全部版本，并同步用于按类检索）"
+                        >
+                          {CATEGORIES.some((c) => c.value === (d.category ?? '')) ? null : (
+                            <option value={d.category ?? ''}>{d.category || '未分类'}</option>
+                          )}
+                          {CATEGORIES.map((c) => (
+                            <option key={c.value} value={c.value}>
+                              {c.label}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="px-2 py-1.5" style={{ color: meta.color }}>
+                        ● {meta.label}
+                      </td>
+                      <td className="px-2 py-1.5 text-right" style={{ color: '#616161' }}>
+                        {d.chunk_count > 0 ? `${d.chunk_count} 块` : '—'}
+                      </td>
+                      <td className="px-2 py-1.5 text-right" style={{ color: '#616161' }}>
+                        {fmtSize(d.size_bytes)}
+                      </td>
+                      <td className="px-2 py-1.5 text-right whitespace-nowrap">
                         <button
                           type="button"
                           onClick={() => void onPreview(d)}
-                          className="cursor-pointer text-left font-semibold underline decoration-dotted underline-offset-2 hover:text-[#0e639c]"
-                          title={`${d.file_path}\n点击预览源文件`}
-                          style={{ color: '#1f1f1f' }}
+                          disabled={!d.file_path}
+                          className="mr-1 rounded px-2 py-0.5 disabled:opacity-40"
+                          style={{ backgroundColor: '#ececec', color: '#0e639c' }}
+                          title={d.file_path ? '预览源文件' : '无可预览的源文件'}
                         >
-                          {d.file_name || d.title}
+                          预览
                         </button>
-                      ) : (
-                        <div className="font-semibold" title={d.file_name || d.title}>
-                          {d.file_name || d.title}
-                        </div>
-                      )}
-                      {d.status === 'failed' && d.error && (
-                        <div className="mt-0.5" style={{ color: '#cd3131' }} title={d.error}>
-                          {d.error}
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-2 py-1.5" style={{ color: '#616161' }}>
-                      {CATEGORIES.find((c) => c.value === d.category)?.label ?? d.category ?? '未分类'}
-                    </td>
-                    <td className="px-2 py-1.5" style={{ color: meta.color }}>
-                      ● {meta.label}
-                    </td>
-                    <td className="px-2 py-1.5 text-right" style={{ color: '#616161' }}>
-                      {d.chunk_count > 0 ? `${d.chunk_count} 块` : '—'}
-                    </td>
-                    <td className="px-2 py-1.5 text-right" style={{ color: '#616161' }}>
-                      {fmtSize(d.size_bytes)}
-                    </td>
-                    <td className="px-2 py-1.5 text-right">
-                      <button
-                        type="button"
-                        onClick={() => void onPreview(d)}
-                        disabled={!d.file_path}
-                        className="mr-1 rounded px-2 py-0.5 disabled:opacity-40"
-                        style={{ backgroundColor: '#ececec', color: '#0e639c' }}
-                        title={d.file_path ? '预览源文件' : '无可预览的源文件'}
-                      >
-                        预览
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void onDelete(d.id)}
-                        className="rounded px-2 py-0.5"
-                        style={{ backgroundColor: '#ececec', color: '#cd3131' }}
-                      >
-                        删除
-                      </button>
-                    </td>
-                  </tr>
+                        <button
+                          type="button"
+                          onClick={() => void onUpdateVersion(d)}
+                          disabled={busy}
+                          className="mr-1 rounded px-2 py-0.5 disabled:opacity-40"
+                          style={{ backgroundColor: '#ececec', color: '#0e639c' }}
+                          title="上传新文件作为该资料的新版本（就绪后自动生效，旧版本保留）"
+                        >
+                          更新版本
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void onToggleVersions(d)}
+                          className="mr-1 rounded px-2 py-0.5"
+                          style={{
+                            backgroundColor: expanded ? '#0e639c' : '#ececec',
+                            color: expanded ? '#ffffff' : '#333333',
+                          }}
+                          title="查看/切换该资料的历史版本"
+                        >
+                          {expanded ? '收起版本' : `版本历史${vc > 1 ? ` ${vc}` : ''}`}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void onDelete(d)}
+                          className="rounded px-2 py-0.5"
+                          style={{ backgroundColor: '#ececec', color: '#cd3131' }}
+                          title={vc > 1 ? `删除该资料及其全部 ${vc} 个版本` : '删除该参考资料及其索引'}
+                        >
+                          删除
+                        </button>
+                      </td>
+                    </tr>
+                    {expanded && (
+                      <tr style={{ borderBottom: '1px solid #f0f0f0', backgroundColor: '#fafcff' }}>
+                        <td colSpan={6} className="px-3 py-2">
+                          {versionsBusy ? (
+                            <div className="text-2xs" style={{ color: '#616161' }}>
+                              加载版本历史…
+                            </div>
+                          ) : (
+                            <div>
+                              <div
+                                className="mb-1 text-2xs font-semibold"
+                                style={{ color: '#333333' }}
+                              >
+                                版本历史（{versions.length}）· 检索仅使用标记为「生效」的版本
+                              </div>
+                              <table className="w-full border-collapse text-2xs">
+                                <tbody>
+                                  {versions.map((v) => {
+                                    const vm =
+                                      STATUS_META[v.status] ?? { label: v.status, color: '#616161' };
+                                    return (
+                                      <tr
+                                        key={v.doc_id}
+                                        style={{ borderBottom: '1px solid #eef0f2' }}
+                                      >
+                                        <td className="px-2 py-1" style={{ color: '#1f1f1f' }}>
+                                          <span className="font-semibold">v{v.version}</span>
+                                          {v.is_active ? (
+                                            <span
+                                              className="ml-1.5 rounded px-1 py-0.5"
+                                              style={{ backgroundColor: '#e7f6ec', color: '#059669' }}
+                                            >
+                                              ● 生效
+                                            </span>
+                                          ) : (
+                                            <span className="ml-1.5" style={{ color: '#9a9a9a' }}>
+                                              ○ 已归档
+                                            </span>
+                                          )}
+                                          <span className="ml-1.5" style={{ color: '#9a9a9a' }}>
+                                            {v.file_name}
+                                          </span>
+                                        </td>
+                                        <td className="px-2 py-1" style={{ color: vm.color }}>
+                                          ● {vm.label}
+                                        </td>
+                                        <td
+                                          className="px-2 py-1 text-right"
+                                          style={{ color: '#616161' }}
+                                        >
+                                          {v.chunk_count > 0 ? `${v.chunk_count} 块` : '—'}
+                                        </td>
+                                        <td
+                                          className="px-2 py-1 text-right"
+                                          style={{ color: '#616161' }}
+                                        >
+                                          {fmtSize(v.size_bytes)}
+                                        </td>
+                                        <td
+                                          className="px-2 py-1 text-right"
+                                          style={{ color: '#616161' }}
+                                        >
+                                          {fmtTime(v.created_at)}
+                                        </td>
+                                        <td className="px-2 py-1 text-right whitespace-nowrap">
+                                          <button
+                                            type="button"
+                                            onClick={() => void onPreviewVersion(v)}
+                                            disabled={!v.file_path}
+                                            className="mr-1 rounded px-2 py-0.5 disabled:opacity-40"
+                                            style={{ backgroundColor: '#ececec', color: '#0e639c' }}
+                                          >
+                                            预览
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => void onActivate(v.doc_id, d.group_id)}
+                                            disabled={v.is_active || v.status !== 'ready'}
+                                            className="mr-1 rounded px-2 py-0.5 disabled:opacity-40"
+                                            style={{ backgroundColor: '#e7f6ec', color: '#059669' }}
+                                            title={
+                                              v.is_active
+                                                ? '当前生效版本'
+                                                : v.status !== 'ready'
+                                                  ? '仅就绪版本可设为生效'
+                                                  : '把此版本设为检索使用的生效版本'
+                                            }
+                                          >
+                                            设为生效
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              void onDeleteVersion(v.doc_id, d.group_id)
+                                            }
+                                            className="rounded px-2 py-0.5"
+                                            style={{ backgroundColor: '#ececec', color: '#cd3131' }}
+                                          >
+                                            删除
+                                          </button>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
             </tbody>

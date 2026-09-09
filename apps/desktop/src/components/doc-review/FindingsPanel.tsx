@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { ipc } from "@/ipc/invoke";
 import { previewLocalFile } from "@/store/officePreviewStore";
@@ -7,6 +7,7 @@ import {
   DOC_REVIEW_RISK_COLORS,
 } from "@/store/docReviewStore";
 import type { DocFinding } from "@eaide/shared-protocol";
+import { computeLineNumber, jumpToBlock } from "./DocTextViewer";
 
 /** 点击依据→预览命中的知识原文件（md/txt/html 内置预览，pdf/doc 等走系统默认程序）。 */
 async function openRefFile(path: string): Promise<void> {
@@ -58,23 +59,6 @@ function KbRefBlock({ finding }: { finding: DocFinding }): JSX.Element | null {
               {ref.excerpt}
             </p>
           )}
-          {ref.matched_terms.length > 0 && (
-            <p className="mt-0.5 flex flex-wrap gap-1">
-              {ref.matched_terms.map((t) => (
-                <span
-                  key={t}
-                  className="rounded px-1"
-                  style={{
-                    backgroundColor: "rgba(178,92,26,0.14)",
-                    color: "#8a4a15",
-                    fontSize: 10,
-                  }}
-                >
-                  {t}
-                </span>
-              ))}
-            </p>
-          )}
         </div>
       ))}
     </div>
@@ -107,7 +91,13 @@ function FindingDetailModal({
   onClose: () => void;
 }): JSX.Element {
   const selectFinding = useDocReviewStore((s) => s.selectFinding);
+  const pages = useDocReviewStore((s) => s.detail?.pages ?? []);
   const colors = DOC_REVIEW_RISK_COLORS[finding.risk_level];
+
+  const locations = useMemo(
+    () => computeLineNumber(pages, finding.positions),
+    [pages, finding.positions],
+  );
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -118,6 +108,9 @@ function FindingDetailModal({
   }, [onClose]);
 
   const locateSource = (): void => {
+    if (finding.positions.length > 0) {
+      jumpToBlock(finding.positions[0].block_id);
+    }
     selectFinding(finding.finding_id);
     onClose();
   };
@@ -170,6 +163,31 @@ function FindingDetailModal({
           <p className="mt-1 text-ui" style={{ color: "#1f1f1f", lineHeight: 1.7 }}>
             {finding.description || "（无描述）"}
           </p>
+          {locations.length > 0 && (
+            <div className="mt-3 flex items-center gap-2">
+              <span className="text-2xs font-bold" style={{ color: "#616161" }}>
+                原文位置
+              </span>
+              <button
+                type="button"
+                onClick={locateSource}
+                className="rounded border px-2 py-0.5 text-2xs font-mono"
+                style={{
+                  borderColor: "#0b6bcb",
+                  color: "#0b6bcb",
+                  backgroundColor: "#f0f7ff",
+                }}
+                title="点击跳转到原文对应位置"
+              >
+                第{locations[0].pageNo}页 第{locations[0].line}行
+              </button>
+              {locations.length > 1 && (
+                <span className="text-2xs" style={{ color: "#9e9e9e" }}>
+                  +{locations.length - 1}处
+                </span>
+              )}
+            </div>
+          )}
           {finding.suggestion && (
             <>
               <p className="mt-3 text-2xs font-bold" style={{ color: "#059669" }}>

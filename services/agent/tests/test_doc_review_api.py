@@ -129,7 +129,7 @@ async def test_kb_refs_come_from_uploaded_rag(monkeypatch):
         results: ClassVar[list] = [_FakeResult()]
 
     class _FakeRetriever:
-        async def retrieve(self, query, top_k=3):
+        async def retrieve(self, query, top_k=3, use_rerank=None):
             return _FakeCtx()
 
     class _FakeKbStorage:
@@ -190,7 +190,7 @@ async def test_kb_refs_parallel_preserves_mapping_and_bounds_concurrency(monkeyp
             self.results = [_FakeResult(tag)]
 
     class _FakeRetriever:
-        async def retrieve(self, query, top_k=3):
+        async def retrieve(self, query, top_k=3, use_rerank=None):
             # 制造重叠窗口：串行实现下 peak 恒为 1，并发下会升到信号量上限
             state["in_flight"] += 1
             state["peak"] = max(state["peak"], state["in_flight"])

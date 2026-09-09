@@ -43,6 +43,11 @@ CREATE TABLE IF NOT EXISTS findings (
   rule_ref TEXT,
   evidence_text TEXT,
   positions_json TEXT NOT NULL DEFAULT '[]',
+  kb_refs_json TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_doc_findings_doc ON findings(doc_id, risk_level);
+
+-- 迁移：为旧版 findings 表补加 kb_refs_json 列（如果不存在）
+-- SQLite 3.28+ 支持 PRAGMA table_info 查询列信息
+-- 这里使用 Python 层处理，schema.sql 只保留基础建表语句

@@ -236,6 +236,9 @@ class Settings(BaseSettings):
     # finding 数线性放大（实测 16 条≈32s）超过前端 client 超时；此处检索不走 LLM，
     # 只受 CPU(reranker)/SQLite 约束，并发压缩总耗时
     doc_review_kb_refs_concurrency: int = Field(default=4, ge=1, le=16)
+    # kb_refs 依据按 finding 的 risk_type 映射到知识库分类做「软优先」检索（同类 + 未分类('')
+    # 通用一并纳入，命中不足阈值时放宽到全库补齐，不因分类漏召回）；关闭则不按分类过滤。
+    doc_review_kb_category_filter_enabled: bool = True
     # 文档审核 LLM 路由链（按序降级）：cloud / private —— 两者要求相同，都只取
     # 「模型管理」注册表里已启用的后端（router.db.llm_backends，enabled_only）。
     # 云端优先：先试云端避免白等内网连接超时；云端不可用/未启用时回退已启用的内网 private。

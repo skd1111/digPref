@@ -30,6 +30,19 @@ class DocReviewStorage:
         db = await aiosqlite.connect(self._db_path)
         await db.execute("PRAGMA journal_mode=WAL")
         await db.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
+        
+        # 迁移：为旧版 findings 表补加 kb_refs_json 列（如果不存在）
+        try:
+            cur = await db.execute("PRAGMA table_info(findings)")
+            columns = await cur.fetchall()
+            column_names = [col[1] for col in columns]
+            if "kb_refs_json" not in column_names:
+                await db.execute(
+                    "ALTER TABLE findings ADD COLUMN kb_refs_json TEXT NOT NULL DEFAULT '[]'"
+                )
+        except Exception:
+            pass  # 忽略迁移错误，不影响主流程
+        
         await db.commit()
         return db
 
@@ -233,8 +246,8 @@ class DocReviewStorage:
                 for f in findings:
                     await db.execute(
                         """INSERT INTO findings (finding_id, run_id, doc_id, risk_type, risk_level, title,
-                           description, suggestion, rule_ref, evidence_text, positions_json, created_at)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                           description, suggestion, rule_ref, evidence_text, positions_json, kb_refs_json, created_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             f["finding_id"],
                             run_id,
@@ -247,6 +260,7 @@ class DocReviewStorage:
                             f.get("rule_ref"),
                             f.get("evidence_text", ""),
                             f.get("positions_json", "[]"),
+                            f.get("kb_refs_json", "[]"),
                             _now_iso(),
                         ),
                     )
@@ -282,12 +296,14 @@ class DocReviewStorage:
                     "rule_ref",
                     "evidence_text",
                     "positions_json",
+                    "kb_refs_json",
                     "created_at",
                 ]
                 out = []
                 for row in rows:
                     item = dict(zip(cols, row, strict=False))
-                    item["positions"] = json.loads(item.pop("positions_json"))
+                    item["positions"] = json.loads(item.pop("positions_json", "[]"))
+                    item["kb_refs"] = json.loads(item.pop("kb_refs_json", "[]"))
                     out.append(item)
                 return out
             finally:

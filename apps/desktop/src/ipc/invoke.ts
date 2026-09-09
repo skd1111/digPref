@@ -78,6 +78,11 @@ export interface KbDocSummary {
   size_bytes: number;
   created_at: number;
   updated_at: number;
+  /** 版本化：逻辑资料 group、版本号、是否生效、组内版本总数 */
+  group_id: string;
+  version: number;
+  is_active: boolean;
+  version_count: number;
   /** 已复制入库的源文件绝对路径（点击预览用）；未复制/丢失时为空串 */
   file_path: string;
 }
@@ -116,6 +121,40 @@ export interface KbSearchResult {
   page_no: number;
   heading_path: string;
   matched: string[];
+}
+
+/** 知识库单个版本条目（版本历史面板用；镜像 Python V1VersionItem） */
+export interface KbVersionItem {
+  doc_id: string;
+  group_id: string;
+  version: number;
+  status: string;
+  is_active: boolean;
+  chunk_count: number;
+  size_bytes: number;
+  file_name: string;
+  created_at: number;
+  updated_at: number;
+  error?: string | null;
+  file_path: string;
+}
+
+export interface KbListVersionsResponse {
+  group_id: string;
+  active_doc_id: string;
+  versions: KbVersionItem[];
+}
+
+export interface KbActivateResponse {
+  ok: boolean;
+  group_id: string;
+  active_doc_id: string;
+}
+
+export interface KbSetCategoryResponse {
+  ok: boolean;
+  group_id: string;
+  category: string;
 }
 
 // ---------- Typed command surface ----------
@@ -592,16 +631,32 @@ export const ipc = {
     }),
 
   // 本地知识库混合检索（审核专家上传参考资料 + 设置页 RAG 参数）
-  /** 上传参考资料入库（后台分块+向量化，轮询 kbList 看状态） */
-  kbUpload: (file_path: string, category?: string) =>
+  /** 上传参考资料入库（后台分块+向量化，轮询 kbList 看状态）；
+   *  baseDocId 置位时作为该资料的新版本（version+1，索引期间旧版本仍生效，就绪后自动切换） */
+  kbUpload: (file_path: string, category?: string, baseDocId?: string) =>
     invoke<{ doc_id: string; status: string }>("knowledge", {
       _op: "kb_upload",
       file_path,
       category: category ?? "",
+      base_doc_id: baseDocId ?? "",
     }),
   kbList: () => invoke<{ total: number; docs: KbDocSummary[] }>("knowledge", { _op: "kb_list" }),
-  kbDelete: (doc_id: string) =>
-    invoke<{ deleted: boolean }>("knowledge", { _op: "kb_delete", doc_id }),
+  /** 列出某资料所属逻辑组的全部版本（version 倒序）+ 当前生效版本 */
+  kbVersions: (doc_id: string) =>
+    invoke<KbListVersionsResponse>("knowledge", { _op: "kb_versions", doc_id }),
+  /** 把指定版本设为唯一生效版本（“指定用某个旧版本”，O(1) 翻标志位、无需重建索引） */
+  kbActivate: (doc_id: string) =>
+    invoke<KbActivateResponse>("knowledge", { _op: "kb_activate", doc_id }),
+  /** 修改某资料（整组全部版本）的分类；同步刷新子块 category 以对齐按类检索 */
+  kbSetCategory: (doc_id: string, category: string) =>
+    invoke<KbSetCategoryResponse>("knowledge", { _op: "kb_set_category", doc_id, category }),
+  /** 删除；allVersions=true 删该资料全部版本，否则只删该版本（删生效版本会自动切最新剩余） */
+  kbDelete: (doc_id: string, allVersions?: boolean) =>
+    invoke<{ deleted: boolean }>("knowledge", {
+      _op: "kb_delete",
+      doc_id,
+      all_versions: allVersions ?? false,
+    }),
   kbSearch: (query: string, top_k?: number, category?: string) =>
     invoke<{
       query: string;
