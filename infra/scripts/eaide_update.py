@@ -12,7 +12,9 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
+import time
 import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -186,28 +188,40 @@ def _ensure_writable(root: Path) -> Path:
 
 
 def cleanup_staging(vroot: Path, max_age_s: int = 24 * 3600) -> None:
-    """清扫 .staging 下超龄垃圾目录（spec §4.2-9）；新暂存不动。"""
-    import time
+    """清扫 .staging 下超龄垃圾目录（spec §4.2-9）；在用暂存不动。
 
+    目录 mtime 只随直接子项增删刷新，长下载可能顶层冻结而深层仍在写，
+    故按「整棵树最新 mtime，短路早退」判龄（Review d9c52cc #I-3）。
+    """
     st = vroot / ".staging"
     if not st.is_dir():
         return
     now = time.time()
     for entry in st.iterdir():
         try:
-            if entry.is_dir() and now - entry.stat().st_mtime > max_age_s:
+            if entry.is_dir() and _tree_newest(entry) < now - max_age_s:
                 shutil.rmtree(entry, ignore_errors=True)
         except OSError:
             continue
 
 
+def _tree_newest(d: Path) -> float:
+    """目录树最新 mtime（任一新鲜条目即提前返回，免全量遍历 400MB 暂存）。"""
+    newest = d.stat().st_mtime
+    for root_dir, dirs, files in os.walk(d):
+        for name in (*dirs, *files):
+            m = os.stat(os.path.join(root_dir, name)).st_mtime
+            if m > newest:
+                return m
+    return newest
+
+
 def agent_process_running() -> bool:
-    """Windows 下 eaide-agent.exe 是否在跑（tasklist 按镜像名）；非 Win/探测失败保守返 False。"""
+    """Windows 下 eaide-agent.exe 是否在跑（tasklist 按镜像名，大小写不敏感，
+    PE 头镜像名可能全大写）；非 Win/探测失败保守返 False。"""
     if not IS_WIN:
         return False
     try:
-        import subprocess
-
         out = subprocess.run(
             ["tasklist", "/FI", "IMAGENAME eq eaide-agent.exe"],
             capture_output=True,
@@ -216,7 +230,7 @@ def agent_process_running() -> bool:
         ).stdout
     except (OSError, subprocess.TimeoutExpired):
         return False
-    return "eaide-agent.exe" in out
+    return "eaide-agent.exe" in out.lower()
 
 
 def _reuse_sources(root: Path, vroot: Path, package: str, reuse_from: Path | None) -> list:
@@ -301,7 +315,7 @@ def apply_manifest(
     root: Path,
     dry_run: bool = False,
     source_dir: Path | None = None,
-    reuse_from: Path | None = None,
+    reuse_from: Path | str | None = None,
 ) -> None:
     """spec §4.2 主流程。source_dir 为 --adopt 本地整目录 adopt；None 时走 base_url；
     未变文件优先从 reuse 候选源（激活版/factory 根）硬链复用（§4.2-4）。"""
@@ -313,6 +327,17 @@ def apply_manifest(
     vroot = _ensure_writable(root)
     cleanup_staging(vroot)
     final = vroot / m.package / m.version
+    ptr = vroot / f"{m.package}-active.txt"
+    old = read_active(ptr)
+    # Windows 进程锁检查前置（覆盖新建/修复两条分支：修复分支的 os.replace
+    # 同样会被运行中 agent 锁住，不拦则用户只能看 PermissionError，#5）；
+    # 首次安装（old==factory，出厂 agent 可能正跑但本次只是预热目录）不拦
+    if IS_WIN and m.package == "agent" and old not in (m.version, FACTORY):
+        if agent_process_running():
+            raise SystemExit(
+                f"[apply] 检测到 eaide-agent 正在运行（激活 {old}）\n"
+                "请先退出 EAIDE 再执行 apply/rollback（不自动杀进程）"
+            )
     if final.is_dir():
         # 幂等/修复：逐文件实算校验，损坏/缺失经 .staging 旁路重拉后验，
         # 文件级 os.replace 保证任一时刻 final 内都是完整旧/新文件（#4）；
@@ -369,16 +394,6 @@ def apply_manifest(
         except BaseException:  # 含 KeyboardInterrupt：400MB 下载期间 Ctrl-C 也不留垃圾
             shutil.rmtree(staging, ignore_errors=True)  # 崩溃不留垃圾（§4.2-9）
             raise
-    ptr = vroot / f"{m.package}-active.txt"
-    old = read_active(ptr)
-    # Windows 激活切换前检查旧 agent 进程（锁文件/升级歧义，spec §4.2-7）；
-    # 首次安装（old==factory，出厂 agent 可能正跑但本次只是预热目录）不拦
-    if IS_WIN and m.package == "agent" and old != m.version and old != FACTORY:
-        if agent_process_running():
-            raise SystemExit(
-                f"[apply] 检测到 eaide-agent 正在运行（激活 {old}）\n"
-                "请先退出 EAIDE 再执行 apply/rollback（不自动杀进程）"
-            )
     if old != m.version:
         write_active(ptr, m.version)
         _append_history(vroot, m.package, old, m.version, manifest=str(m.base_url))
@@ -451,6 +466,12 @@ def rollback(root: Path, package: str, version: str | None = None) -> None:
     if version == old:
         print(f"[rollback] {package} 已处于 {version}，无需回退")
         return
+    # spec §4.4：回滚与激活同等的进程锁检查（#I-2）
+    if IS_WIN and package == "agent" and old != FACTORY and agent_process_running():
+        raise SystemExit(
+            f"[rollback] 检测到 eaide-agent 正在运行（激活 {old}）\n"
+            "请先退出 EAIDE 再执行 apply/rollback（不自动杀进程）"
+        )
     if version != FACTORY:
         vd = vroot / package / version
         if not vd.is_dir():
@@ -477,6 +498,8 @@ def _cmd_gen_manifest(args):
 
 
 def _cmd_apply(args):
+    if args.adopt and args.reuse_from:
+        raise SystemExit("[apply] --adopt 与 --reuse-from 互斥（adopt 整目录即全量源，无复用语义）")
     m = Manifest.load(args.manifest)
     apply_manifest(
         m.raw,

@@ -566,6 +566,11 @@ def test_reuse_from_factory_hardlink_or_copy(tmp_path, monkeypatch):
     assert (got / "eaide-agent.exe").read_bytes() == b"A"
     assert (got / "_internal" / "x").read_bytes() == b"2"
     assert fetched == ["_internal/x"]  # 只有变化文件走取数，未变文件本地复用
+    if sys.platform != "win32":
+        # 硬链真实生效（而非退 copy）：同 inode（Win 跨盘/权限场景不断言）
+        assert (install / "eaide-agent.exe").stat().st_ino == (
+            got / "eaide-agent.exe"
+        ).stat().st_ino
 
 
 def test_staging_cleanup_removes_old_junk(tmp_path):
@@ -594,6 +599,70 @@ def test_agent_running_blocks_activation_on_windows(tmp_path, monkeypatch):
     with pytest.raises(SystemExit, match="退出 EAIDE"):
         apply_manifest(_manifest_doc(p2, "agent", "0.1.8"), root, dry_run=False)
     assert read_active(root / "versions" / "agent-active.txt", FACTORY) == "0.1.7"
+
+
+def test_agent_running_blocks_rollback_on_windows(tmp_path, monkeypatch):
+    """spec §4.4：rollback 与 apply 同等的进程锁检查。"""
+    import eaide_update
+
+    p1 = _mk_payload(tmp_path, "s1", {"a": b"1"})
+    p2 = _mk_payload(tmp_path, "s2", {"a": b"2"})
+    root = tmp_path / "root"
+    monkeypatch.setattr(eaide_update, "IS_WIN", False)
+    apply_manifest(_manifest_doc(p1, "agent", "0.1.7"), root, dry_run=False)
+    apply_manifest(_manifest_doc(p2, "agent", "0.1.8"), root, dry_run=False)
+    monkeypatch.setattr(eaide_update, "IS_WIN", True)
+    monkeypatch.setattr(eaide_update, "agent_process_running", lambda: True)
+    with pytest.raises(SystemExit, match="退出 EAIDE"):
+        rollback(root, "agent")
+    assert read_active(root / "versions" / "agent-active.txt", FACTORY) == "0.1.8"
+
+
+def test_running_match_is_case_insensitive(tmp_path, monkeypatch):
+    import eaide_update
+
+    monkeypatch.setattr(
+        eaide_update.subprocess,
+        "run",
+        lambda *a, **k: type("R", (), {"stdout": "EAIDE-AGENT.EXE    1234 Console"})(),
+    )
+    monkeypatch.setattr(eaide_update, "IS_WIN", True)
+    assert eaide_update.agent_process_running()  # 大写镜像名不得漏检（#1）
+
+
+def test_cleanup_staging_keeps_active_deep_download(tmp_path):
+    """顶层 mtime 冻结但深层仍在写的暂存不得误清（#I-3）。"""
+    vroot = tmp_path / "versions"
+    deep = vroot / ".staging" / "agent-0.1.8-1"
+    deep.mkdir(parents=True)
+    leaf = deep / "_internal" / "agent"
+    leaf.mkdir(parents=True)
+    (leaf / "f.py").write_bytes(b"x")
+    old = os.path.getmtime(__file__) - 40 * 86400
+    for d in (deep, deep / "_internal"):
+        os.utime(d, (old, old))
+    # 叶子 f.py 保持新鲜 mtime → 整棵暂存视为在用
+    cleanup_staging(vroot, max_age_s=24 * 3600)
+    assert deep.exists()
+
+
+def test_cli_reject_adopt_with_reuse_from(tmp_path):
+    import eaide_update
+
+    with pytest.raises(SystemExit):
+        eaide_update.main(
+            [
+                "apply",
+                "--manifest",
+                "x.json",
+                "--root",
+                str(tmp_path),
+                "--adopt",
+                str(tmp_path / "a"),
+                "--reuse-from",
+                str(tmp_path / "b"),
+            ]
+        )
 
 
 def test_apply_unwritable_root_friendly_error(tmp_path):
