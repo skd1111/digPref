@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 SCHEMA_VERSION = 1
-VERSION_RE = re.compile(r"^[0-9A-Za-z._-]+$")
+VERSION_RE = re.compile(r"[0-9A-Za-z._-]+\Z")  # \Z 锁末尾，杜绝 $ 放行尾部换行
 
 
 class ManifestError(ValueError):
@@ -22,10 +22,15 @@ class ManifestError(ValueError):
 
 
 def _safe_relpath(p: str) -> str:
-    """manifest 文件路径必须是相对版本目录根的 POSIX 风格路径，拒绝穿越。"""
+    """manifest 文件路径必须是相对版本目录根的 POSIX 风格路径，拒绝穿越。
+
+    反斜杠不是合法 POSIX 分隔符且在 Windows 落位时被当分隔符解析，
+    连同 UNC/盘符一并拒绝（CodeReview c05a26b I-1）。
+    """
     pp = PurePosixPath(p)
     if (
         not p
+        or "\\" in p
         or pp.is_absolute()
         or re.match(r"^[A-Za-z]:", p)
         or ".." in pp.parts
@@ -68,11 +73,15 @@ class Manifest:
         if doc.get("package") not in ("agent", "web"):
             raise ManifestError(f"bad package: {doc.get('package')!r}")
         version = doc.get("version", "")
-        if not VERSION_RE.match(version):
+        if not VERSION_RE.match(version) or version in (".", ".."):
             raise ManifestError(f"bad version: {version!r}")
+        if not doc.get("baseUrl"):
+            raise ManifestError("missing baseUrl (required per spec §3)")
         files = doc.get("files") or []
         seen: set[str] = set()
         for f in files:
+            if "path" not in f:
+                raise ManifestError(f"file entry missing 'path': {f!r}")
             f["path"] = _safe_relpath(f["path"])
             if f["path"] in seen:
                 raise ManifestError(f"duplicate path: {f['path']}")
@@ -98,10 +107,25 @@ class Manifest:
             from urllib.request import urlopen
 
             return cls.from_dict(json.loads(urlopen(s).read().decode("utf-8")))
-        p = Path(s.replace("file:///", "/").replace("file://", ""))
+        p = _to_local_path(s)
         if p.exists():
             return cls.from_dict(json.loads(p.read_text(encoding="utf-8")))
         raise ManifestError(f"manifest not found: {src}")
+
+
+def _to_local_path(s: str) -> Path:
+    """file:/// URI → 本地 Path：百分号解码 + Windows 盘符去前导斜杠（I-3）。"""
+    from urllib.parse import unquote, urlparse
+
+    if not s.startswith("file://"):
+        return Path(s)
+    u = urlparse(s)
+    path = unquote(u.path)
+    if re.match(r"^/[A-Za-z]:", path):  # /C:/... -> C:/...
+        path = path[1:]
+    if u.netloc in ("", "localhost"):
+        return Path(path)
+    return Path(f"//{u.netloc}{path}")  # UNC
 
 
 def _cmd_gen_manifest(args):

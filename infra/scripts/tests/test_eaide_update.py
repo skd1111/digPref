@@ -43,7 +43,18 @@ def test_manifest_parse_ok_and_schema_gate(tmp_path, fake_dir):
         Manifest.load(tmp_path / "bad.json")
 
 
-@pytest.mark.parametrize("evil", ["../x", "/abs", "C:\\win", "_internal/../../etc/passwd"])
+@pytest.mark.parametrize(
+    "evil",
+    [
+        "../x",
+        "/abs",
+        "C:\\win",
+        "_internal/../../etc/passwd",
+        "..\\..\\evil",  # 反斜杠穿越（Windows 下 \ 即分隔符）
+        "a\\..\\b",  # 反斜杠内嵌穿越
+        "\\\\server\\share\\x",  # UNC
+    ],
+)
 def test_manifest_rejects_path_traversal(fake_dir, evil):
     doc = {
         "schema": 1,
@@ -54,3 +65,57 @@ def test_manifest_rejects_path_traversal(fake_dir, evil):
     }
     with pytest.raises(ManifestError, match="path"):
         Manifest.from_dict(doc)
+
+
+@pytest.mark.parametrize("bad_version", ["..", ".", "", "0.1.8\n", "a/b"])
+def test_manifest_rejects_bad_version(fake_dir, bad_version):
+    doc = {
+        "schema": 1,
+        "package": "agent",
+        "version": bad_version,
+        "baseUrl": "x",
+        "files": [],
+    }
+    with pytest.raises(ManifestError, match="version"):
+        Manifest.from_dict(doc)
+
+
+def test_manifest_requires_baseurl_and_path_key(fake_dir):
+    no_base = {
+        "schema": 1, "package": "agent", "version": "0.1.8", "files": [],
+    }
+    with pytest.raises(ManifestError, match="baseUrl"):
+        Manifest.from_dict(no_base)
+    missing_path = {
+        "schema": 1, "package": "agent", "version": "0.1.8", "baseUrl": "x",
+        "files": [{"sha256": "0" * 64, "size": 1}],
+    }
+    with pytest.raises(ManifestError, match="path"):
+        Manifest.from_dict(missing_path)
+
+
+def test_manifest_rejects_duplicate_path(fake_dir):
+    doc = {
+        "schema": 1, "package": "agent", "version": "0.1.8", "baseUrl": "x",
+        "files": [
+            {"path": "a", "sha256": "0" * 64, "size": 1},
+            {"path": "a", "sha256": "1" * 64, "size": 1},
+        ],
+    }
+    with pytest.raises(ManifestError, match="duplicate"):
+        Manifest.from_dict(doc)
+
+
+def test_load_file_uri_on_windows_style_path(tmp_path):
+    """file:/// URI（含盘符风格路径 + %20 空格编码）必须能被 load。"""
+    doc = {
+        "schema": 1, "package": "web", "version": "0.1.8", "baseUrl": "x",
+        "files": [{"path": "index.html", "sha256": "0" * 64, "size": 1}],
+    }
+    mdir = tmp_path / "my dir"
+    mdir.mkdir()
+    mf = mdir / "manifest.json"
+    mf.write_text(json.dumps(doc), encoding="utf-8")
+    uri = "file:///" + str(mf).replace("\\", "/").replace(" ", "%20")
+    m = Manifest.load(uri)
+    assert m.package == "web" and m.version == "0.1.8"
