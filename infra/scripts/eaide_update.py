@@ -4,6 +4,7 @@
 更新模型：安装目录旁 versions/<pkg>/<ver>/ 自包含版本目录 + 单行指针 <pkg>-active.txt，
 激活 = 指针原子替换（手动兜底协议：拷目录 + 改指针 + 重启，见 spec §2）。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -142,9 +143,7 @@ def _cmd_gen_manifest(args):
     }
     if args.min_shell:
         doc["minShell"] = args.min_shell
-    Path(args.out).write_text(
-        json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    Path(args.out).write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"[gen-manifest] {len(files)} files -> {args.out}")
 
 

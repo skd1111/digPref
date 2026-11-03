@@ -1,4 +1,5 @@
 """eaide_update.py 应用器测试（spec: docs/superpowers/specs/2026-11-03-agent-web-incremental-update-design.md §3/§4）。"""
+
 import hashlib
 import json
 
@@ -83,12 +84,18 @@ def test_manifest_rejects_bad_version(fake_dir, bad_version):
 
 def test_manifest_requires_baseurl_and_path_key(fake_dir):
     no_base = {
-        "schema": 1, "package": "agent", "version": "0.1.8", "files": [],
+        "schema": 1,
+        "package": "agent",
+        "version": "0.1.8",
+        "files": [],
     }
     with pytest.raises(ManifestError, match="baseUrl"):
         Manifest.from_dict(no_base)
     missing_path = {
-        "schema": 1, "package": "agent", "version": "0.1.8", "baseUrl": "x",
+        "schema": 1,
+        "package": "agent",
+        "version": "0.1.8",
+        "baseUrl": "x",
         "files": [{"sha256": "0" * 64, "size": 1}],
     }
     with pytest.raises(ManifestError, match="path"):
@@ -97,7 +104,10 @@ def test_manifest_requires_baseurl_and_path_key(fake_dir):
 
 def test_manifest_rejects_duplicate_path(fake_dir):
     doc = {
-        "schema": 1, "package": "agent", "version": "0.1.8", "baseUrl": "x",
+        "schema": 1,
+        "package": "agent",
+        "version": "0.1.8",
+        "baseUrl": "x",
         "files": [
             {"path": "a", "sha256": "0" * 64, "size": 1},
             {"path": "a", "sha256": "1" * 64, "size": 1},
@@ -110,7 +120,10 @@ def test_manifest_rejects_duplicate_path(fake_dir):
 def test_load_file_uri_on_windows_style_path(tmp_path):
     """file:/// URI（含盘符风格路径 + %20 空格编码）必须能被 load。"""
     doc = {
-        "schema": 1, "package": "web", "version": "0.1.8", "baseUrl": "x",
+        "schema": 1,
+        "package": "web",
+        "version": "0.1.8",
+        "baseUrl": "x",
         "files": [{"path": "index.html", "sha256": "0" * 64, "size": 1}],
     }
     mdir = tmp_path / "my dir"
@@ -130,4 +143,6 @@ def test_to_local_path_case_insensitive_and_unc():
     unc = _to_local_path("file://server/share/x.json")
     assert str(unc).replace("\\", "/").startswith("//server/share")
     drive_as_host = _to_local_path("file://server/C:/share/x")
-    assert "C:" in drive_as_host.parts[-1] or str(drive_as_host).endswith("x")  # 不崩溃即可
+    assert (
+        str(drive_as_host).replace("\\", "/").startswith("//server/C:")
+    )  # 非 localhost 权威不剥盘符

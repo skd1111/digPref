@@ -1,4 +1,5 @@
 """infra/scripts 工具脚本的测试引导：把脚本目录加入 sys.path。"""
+
 import sys
 from pathlib import Path
 
