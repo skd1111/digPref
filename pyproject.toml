@@ -158,7 +158,7 @@ asyncio_mode = "auto"
 markers = [
     "asyncio: 异步测试（pytest-asyncio）",
 ]
-testpaths = ["services", "packages"]
+testpaths = ["services", "packages", "infra"]
 addopts = "-ra -q --strict-markers --strict-config"
 
 [tool.coverage.run]

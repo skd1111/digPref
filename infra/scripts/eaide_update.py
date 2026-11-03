@@ -30,6 +30,7 @@ def _safe_relpath(p: str) -> str:
     pp = PurePosixPath(p)
     if (
         not p
+        or not pp.parts  # 裸 "." （parts==()）指向版本目录自身，与 version 校验口径对齐
         or "\\" in p
         or pp.is_absolute()
         or re.match(r"^[A-Za-z]:", p)
@@ -114,16 +115,18 @@ class Manifest:
 
 
 def _to_local_path(s: str) -> Path:
-    """file:/// URI → 本地 Path：百分号解码 + Windows 盘符去前导斜杠（I-3）。"""
+    """file URI → 本地 Path：scheme/权威名大小写不敏感，百分号解码，
+    盘符仅对 localhost/空权威剥前导斜杠，非空权威拼 UNC（Review 5409219 S-2）。"""
     from urllib.parse import unquote, urlparse
 
-    if not s.startswith("file://"):
-        return Path(s)
     u = urlparse(s)
+    if u.scheme != "file":
+        return Path(s)
     path = unquote(u.path)
-    if re.match(r"^/[A-Za-z]:", path):  # /C:/... -> C:/...
+    localhost = u.hostname in (None, "", "localhost")
+    if localhost and re.match(r"^/[A-Za-z]:", path):  # /C:/... -> C:/...
         path = path[1:]
-    if u.netloc in ("", "localhost"):
+    if localhost:
         return Path(path)
     return Path(f"//{u.netloc}{path}")  # UNC
 

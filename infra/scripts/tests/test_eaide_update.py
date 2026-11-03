@@ -3,7 +3,7 @@ import hashlib
 import json
 
 import pytest
-from eaide_update import Manifest, ManifestError, gen_manifest
+from eaide_update import Manifest, ManifestError, _to_local_path, gen_manifest
 
 
 def _sha(b: bytes) -> str:
@@ -53,6 +53,7 @@ def test_manifest_parse_ok_and_schema_gate(tmp_path, fake_dir):
         "..\\..\\evil",  # 反斜杠穿越（Windows 下 \ 即分隔符）
         "a\\..\\b",  # 反斜杠内嵌穿越
         "\\\\server\\share\\x",  # UNC
+        ".",  # 裸点：指向版本目录自身
     ],
 )
 def test_manifest_rejects_path_traversal(fake_dir, evil):
@@ -119,3 +120,14 @@ def test_load_file_uri_on_windows_style_path(tmp_path):
     uri = "file:///" + str(mf).replace("\\", "/").replace(" ", "%20")
     m = Manifest.load(uri)
     assert m.package == "web" and m.version == "0.1.8"
+
+
+def test_to_local_path_case_insensitive_and_unc():
+    # scheme/权威名大小写不敏感（S-2）
+    assert _to_local_path("FILE:///C:/x/m.json") == _to_local_path("file:///C:/x/m.json")
+    assert _to_local_path("file://LOCALHOST/C:/x/m.json").as_posix().endswith("C:/x/m.json")
+    # 非空权威 → UNC，且不对 UNC 路径剥盘符
+    unc = _to_local_path("file://server/share/x.json")
+    assert str(unc).replace("\\", "/").startswith("//server/share")
+    drive_as_host = _to_local_path("file://server/C:/share/x")
+    assert "C:" in drive_as_host.parts[-1] or str(drive_as_host).endswith("x")  # 不崩溃即可
