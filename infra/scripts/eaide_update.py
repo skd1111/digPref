@@ -29,7 +29,8 @@ class ManifestError(ValueError):
 
 def _safe_relpath(p: str) -> str:
     """manifest 文件路径必须是相对版本目录根的 POSIX 风格路径，拒绝穿越与
-    应用器保留名（.fetch/.staging/.filehash.json，旁路与缓存同命名空间，#I-1）。"""
+    应用器保留名：.fetch/.staging 仅拦首段（旁路根目录），.filehash.json 任一段
+    均拦（哈希缓存是单层文件，出现在任何层级都会撞缓存命名空间，#I-1）。"""
     pp = PurePosixPath(p)
     if (
         not p
@@ -184,6 +185,74 @@ def _ensure_writable(root: Path) -> Path:
     return vroot
 
 
+def cleanup_staging(vroot: Path, max_age_s: int = 24 * 3600) -> None:
+    """清扫 .staging 下超龄垃圾目录（spec §4.2-9）；新暂存不动。"""
+    import time
+
+    st = vroot / ".staging"
+    if not st.is_dir():
+        return
+    now = time.time()
+    for entry in st.iterdir():
+        try:
+            if entry.is_dir() and now - entry.stat().st_mtime > max_age_s:
+                shutil.rmtree(entry, ignore_errors=True)
+        except OSError:
+            continue
+
+
+def agent_process_running() -> bool:
+    """Windows 下 eaide-agent.exe 是否在跑（tasklist 按镜像名）；非 Win/探测失败保守返 False。"""
+    if not IS_WIN:
+        return False
+    try:
+        import subprocess
+
+        out = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq eaide-agent.exe"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return "eaide-agent.exe" in out
+
+
+def _reuse_sources(root: Path, vroot: Path, package: str, reuse_from: Path | None) -> list:
+    """本地复用候选源：显式 --reuse-from > 当前激活版本目录 > factory 根平铺布局。"""
+    sources = []
+    if reuse_from:
+        sources.append(Path(reuse_from))
+    active = read_active(vroot / f"{package}-active.txt")
+    if active != FACTORY:
+        sources.append(vroot / package / active)
+    exe_name = "eaide-agent.exe" if IS_WIN else "eaide-agent"
+    if (root / exe_name).exists() or (root / "_internal").is_dir():
+        sources.append(root)
+    return [s for s in sources if s.is_dir()]
+
+
+def _try_reuse(sources: list, rel: str, want_sha: str, dest: Path) -> bool:
+    """命中候选源同路径且哈希一致 → 硬链（失败退 copy）；否则 False 走取数。"""
+    parts = PurePosixPath(rel).parts
+    for s in sources:
+        cand = s.joinpath(*parts)
+        if not cand.is_file():
+            continue
+        try:
+            _check_sha(cand, want_sha)
+        except ManifestError:
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.link(cand, dest)
+        except OSError:
+            shutil.copy2(cand, dest)
+        return True
+    return False
+
+
 # ---- 下载/校验（spec §4.2-4/5）----
 
 
@@ -232,13 +301,17 @@ def apply_manifest(
     root: Path,
     dry_run: bool = False,
     source_dir: Path | None = None,
+    reuse_from: Path | None = None,
 ) -> None:
-    """spec §4.2 主流程。source_dir 为 --adopt 本地整目录 adopt；None 时走 base_url。"""
+    """spec §4.2 主流程。source_dir 为 --adopt 本地整目录 adopt；None 时走 base_url；
+    未变文件优先从 reuse 候选源（激活版/factory 根）硬链复用（§4.2-4）。"""
     m = Manifest.from_dict(json.loads(json.dumps(doc)))
     if dry_run:
         print(f"[apply dry-run] {m.package} {m.version}: {len(m.files)} files")
         return
-    vroot = _ensure_writable(Path(root))
+    root = Path(root)
+    vroot = _ensure_writable(root)
+    cleanup_staging(vroot)
     final = vroot / m.package / m.version
     if final.is_dir():
         # 幂等/修复：逐文件实算校验，损坏/缺失经 .staging 旁路重拉后验，
@@ -272,15 +345,22 @@ def apply_manifest(
             raise
         shutil.rmtree(repair, ignore_errors=True)
     else:
+        sources = [] if source_dir else _reuse_sources(root, vroot, m.package, reuse_from)
         staging = vroot / ".staging" / f"{m.package}-{m.version}-{os.getpid()}"
+        reused = 0
         try:
             for f in m.files:
                 dest = staging.joinpath(*PurePosixPath(f["path"]).parts)
+                if sources and _try_reuse(sources, f["path"], f["sha256"], dest):
+                    reused += 1
+                    continue
                 if source_dir is not None:
                     _fetch(_dir_to_file_uri(Path(source_dir)), f["path"], dest)
                 else:
                     _fetch(m.base_url, f["path"], dest)
                 _check_sha(dest, f["sha256"])
+            if reused:
+                print(f"[apply] reused {reused}/{len(m.files)} files from local sources")
             final.parent.mkdir(parents=True, exist_ok=True)
             os.replace(staging, final)  # 同卷原子落位
             (final / ".filehash.json").write_text(
@@ -291,6 +371,14 @@ def apply_manifest(
             raise
     ptr = vroot / f"{m.package}-active.txt"
     old = read_active(ptr)
+    # Windows 激活切换前检查旧 agent 进程（锁文件/升级歧义，spec §4.2-7）；
+    # 首次安装（old==factory，出厂 agent 可能正跑但本次只是预热目录）不拦
+    if IS_WIN and m.package == "agent" and old != m.version and old != FACTORY:
+        if agent_process_running():
+            raise SystemExit(
+                f"[apply] 检测到 eaide-agent 正在运行（激活 {old}）\n"
+                "请先退出 EAIDE 再执行 apply/rollback（不自动杀进程）"
+            )
     if old != m.version:
         write_active(ptr, m.version)
         _append_history(vroot, m.package, old, m.version, manifest=str(m.base_url))
@@ -390,7 +478,13 @@ def _cmd_gen_manifest(args):
 
 def _cmd_apply(args):
     m = Manifest.load(args.manifest)
-    apply_manifest(m.raw, Path(args.root), dry_run=args.dry_run, source_dir=args.adopt)
+    apply_manifest(
+        m.raw,
+        Path(args.root),
+        dry_run=args.dry_run,
+        source_dir=args.adopt,
+        reuse_from=args.reuse_from,
+    )
     return 0
 
 
@@ -430,6 +524,7 @@ def main(argv=None):
     a.add_argument("--root", required=True, help="安装目录（versions 的父目录）")
     a.add_argument("--dry-run", action="store_true", dest="dry_run")
     a.add_argument("--adopt", default=None, help="本地已备好的版本目录（无渠道手动主路径）")
+    a.add_argument("--reuse-from", default=None, dest="reuse_from", help="本地复用候选目录")
     a.set_defaults(fn=_cmd_apply)
     v = sub.add_parser("verify", help="全量重算激活/指定版本哈希")
     v.add_argument("--manifest", required=True)

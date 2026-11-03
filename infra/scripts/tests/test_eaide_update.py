@@ -2,6 +2,8 @@
 
 import hashlib
 import json
+import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -11,6 +13,7 @@ from eaide_update import (
     ManifestError,
     _to_local_path,
     apply_manifest,
+    cleanup_staging,
     gen_manifest,
     read_active,
     rollback,
@@ -509,6 +512,7 @@ def test_rollback_nonobject_filehash_no_traceback(tmp_path, junk):
     cache.write_text(junk, encoding="utf-8")
     with pytest.raises(SystemExit, match="filehash"):
         rollback(root, "agent")
+    assert read_active(root / "versions" / "agent-active.txt", FACTORY) == "0.1.8"
 
 
 def test_repair_branch_leaves_no_fetch_junk_after_failure(tmp_path, monkeypatch):
@@ -532,3 +536,79 @@ def test_repair_branch_leaves_no_fetch_junk_after_failure(tmp_path, monkeypatch)
     ]
     assert junk == []
     assert not (vdir / ".fetch").exists()
+
+
+# ---- Task 4：复用 / 清扫 / 进程锁 ----
+
+
+def test_reuse_from_factory_hardlink_or_copy(tmp_path, monkeypatch):
+    """factory 根（安装目录平铺 eaide-agent.exe + _internal/）未变文件不下载，本地复用。"""
+    import eaide_update
+
+    install = tmp_path / "install"
+    install.mkdir()
+    (install / "eaide-agent.exe").write_bytes(b"A")
+    (install / "_internal").mkdir()
+    (install / "_internal" / "x").write_bytes(b"1")
+    payload = _mk_payload(tmp_path, "src", {"eaide-agent.exe": b"A", "_internal/x": b"2"})
+    doc = _manifest_doc(payload, "agent", "0.1.8")
+
+    fetched = []
+    real_fetch = eaide_update._fetch
+
+    def spy_fetch(base, rel, dest):
+        fetched.append(rel)
+        return real_fetch(base, rel, dest)
+
+    monkeypatch.setattr(eaide_update, "_fetch", spy_fetch)
+    apply_manifest(doc, install, dry_run=False)
+    got = install / "versions" / "agent" / "0.1.8"
+    assert (got / "eaide-agent.exe").read_bytes() == b"A"
+    assert (got / "_internal" / "x").read_bytes() == b"2"
+    assert fetched == ["_internal/x"]  # 只有变化文件走取数，未变文件本地复用
+
+
+def test_staging_cleanup_removes_old_junk(tmp_path):
+    vroot = tmp_path / "versions"
+    junk = vroot / ".staging" / "agent-0.1.7-999"
+    junk.mkdir(parents=True)
+    old = os.path.getmtime(__file__) - 40 * 86400
+    os.utime(junk, (old, old))
+    fresh = vroot / ".staging" / "agent-0.1.8-998"
+    fresh.mkdir()
+    cleanup_staging(vroot, max_age_s=24 * 3600)
+    assert not junk.exists()  # 超龄清扫
+    assert fresh.exists()  # 新暂存不动
+
+
+def test_agent_running_blocks_activation_on_windows(tmp_path, monkeypatch):
+    import eaide_update
+
+    monkeypatch.setattr(eaide_update, "agent_process_running", lambda: True)
+    p1 = _mk_payload(tmp_path, "s1", {"a": b"1"})
+    p2 = _mk_payload(tmp_path, "s2", {"a": b"2"})
+    root = tmp_path / "root"
+    monkeypatch.setattr(eaide_update, "IS_WIN", False)  # 首次安装不拦
+    apply_manifest(_manifest_doc(p1, "agent", "0.1.7"), root, dry_run=False)
+    monkeypatch.setattr(eaide_update, "IS_WIN", True)
+    with pytest.raises(SystemExit, match="退出 EAIDE"):
+        apply_manifest(_manifest_doc(p2, "agent", "0.1.8"), root, dry_run=False)
+    assert read_active(root / "versions" / "agent-active.txt", FACTORY) == "0.1.7"
+
+
+def test_apply_unwritable_root_friendly_error(tmp_path):
+    if sys.platform == "win32":
+        pytest.skip("Windows chmod 仅切只读位，同用户仍可写，无法可靠模拟不可写")
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("root 下 chmod 拦不住")
+    payload = _mk_payload(tmp_path, "src", {"a": b"1"})
+    root = tmp_path / "ro-root"
+    root.mkdir()
+    vroot = root / "versions"
+    vroot.mkdir()
+    vroot.chmod(0o500)  # 只读
+    try:
+        with pytest.raises(SystemExit, match="EAIDE_VERSIONS_DIR"):
+            apply_manifest(_manifest_doc(payload, "agent", "0.1.8"), root, dry_run=False)
+    finally:
+        vroot.chmod(0o700)
