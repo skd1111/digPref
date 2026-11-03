@@ -277,7 +277,8 @@ def test_history_records_have_ts(tmp_path):
     root = tmp_path / "root"
     apply_manifest(_manifest_doc(payload, "agent", "0.1.8"), root, dry_run=False)
     for line in _hist(root).splitlines():
-        assert "ts" in json.loads(line)
+        rec = json.loads(line)
+        assert isinstance(rec["ts"], int) and rec["ts"] > 0
 
 
 def test_rollback_survives_corrupt_history(tmp_path):
@@ -374,14 +375,15 @@ def test_apply_http_branch_with_quoting(tmp_path, monkeypatch):
     seen = []
 
     def fake_urlopen(req_or_url, timeout=None):
-        seen.append(str(req_or_url))
+        seen.append((str(req_or_url), timeout))
         return io.BytesIO(b"Z")
 
     monkeypatch.setattr(eaide_update.urllib.request, "urlopen", fake_urlopen)
     apply_manifest(doc, tmp_path / "root", dry_run=False)
     got = tmp_path / "root" / "versions" / "agent" / "0.1.8" / "a b" / "c.bin"
     assert got.read_bytes() == b"Z"
-    assert urllib.parse.quote("a b") in seen[0] and seen[0].endswith("c.bin")
+    assert urllib.parse.quote("a b") in seen[0][0] and seen[0][0].endswith("c.bin")
+    assert seen[0][1] == 30  # timeout 必须透传（Minor#4）
 
 
 def test_pointer_file_is_single_line_with_lf(tmp_path):
@@ -416,3 +418,100 @@ def test_manifest_rejects_reserved_version(fake_dir):
     }
     with pytest.raises(ManifestError, match="version"):
         Manifest.from_dict(doc)
+
+
+# ---- Task 3 二轮复审回归（461dcd0 review）----
+
+
+@pytest.mark.parametrize("reserved", [".fetch/x", ".staging/y", ".filehash.json"])
+def test_manifest_rejects_reserved_internal_paths(reserved):
+    doc = {
+        "schema": 1,
+        "package": "agent",
+        "version": "0.1.8",
+        "baseUrl": "x",
+        "files": [{"path": reserved, "sha256": "0" * 64, "size": 1}],
+    }
+    with pytest.raises(ManifestError, match="reserved"):
+        Manifest.from_dict(doc)
+
+
+def test_rollback_at_factory_is_terminal(tmp_path):
+    """第三次 rollback 不得把 0.1.7 反弹回来（factory 终态）。"""
+    p1 = _mk_payload(tmp_path, "s1", {"a": b"1"})
+    p2 = _mk_payload(tmp_path, "s2", {"a": b"2"})
+    root = tmp_path / "root"
+    apply_manifest(_manifest_doc(p1, "agent", "0.1.7"), root, dry_run=False)
+    apply_manifest(_manifest_doc(p2, "agent", "0.1.8"), root, dry_run=False)
+    rollback(root, "agent")
+    rollback(root, "agent")
+    assert read_active(root / "versions" / "agent-active.txt", FACTORY) == FACTORY
+    with pytest.raises(SystemExit, match="factory"):
+        rollback(root, "agent")
+    assert read_active(root / "versions" / "agent-active.txt", FACTORY) == FACTORY
+
+
+def test_rollback_consumes_records_in_downgrade_cycle(tmp_path):
+    """7→8→7 降级链后 rollback：直退 factory，不重新激活刚离开的 8。"""
+    p1 = _mk_payload(tmp_path, "s1", {"a": b"1"})
+    p2 = _mk_payload(tmp_path, "s2", {"a": b"2"})
+    root = tmp_path / "root"
+    doc1 = _manifest_doc(p1, "agent", "0.1.7")
+    doc2 = _manifest_doc(p2, "agent", "0.1.8")
+    apply_manifest(doc1, root, dry_run=False)
+    apply_manifest(doc2, root, dry_run=False)
+    apply_manifest(doc1, root, dry_run=False)  # 降级回 7
+    rollback(root, "agent")
+    ptr = read_active(root / "versions" / "agent-active.txt", FACTORY)
+    assert ptr != "0.1.8"  # 不得重新激活刚离开的版本
+    assert ptr == FACTORY  # 首现即切入链起点 → factory 终态
+    with pytest.raises(SystemExit, match="factory"):
+        rollback(root, "agent")  # 终态后继续回退被拒
+
+
+def test_rollback_nonstring_from_no_traceback(tmp_path):
+    payload = _mk_payload(tmp_path, "src", {"a": b"1"})
+    root = tmp_path / "root"
+    apply_manifest(_manifest_doc(payload, "agent", "0.1.8"), root, dry_run=False)
+    hf = root / "versions" / "history.jsonl"
+    rec = json.loads(hf.read_text(encoding="utf-8").splitlines()[-1])
+    rec["from"] = 123
+    hf.write_text(json.dumps(rec) + "\n", encoding="utf-8")
+    rollback(root, "agent")  # 非字符串 from → 归一 factory，不 TypeError
+    assert read_active(root / "versions" / "agent-active.txt", FACTORY) == FACTORY
+
+
+def test_rollback_corrupt_filehash_gives_friendly_error(tmp_path):
+    p1 = _mk_payload(tmp_path, "s1", {"a": b"1"})
+    p2 = _mk_payload(tmp_path, "s2", {"a": b"2"})
+    root = tmp_path / "root"
+    apply_manifest(_manifest_doc(p1, "agent", "0.1.7"), root, dry_run=False)
+    apply_manifest(_manifest_doc(p2, "agent", "0.1.8"), root, dry_run=False)
+    cache = root / "versions" / "agent" / "0.1.7" / ".filehash.json"
+    cache.write_text('{"a": "', encoding="utf-8")  # 截断的缓存
+    with pytest.raises(SystemExit, match="filehash"):
+        rollback(root, "agent")
+    assert read_active(root / "versions" / "agent-active.txt", FACTORY) == "0.1.8"
+
+
+def test_repair_branch_leaves_no_fetch_junk_after_failure(tmp_path, monkeypatch):
+    """修复分支中途失败（磁盘文件拉不回）不在活跃目录留旁路垃圾。"""
+    payload = _mk_payload(tmp_path, "src", {"a": b"1", "b": b"2"})
+    doc = _manifest_doc(payload, "agent", "0.1.8")
+    root = tmp_path / "root"
+    apply_manifest(doc, root, dry_run=False)
+    vdir = root / "versions" / "agent" / "0.1.8"
+    (vdir / "a").write_bytes(b"BAD")
+    import eaide_update
+
+    def boom(*a, **k):
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(eaide_update.shutil, "copyfile", boom)
+    with pytest.raises(OSError):
+        apply_manifest(doc, root, dry_run=False)
+    junk = [
+        p for p in vdir.rglob("*") if p.is_file() and p.name not in ("a", "b", ".filehash.json")
+    ]
+    assert junk == []
+    assert not (vdir / ".fetch").exists()

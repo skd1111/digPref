@@ -28,11 +28,8 @@ class ManifestError(ValueError):
 
 
 def _safe_relpath(p: str) -> str:
-    """manifest 文件路径必须是相对版本目录根的 POSIX 风格路径，拒绝穿越。
-
-    反斜杠不是合法 POSIX 分隔符且在 Windows 落位时被当分隔符解析，
-    连同 UNC/盘符一并拒绝（CodeReview c05a26b I-1）。
-    """
+    """manifest 文件路径必须是相对版本目录根的 POSIX 风格路径，拒绝穿越与
+    应用器保留名（.fetch/.staging/.filehash.json，旁路与缓存同命名空间，#I-1）。"""
     pp = PurePosixPath(p)
     if (
         not p
@@ -43,6 +40,8 @@ def _safe_relpath(p: str) -> str:
         or ".." in pp.parts
     ):
         raise ManifestError(f"unsafe manifest path: {p!r}")
+    if pp.parts[0] in (".fetch", ".staging") or pp.as_posix() == ".filehash.json":
+        raise ManifestError(f"reserved manifest path: {p!r}")
     return pp.as_posix()
 
 
@@ -113,7 +112,7 @@ class Manifest:
         if s.startswith(("http://", "https://")):
             from urllib.request import urlopen
 
-            return cls.from_dict(json.loads(urlopen(s).read().decode("utf-8")))
+            return cls.from_dict(json.loads(urlopen(s, timeout=30).read().decode("utf-8")))
         p = _to_local_path(s)
         if p.exists():
             return cls.from_dict(json.loads(p.read_text(encoding="utf-8")))
@@ -242,30 +241,36 @@ def apply_manifest(
     vroot = _ensure_writable(Path(root))
     final = vroot / m.package / m.version
     if final.is_dir():
-        # 幂等/修复：逐文件实算校验，损坏/缺失经旁路临时文件重拉后验，
-        # 文件级 os.replace 保证任一时刻 final 内都是完整旧/新文件（#4）
-        repaired = False
-        for f in m.files:
-            local = final.joinpath(*PurePosixPath(f["path"]).parts)
-            if local.is_file():
-                try:
-                    _check_sha(local, f["sha256"])
-                    continue
-                except ManifestError:
-                    pass
-            tmp = final / ".fetch" / f["path"]
-            base = _dir_to_file_uri(Path(source_dir)) if source_dir else m.base_url
-            _fetch(base, f["path"], tmp)
-            _check_sha(tmp, f["sha256"])
-            local.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(tmp, local)
-            repaired = True
-        shutil.rmtree(final / ".fetch", ignore_errors=True)
-        if repaired:
-            (final / ".filehash.json").write_text(
-                json.dumps({f["path"]: f["sha256"] for f in m.files}), encoding="utf-8"
-            )
-            print(f"[apply] {m.package} {m.version}: 修复损坏文件后激活")
+        # 幂等/修复：逐文件实算校验，损坏/缺失经 .staging 旁路重拉后验，
+        # 文件级 os.replace 保证任一时刻 final 内都是完整旧/新文件（#4）；
+        # 旁路在 .staging 下（同卷原子），失败时随 except 整删不留垃圾（#I-1/M-1）
+        repair = vroot / ".staging" / f"repair-{m.package}-{m.version}-{os.getpid()}"
+        try:
+            repaired = False
+            for f in m.files:
+                local = final.joinpath(*PurePosixPath(f["path"]).parts)
+                if local.is_file():
+                    try:
+                        _check_sha(local, f["sha256"])
+                        continue
+                    except ManifestError:
+                        pass
+                tmp = repair / PurePosixPath(f["path"])
+                base = _dir_to_file_uri(Path(source_dir)) if source_dir else m.base_url
+                _fetch(base, f["path"], tmp)
+                _check_sha(tmp, f["sha256"])
+                local.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(tmp, local)
+                repaired = True
+            if repaired:
+                (final / ".filehash.json").write_text(
+                    json.dumps({f["path"]: f["sha256"] for f in m.files}), encoding="utf-8"
+                )
+                print(f"[apply] {m.package} {m.version}: 修复损坏文件后激活")
+        except BaseException:
+            shutil.rmtree(repair, ignore_errors=True)
+            raise
+        shutil.rmtree(repair, ignore_errors=True)
     else:
         staging = vroot / ".staging" / f"{m.package}-{m.version}-{os.getpid()}"
         try:
@@ -302,7 +307,11 @@ def _check_filehash_cache(vdir: Path) -> None:
     cache = vdir / ".filehash.json"
     if not cache.exists():
         return
-    for rel, want in json.loads(cache.read_text(encoding="utf-8")).items():
+    try:
+        entries = json.loads(cache.read_text(encoding="utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        raise SystemExit(f"[rollback] .filehash.json 损坏，拒绝指向 {vdir}") from None
+    for rel, want in entries.items():
         p = vdir.joinpath(*PurePosixPath(rel).parts)
         if not p.is_file():
             raise SystemExit(f"[rollback] verify: missing {rel} in {vdir}")
@@ -321,25 +330,36 @@ def rollback(root: Path, package: str, version: str | None = None) -> None:
         hist_file = vroot / "history.jsonl"
         entries = []
         if hist_file.exists():
-            for line in hist_file.read_text(encoding="utf-8").splitlines():
+            try:
+                raw = hist_file.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                raw = ""
+            for line in raw.splitlines():
                 try:
                     rec = json.loads(line)
                 except ValueError:
                     continue  # 断电可留半行，逐行容错（#1）
                 if isinstance(rec, dict) and rec.get("package") == package:
                     entries.append(rec)
-        # 回滚链只由 apply 激活记录构成（rollback 记录不参与，避免重做/反弹歧义）：
-        # 当前值所在记录的 from 即“上一站”；当前值不在链尾（手动改指针等）
-        # 则对齐到链尾记录的 from。连续 rollback 沿链逐跳：8→7→factory（#2）
-        steps = [r for r in entries if not r.get("rollback")]
-        version = FACTORY
+        # factory 终态：已是出厂版不得继续回退（#I-2）
+        if old == FACTORY:
+            raise SystemExit(f"[rollback] {package} 已在 factory，无更旧状态")
+        # 回滚链语义：取最后一次 forward 切换为止的 apply 记录构成激活链
+        # （更早的 rollback 已被新 apply 重置）；撤销“最后一次切入当前值”
+        # 的那次切换即回其 from；链上找不到当前值（手动改过指针）则对齐链尾。
+        # factory 为终态；连续 rollback 逐跳：8→7→factory（#I-2/#2）
+        last_forward = max((i for i, r in enumerate(entries) if not r.get("rollback")), default=-1)
+        steps = [r for r in entries[: last_forward + 1] if not r.get("rollback")]
+        src = None
         if steps:
-            idx = max((i for i, r in enumerate(steps) if r.get("to") == old), default=None)
-            if idx is None:
-                idx = len(steps) - 1
-            version = steps[idx].get("from") or FACTORY
+            hit = next((r for r in steps if r.get("to") == old), None) or steps[-1]
+            src = hit.get("from")
+        version = src if isinstance(src, str) and src else FACTORY  # 非字符串归一（#I-3）
     if version != FACTORY and (not VERSION_RE.match(version) or version in (".", "..")):
         raise SystemExit(f"[rollback] bad version: {version!r}")
+    if version == old:
+        print(f"[rollback] {package} 已处于 {version}，无需回退")
+        return
     if version != FACTORY:
         vd = vroot / package / version
         if not vd.is_dir():
