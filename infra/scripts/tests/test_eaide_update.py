@@ -423,7 +423,10 @@ def test_manifest_rejects_reserved_version(fake_dir):
 # ---- Task 3 二轮复审回归（461dcd0 review）----
 
 
-@pytest.mark.parametrize("reserved", [".fetch/x", ".staging/y", ".filehash.json"])
+@pytest.mark.parametrize(
+    "reserved",
+    [".fetch/x", ".staging/y", ".filehash.json", ".filehash.json/b", "a/.filehash.json"],
+)
 def test_manifest_rejects_reserved_internal_paths(reserved):
     doc = {
         "schema": 1,
@@ -492,6 +495,20 @@ def test_rollback_corrupt_filehash_gives_friendly_error(tmp_path):
     with pytest.raises(SystemExit, match="filehash"):
         rollback(root, "agent")
     assert read_active(root / "versions" / "agent-active.txt", FACTORY) == "0.1.8"
+
+
+@pytest.mark.parametrize("junk", ["[1,2]", "42", "null"])
+def test_rollback_nonobject_filehash_no_traceback(tmp_path, junk):
+    """合法 JSON 但非对象（list/int/null）同样友好拒绝，不 AttributeError。"""
+    p1 = _mk_payload(tmp_path, "s1", {"a": b"1"})
+    p2 = _mk_payload(tmp_path, "s2", {"a": b"2"})
+    root = tmp_path / "root"
+    apply_manifest(_manifest_doc(p1, "agent", "0.1.7"), root, dry_run=False)
+    apply_manifest(_manifest_doc(p2, "agent", "0.1.8"), root, dry_run=False)
+    cache = root / "versions" / "agent" / "0.1.7" / ".filehash.json"
+    cache.write_text(junk, encoding="utf-8")
+    with pytest.raises(SystemExit, match="filehash"):
+        rollback(root, "agent")
 
 
 def test_repair_branch_leaves_no_fetch_junk_after_failure(tmp_path, monkeypatch):

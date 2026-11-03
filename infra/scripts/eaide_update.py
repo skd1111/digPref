@@ -40,7 +40,7 @@ def _safe_relpath(p: str) -> str:
         or ".." in pp.parts
     ):
         raise ManifestError(f"unsafe manifest path: {p!r}")
-    if pp.parts[0] in (".fetch", ".staging") or pp.as_posix() == ".filehash.json":
+    if pp.parts[0] in (".fetch", ".staging") or ".filehash.json" in pp.parts:
         raise ManifestError(f"reserved manifest path: {p!r}")
     return pp.as_posix()
 
@@ -311,6 +311,8 @@ def _check_filehash_cache(vdir: Path) -> None:
         entries = json.loads(cache.read_text(encoding="utf-8"))
     except (ValueError, UnicodeDecodeError):
         raise SystemExit(f"[rollback] .filehash.json 损坏，拒绝指向 {vdir}") from None
+    if not isinstance(entries, dict):
+        raise SystemExit(f"[rollback] .filehash.json 损坏（非对象），拒绝指向 {vdir}")
     for rel, want in entries.items():
         p = vdir.joinpath(*PurePosixPath(rel).parts)
         if not p.is_file():
@@ -345,9 +347,10 @@ def rollback(root: Path, package: str, version: str | None = None) -> None:
         if old == FACTORY:
             raise SystemExit(f"[rollback] {package} 已在 factory，无更旧状态")
         # 回滚链语义：取最后一次 forward 切换为止的 apply 记录构成激活链
-        # （更早的 rollback 已被新 apply 重置）；撤销“最后一次切入当前值”
-        # 的那次切换即回其 from；链上找不到当前值（手动改过指针）则对齐链尾。
-        # factory 为终态；连续 rollback 逐跳：8→7→factory（#I-2/#2）
+        # （更早的 rollback 已被新 apply 重置）；撤销“首次切入当前值”的那次
+        # 切换即回其 from（保守：降级环里一步退到 factory，不提供 redo）；链上
+        # 找不到当前值（手动改过指针）则对齐链尾。factory 为终态；
+        # 连续 rollback 逐跳：8→7→factory（#I-2/#2）
         last_forward = max((i for i, r in enumerate(entries) if not r.get("rollback")), default=-1)
         steps = [r for r in entries[: last_forward + 1] if not r.get("rollback")]
         src = None
