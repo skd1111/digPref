@@ -80,7 +80,7 @@ class Manifest:
         if doc.get("package") not in ("agent", "web"):
             raise ManifestError(f"bad package: {doc.get('package')!r}")
         version = doc.get("version", "")
-        if not VERSION_RE.match(version) or version in (".", ".."):
+        if not VERSION_RE.match(version) or version in (".", "..", FACTORY):
             raise ManifestError(f"bad version: {version!r}")
         if not doc.get("baseUrl"):
             raise ManifestError("missing baseUrl (required per spec §3)")
@@ -137,21 +137,6 @@ def _to_local_path(s: str) -> Path:
     return Path(f"//{u.netloc}{path}")  # UNC
 
 
-def _cmd_gen_manifest(args):
-    files = gen_manifest(Path(args.dir))
-    doc = {
-        "schema": SCHEMA_VERSION,
-        "package": args.package,
-        "version": args.version,
-        "baseUrl": args.base_url,
-        "files": files,
-    }
-    if args.min_shell:
-        doc["minShell"] = args.min_shell
-    Path(args.out).write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"[gen-manifest] {len(files)} files -> {args.out}")
-
-
 # ---- 指针 / 历史（spec §2、§4.2-7）----
 
 
@@ -165,17 +150,21 @@ def read_active(ptr: Path, default: str = FACTORY) -> str:
 
 
 def write_active(ptr: Path, version: str) -> None:
-    """单行版本号 + LF；tmp + os.replace 同卷原子替换。"""
+    """单行版本号 + LF（§2）；tmp 内容 fsync 后 os.replace 同卷原子替换（§4.2-7）。"""
     ptr = Path(ptr)
     ptr.parent.mkdir(parents=True, exist_ok=True)
-    tmp = ptr.with_name(ptr.name + ".tmp")
+    tmp = ptr.with_name(f"{ptr.name}.{os.getpid()}.tmp")
     with open(tmp, "w", encoding="utf-8", newline="\n") as f:
-        f.write(version)
+        f.write(version + "\n")
+        f.flush()
+        os.fsync(f.fileno())
     os.replace(tmp, ptr)
 
 
 def _append_history(vroot: Path, package: str, old: str, new: str, **extra) -> None:
-    rec = {"package": package, "from": old, "to": new, **extra}
+    import time
+
+    rec = {"ts": int(time.time()), "package": package, "from": old, "to": new, **extra}
     with open(vroot / "history.jsonl", "a", encoding="utf-8") as h:
         h.write(json.dumps(rec) + "\n")
 
@@ -204,11 +193,14 @@ def _fetch(base_url: str, rel: str, dest: Path) -> None:
     quoted = "/".join(urllib.parse.quote(seg) for seg in PurePosixPath(rel).parts)
     if base_url.startswith(("http://", "https://")):
         src = urllib.parse.urljoin(base_url.rstrip("/") + "/", quoted)
-        with urllib.request.urlopen(src) as r, open(dest, "wb") as f:
+        with urllib.request.urlopen(src, timeout=30) as r, open(dest, "wb") as f:
             shutil.copyfileobj(r, f)
         return
-    # 非 http → 本地基目录（file URI 或裸路径）
-    base = _to_local_path(base_url if base_url.startswith("file://") else f"file://{base_url}")
+    # 非 http → 本地基目录：file URI 走解析，裸路径直接用（§3 允许两种写法，#5）
+    if base_url.startswith("file:"):
+        base = _to_local_path(base_url)
+    else:
+        base = Path(base_url).expanduser().absolute()
     src = base.joinpath(*PurePosixPath(rel).parts)
     shutil.copyfile(src, dest)
 
@@ -219,7 +211,7 @@ def _check_sha(path: Path, want: str) -> None:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     if h.hexdigest() != want:
-        raise ManifestError(f"sha256 mismatch for file: want {want}")
+        raise ManifestError(f"sha256 mismatch: {path} want {want} got {h.hexdigest()}")
 
 
 def verify_version(vdir: Path, doc: dict) -> None:
@@ -250,7 +242,8 @@ def apply_manifest(
     vroot = _ensure_writable(Path(root))
     final = vroot / m.package / m.version
     if final.is_dir():
-        # 幂等/修复：已存在 → 逐文件实算校验，损坏/缺失重拉后再验（下载后必检，§4.2-5）
+        # 幂等/修复：逐文件实算校验，损坏/缺失经旁路临时文件重拉后验，
+        # 文件级 os.replace 保证任一时刻 final 内都是完整旧/新文件（#4）
         repaired = False
         for f in m.files:
             local = final.joinpath(*PurePosixPath(f["path"]).parts)
@@ -260,14 +253,18 @@ def apply_manifest(
                     continue
                 except ManifestError:
                     pass
-            src = Path(source_dir) if source_dir else None
-            if src is not None:
-                _fetch(_dir_to_file_uri(src), f["path"], local)
-            else:
-                _fetch(m.base_url, f["path"], local)
-            _check_sha(local, f["sha256"])
+            tmp = final / ".fetch" / f["path"]
+            base = _dir_to_file_uri(Path(source_dir)) if source_dir else m.base_url
+            _fetch(base, f["path"], tmp)
+            _check_sha(tmp, f["sha256"])
+            local.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(tmp, local)
             repaired = True
+        shutil.rmtree(final / ".fetch", ignore_errors=True)
         if repaired:
+            (final / ".filehash.json").write_text(
+                json.dumps({f["path"]: f["sha256"] for f in m.files}), encoding="utf-8"
+            )
             print(f"[apply] {m.package} {m.version}: 修复损坏文件后激活")
     else:
         staging = vroot / ".staging" / f"{m.package}-{m.version}-{os.getpid()}"
@@ -284,44 +281,70 @@ def apply_manifest(
             (final / ".filehash.json").write_text(
                 json.dumps({f["path"]: f["sha256"] for f in m.files}), encoding="utf-8"
             )
-        except Exception:
+        except BaseException:  # 含 KeyboardInterrupt：400MB 下载期间 Ctrl-C 也不留垃圾
             shutil.rmtree(staging, ignore_errors=True)  # 崩溃不留垃圾（§4.2-9）
             raise
     ptr = vroot / f"{m.package}-active.txt"
     old = read_active(ptr)
     if old != m.version:
         write_active(ptr, m.version)
-    _append_history(vroot, m.package, old, m.version, manifest=str(m.base_url))
+        _append_history(vroot, m.package, old, m.version, manifest=str(m.base_url))
     print(f"[apply] activated {m.package} {old} -> {m.version}")
 
 
 def _dir_to_file_uri(d: Path) -> str:
-    return "file:///" + str(d).replace("\\", "/")
+    """绝对化 + as_uri 百分号编码（相对 --adopt 不可静默解析到盘根，#5）。"""
+    return Path(d).expanduser().absolute().as_uri()
+
+
+def _check_filehash_cache(vdir: Path) -> None:
+    """rollback 目标的轻量校验：有 .filehash.json 就逐条实算比对（#7）。"""
+    cache = vdir / ".filehash.json"
+    if not cache.exists():
+        return
+    for rel, want in json.loads(cache.read_text(encoding="utf-8")).items():
+        p = vdir.joinpath(*PurePosixPath(rel).parts)
+        if not p.is_file():
+            raise SystemExit(f"[rollback] verify: missing {rel} in {vdir}")
+        try:
+            _check_sha(p, want)
+        except ManifestError:
+            raise SystemExit(f"[rollback] verify: {rel} hash mismatch in {vdir}") from None
 
 
 def rollback(root: Path, package: str, version: str | None = None) -> None:
-    """显式版本或 history 倒数一条的 from；不删坏版本目录（spec §4.4）。"""
+    """显式版本或 history 倒数一条有效 from；不删坏版本目录（spec §4.4）。"""
     vroot = Path(root) / "versions"
     ptr = vroot / f"{package}-active.txt"
+    old = read_active(ptr)
     if version is None:
         hist_file = vroot / "history.jsonl"
         entries = []
         if hist_file.exists():
             for line in hist_file.read_text(encoding="utf-8").splitlines():
-                if line.strip():
+                try:
                     rec = json.loads(line)
-                    if rec.get("package") == package:
-                        entries.append(rec)
-        if not entries:
-            raise SystemExit(f"[rollback] {package} 无历史可回滚")
-        version = entries[-1]["from"]
-    if version not in (FACTORY, ".", "..") and not VERSION_RE.match(version):
+                except ValueError:
+                    continue  # 断电可留半行，逐行容错（#1）
+                if isinstance(rec, dict) and rec.get("package") == package:
+                    entries.append(rec)
+        # 回滚链只由 apply 激活记录构成（rollback 记录不参与，避免重做/反弹歧义）：
+        # 当前值所在记录的 from 即“上一站”；当前值不在链尾（手动改指针等）
+        # 则对齐到链尾记录的 from。连续 rollback 沿链逐跳：8→7→factory（#2）
+        steps = [r for r in entries if not r.get("rollback")]
+        version = FACTORY
+        if steps:
+            idx = max((i for i, r in enumerate(steps) if r.get("to") == old), default=None)
+            if idx is None:
+                idx = len(steps) - 1
+            version = steps[idx].get("from") or FACTORY
+    if version != FACTORY and (not VERSION_RE.match(version) or version in (".", "..")):
         raise SystemExit(f"[rollback] bad version: {version!r}")
     if version != FACTORY:
         vd = vroot / package / version
         if not vd.is_dir():
             raise SystemExit(f"[rollback] version not found: {vd}")
-    old = read_active(ptr)
+        _check_filehash_cache(vd)
     write_active(ptr, version)
     _append_history(vroot, package, old, version, rollback=True)
     print(f"[rollback] {package} {old} -> {version}")
@@ -354,6 +377,8 @@ def _cmd_verify(args):
     version = args.version or read_active(vroot / f"{m.package}-active.txt")
     if version == FACTORY:
         raise SystemExit("[verify] 当前激活为 factory，无版本目录可验")
+    if not VERSION_RE.match(version) or version in (".", ".."):
+        raise SystemExit(f"[verify] bad version: {version!r}")
     verify_version(vroot / m.package / version, m.raw)
     print(f"[verify] {m.package} {version}: OK ({len(m.files)} files)")
     return 0

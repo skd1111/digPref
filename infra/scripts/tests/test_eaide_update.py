@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 from eaide_update import (
@@ -262,3 +263,156 @@ def test_verify_full_rehash(tmp_path):
     (vdir / "a").write_bytes(b"x")
     with pytest.raises(ManifestError, match="mismatch"):
         verify_version(vdir, doc)
+
+
+# ---- Task 3 复审回归（917afc7 review）----
+
+
+def _hist(root, package="agent"):
+    return (root / "versions" / "history.jsonl").read_text(encoding="utf-8")
+
+
+def test_history_records_have_ts(tmp_path):
+    payload = _mk_payload(tmp_path, "src", {"a": b"1"})
+    root = tmp_path / "root"
+    apply_manifest(_manifest_doc(payload, "agent", "0.1.8"), root, dry_run=False)
+    for line in _hist(root).splitlines():
+        assert "ts" in json.loads(line)
+
+
+def test_rollback_survives_corrupt_history(tmp_path):
+    p1 = _mk_payload(tmp_path, "s1", {"a": b"1"})
+    p2 = _mk_payload(tmp_path, "s2", {"a": b"2"})
+    root = tmp_path / "root"
+    apply_manifest(_manifest_doc(p1, "agent", "0.1.7"), root, dry_run=False)
+    apply_manifest(_manifest_doc(p2, "agent", "0.1.8"), root, dry_run=False)
+    hf = root / "versions" / "history.jsonl"
+    lines = hf.read_text(encoding="utf-8").rstrip("\n").split("\n")
+    hf.write_text("\n".join([*lines, '{"package": "ag', "123"]) + "\n", encoding="utf-8")
+    rollback(root, "agent")  # 坏行跳过，仍退到 0.1.7
+    assert read_active(root / "versions" / "agent-active.txt", FACTORY) == "0.1.7"
+
+
+def test_rollback_null_from_goes_factory(tmp_path):
+    payload = _mk_payload(tmp_path, "src", {"a": b"1"})
+    root = tmp_path / "root"
+    apply_manifest(_manifest_doc(payload, "agent", "0.1.8"), root, dry_run=False)
+    hf = root / "versions" / "history.jsonl"
+    rec = json.loads(hf.read_text(encoding="utf-8").splitlines()[-1])
+    rec["from"] = None
+    hf.write_text(json.dumps(rec) + "\n", encoding="utf-8")
+    rollback(root, "agent")
+    assert read_active(root / "versions" / "agent-active.txt", FACTORY) == FACTORY
+
+
+def test_rollback_after_duplicate_apply(tmp_path):
+    """重复 apply 当前版本不得污染回滚链（from==to 不动点）。"""
+    p1 = _mk_payload(tmp_path, "s1", {"a": b"1"})
+    p2 = _mk_payload(tmp_path, "s2", {"a": b"2"})
+    root = tmp_path / "root"
+    apply_manifest(_manifest_doc(p1, "agent", "0.1.7"), root, dry_run=False)
+    doc2 = _manifest_doc(p2, "agent", "0.1.8")
+    apply_manifest(doc2, root, dry_run=False)
+    apply_manifest(doc2, root, dry_run=False)  # 幂等重复
+    rollback(root, "agent")
+    assert read_active(root / "versions" / "agent-active.txt", FACTORY) == "0.1.7"
+    rollback(root, "agent")  # 二次回滚不得反弹回 0.1.8
+    assert read_active(root / "versions" / "agent-active.txt", FACTORY) == FACTORY
+
+
+def test_rollback_dot_version_rejected(tmp_path):
+    root = tmp_path / "root"
+    (root / "versions" / "agent").mkdir(parents=True)
+    with pytest.raises(SystemExit, match="bad version"):
+        rollback(root, "agent", version="..")
+
+
+def test_rollback_missing_dir_after_damage(tmp_path):
+    payload = _mk_payload(tmp_path, "src", {"a": b"1"})
+    doc = _manifest_doc(payload, "agent", "0.1.8")
+    root = tmp_path / "root"
+    apply_manifest(doc, root, dry_run=False)
+    (root / "versions" / "agent" / "0.1.8" / "a").write_bytes(b"CORRUPT")
+    p2 = _mk_payload(tmp_path, "s2", {"a": b"2"})
+    apply_manifest(_manifest_doc(p2, "agent", "0.1.9"), root, dry_run=False)
+    with pytest.raises(SystemExit, match="verify"):
+        rollback(root, "agent", version="0.1.8")  # 目标目录损坏 → 拒指
+
+
+def test_apply_adopts_relative_source_dir(tmp_path, monkeypatch):
+    payload = _mk_payload(tmp_path, "src", {"a": b"1", "sub/b": b"2"})
+    root = tmp_path / "root"
+    monkeypatch.chdir(tmp_path)
+    apply_manifest(
+        _manifest_doc(payload, "agent", "0.1.8"),
+        root,
+        dry_run=False,
+        source_dir=Path("src"),
+    )
+    assert (root / "versions" / "agent" / "0.1.8" / "sub" / "b").read_bytes() == b"2"
+
+
+def test_apply_plain_directory_baseurl(tmp_path):
+    """§3：baseUrl 允许裸本地路径。"""
+    payload = _mk_payload(tmp_path, "src", {"a": b"1"})
+    doc = _manifest_doc(payload, "agent", "0.1.8")
+    doc["baseUrl"] = str(payload)  # 裸 Windows 路径
+    root = tmp_path / "root"
+    apply_manifest(doc, root, dry_run=False)
+    assert (root / "versions" / "agent" / "0.1.8" / "a").read_bytes() == b"1"
+
+
+def test_apply_http_branch_with_quoting(tmp_path, monkeypatch):
+    import io
+    import urllib.parse
+
+    import eaide_update
+
+    payload = _mk_payload(tmp_path, "src", {"a b/c.bin": b"Z"})
+    doc = _manifest_doc(payload, "agent", "0.1.8")
+    doc["baseUrl"] = "https://example.invalid/updates/0.1.8"
+    seen = []
+
+    def fake_urlopen(req_or_url, timeout=None):
+        seen.append(str(req_or_url))
+        return io.BytesIO(b"Z")
+
+    monkeypatch.setattr(eaide_update.urllib.request, "urlopen", fake_urlopen)
+    apply_manifest(doc, tmp_path / "root", dry_run=False)
+    got = tmp_path / "root" / "versions" / "agent" / "0.1.8" / "a b" / "c.bin"
+    assert got.read_bytes() == b"Z"
+    assert urllib.parse.quote("a b") in seen[0] and seen[0].endswith("c.bin")
+
+
+def test_pointer_file_is_single_line_with_lf(tmp_path):
+    ptr = tmp_path / "agent-active.txt"
+    write_active(ptr, "0.1.9")
+    assert ptr.read_bytes() == b"0.1.9\n"
+    ptr.write_bytes(b"0.1.9\n")
+    assert read_active(ptr, default=FACTORY) == "0.1.9"  # LF 回读兼容
+
+
+def test_repair_branch_file_atomic_and_filehash(tmp_path):
+    payload = _mk_payload(tmp_path, "src", {"a": b"1", "b": b"2"})
+    doc = _manifest_doc(payload, "agent", "0.1.8")
+    root = tmp_path / "root"
+    apply_manifest(doc, root, dry_run=False)
+    vdir = root / "versions" / "agent" / "0.1.8"
+    (vdir / "a").unlink()  # 模拟缺失
+    apply_manifest(doc, root, dry_run=False)
+    assert (vdir / "a").read_bytes() == b"1"
+    cache = json.loads((vdir / ".filehash.json").read_text(encoding="utf-8"))
+    assert cache == {f["path"]: f["sha256"] for f in doc["files"]}  # 修复后刷新
+    assert not (vdir / ".fetch").exists()  # 旁路临时目录不留残留
+
+
+def test_manifest_rejects_reserved_version(fake_dir):
+    doc = {
+        "schema": 1,
+        "package": "agent",
+        "version": "factory",
+        "baseUrl": "x",
+        "files": [],
+    }
+    with pytest.raises(ManifestError, match="version"):
+        Manifest.from_dict(doc)
