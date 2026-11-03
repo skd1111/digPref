@@ -9,12 +9,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import shutil
 import sys
+import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 SCHEMA_VERSION = 1
+FACTORY = "factory"
+IS_WIN = sys.platform == "win32"
 VERSION_RE = re.compile(r"[0-9A-Za-z._-]+\Z")  # \Z 锁末尾，杜绝 $ 放行尾部换行
 
 
@@ -147,6 +152,218 @@ def _cmd_gen_manifest(args):
     print(f"[gen-manifest] {len(files)} files -> {args.out}")
 
 
+# ---- 指针 / 历史（spec §2、§4.2-7）----
+
+
+def read_active(ptr: Path, default: str = FACTORY) -> str:
+    """读激活指针；非法字符一律回退 default（与 Rust 侧 §6 口径一致）。"""
+    try:
+        v = Path(ptr).read_text(encoding="utf-8").strip()
+    except OSError:
+        return default
+    return v if VERSION_RE.match(v) and v not in (".", "..") else default
+
+
+def write_active(ptr: Path, version: str) -> None:
+    """单行版本号 + LF；tmp + os.replace 同卷原子替换。"""
+    ptr = Path(ptr)
+    ptr.parent.mkdir(parents=True, exist_ok=True)
+    tmp = ptr.with_name(ptr.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        f.write(version)
+    os.replace(tmp, ptr)
+
+
+def _append_history(vroot: Path, package: str, old: str, new: str, **extra) -> None:
+    rec = {"package": package, "from": old, "to": new, **extra}
+    with open(vroot / "history.jsonl", "a", encoding="utf-8") as h:
+        h.write(json.dumps(rec) + "\n")
+
+
+def _ensure_writable(root: Path) -> Path:
+    """versions 根可写性前置检查；不可写明确报错不静默兜底（spec §4.2-2/§9）。"""
+    vroot = Path(root) / "versions"
+    try:
+        vroot.mkdir(parents=True, exist_ok=True)
+        probe = vroot / ".write-probe"
+        probe.write_text("x")
+        probe.unlink()
+    except OSError as e:
+        raise SystemExit(
+            f"[apply] versions 根不可写: {vroot} —— {e}\n"
+            "请设置 EAIDE_VERSIONS_DIR 指向可写目录（spec §2/§9）"
+        ) from e
+    return vroot
+
+
+# ---- 下载/校验（spec §4.2-4/5）----
+
+
+def _fetch(base_url: str, rel: str, dest: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    quoted = "/".join(urllib.parse.quote(seg) for seg in PurePosixPath(rel).parts)
+    if base_url.startswith(("http://", "https://")):
+        src = urllib.parse.urljoin(base_url.rstrip("/") + "/", quoted)
+        with urllib.request.urlopen(src) as r, open(dest, "wb") as f:
+            shutil.copyfileobj(r, f)
+        return
+    # 非 http → 本地基目录（file URI 或裸路径）
+    base = _to_local_path(base_url if base_url.startswith("file://") else f"file://{base_url}")
+    src = base.joinpath(*PurePosixPath(rel).parts)
+    shutil.copyfile(src, dest)
+
+
+def _check_sha(path: Path, want: str) -> None:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    if h.hexdigest() != want:
+        raise ManifestError(f"sha256 mismatch for file: want {want}")
+
+
+def verify_version(vdir: Path, doc: dict) -> None:
+    """不读缓存，对版本目录全量重算哈希（spec §4.1）。"""
+    m = Manifest.from_dict(json.loads(json.dumps(doc)))  # 深拷贝：from_dict 会原地规范 path
+    vdir = Path(vdir)
+    for f in m.files:
+        p = vdir.joinpath(*PurePosixPath(f["path"]).parts)
+        if not p.is_file():
+            raise ManifestError(f"missing: {f['path']}")
+        try:
+            _check_sha(p, f["sha256"])
+        except ManifestError:
+            raise ManifestError(f"{f['path']}: hash mismatch") from None
+
+
+def apply_manifest(
+    doc: dict,
+    root: Path,
+    dry_run: bool = False,
+    source_dir: Path | None = None,
+) -> None:
+    """spec §4.2 主流程。source_dir 为 --adopt 本地整目录 adopt；None 时走 base_url。"""
+    m = Manifest.from_dict(json.loads(json.dumps(doc)))
+    if dry_run:
+        print(f"[apply dry-run] {m.package} {m.version}: {len(m.files)} files")
+        return
+    vroot = _ensure_writable(Path(root))
+    final = vroot / m.package / m.version
+    if final.is_dir():
+        # 幂等/修复：已存在 → 逐文件实算校验，损坏/缺失重拉后再验（下载后必检，§4.2-5）
+        repaired = False
+        for f in m.files:
+            local = final.joinpath(*PurePosixPath(f["path"]).parts)
+            if local.is_file():
+                try:
+                    _check_sha(local, f["sha256"])
+                    continue
+                except ManifestError:
+                    pass
+            src = Path(source_dir) if source_dir else None
+            if src is not None:
+                _fetch(_dir_to_file_uri(src), f["path"], local)
+            else:
+                _fetch(m.base_url, f["path"], local)
+            _check_sha(local, f["sha256"])
+            repaired = True
+        if repaired:
+            print(f"[apply] {m.package} {m.version}: 修复损坏文件后激活")
+    else:
+        staging = vroot / ".staging" / f"{m.package}-{m.version}-{os.getpid()}"
+        try:
+            for f in m.files:
+                dest = staging.joinpath(*PurePosixPath(f["path"]).parts)
+                if source_dir is not None:
+                    _fetch(_dir_to_file_uri(Path(source_dir)), f["path"], dest)
+                else:
+                    _fetch(m.base_url, f["path"], dest)
+                _check_sha(dest, f["sha256"])
+            final.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(staging, final)  # 同卷原子落位
+            (final / ".filehash.json").write_text(
+                json.dumps({f["path"]: f["sha256"] for f in m.files}), encoding="utf-8"
+            )
+        except Exception:
+            shutil.rmtree(staging, ignore_errors=True)  # 崩溃不留垃圾（§4.2-9）
+            raise
+    ptr = vroot / f"{m.package}-active.txt"
+    old = read_active(ptr)
+    if old != m.version:
+        write_active(ptr, m.version)
+    _append_history(vroot, m.package, old, m.version, manifest=str(m.base_url))
+    print(f"[apply] activated {m.package} {old} -> {m.version}")
+
+
+def _dir_to_file_uri(d: Path) -> str:
+    return "file:///" + str(d).replace("\\", "/")
+
+
+def rollback(root: Path, package: str, version: str | None = None) -> None:
+    """显式版本或 history 倒数一条的 from；不删坏版本目录（spec §4.4）。"""
+    vroot = Path(root) / "versions"
+    ptr = vroot / f"{package}-active.txt"
+    if version is None:
+        hist_file = vroot / "history.jsonl"
+        entries = []
+        if hist_file.exists():
+            for line in hist_file.read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    rec = json.loads(line)
+                    if rec.get("package") == package:
+                        entries.append(rec)
+        if not entries:
+            raise SystemExit(f"[rollback] {package} 无历史可回滚")
+        version = entries[-1]["from"]
+    if version not in (FACTORY, ".", "..") and not VERSION_RE.match(version):
+        raise SystemExit(f"[rollback] bad version: {version!r}")
+    if version != FACTORY:
+        vd = vroot / package / version
+        if not vd.is_dir():
+            raise SystemExit(f"[rollback] version not found: {vd}")
+    old = read_active(ptr)
+    write_active(ptr, version)
+    _append_history(vroot, package, old, version, rollback=True)
+    print(f"[rollback] {package} {old} -> {version}")
+
+
+def _cmd_gen_manifest(args):
+    files = gen_manifest(Path(args.dir))
+    doc = {
+        "schema": SCHEMA_VERSION,
+        "package": args.package,
+        "version": args.version,
+        "baseUrl": args.base_url,
+        "files": files,
+    }
+    if args.min_shell:
+        doc["minShell"] = args.min_shell
+    Path(args.out).write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[gen-manifest] {len(files)} files -> {args.out}")
+
+
+def _cmd_apply(args):
+    m = Manifest.load(args.manifest)
+    apply_manifest(m.raw, Path(args.root), dry_run=args.dry_run, source_dir=args.adopt)
+    return 0
+
+
+def _cmd_verify(args):
+    m = Manifest.load(args.manifest)
+    vroot = Path(args.root) / "versions"
+    version = args.version or read_active(vroot / f"{m.package}-active.txt")
+    if version == FACTORY:
+        raise SystemExit("[verify] 当前激活为 factory，无版本目录可验")
+    verify_version(vroot / m.package / version, m.raw)
+    print(f"[verify] {m.package} {version}: OK ({len(m.files)} files)")
+    return 0
+
+
+def _cmd_rollback(args):
+    rollback(Path(args.root), args.package, version=args.version)
+    return 0
+
+
 def main(argv=None):
     import argparse
 
@@ -160,6 +377,22 @@ def main(argv=None):
     g.add_argument("--min-shell", dest="min_shell", default=None)
     g.add_argument("--out", required=True)
     g.set_defaults(fn=_cmd_gen_manifest)
+    a = sub.add_parser("apply", help="下载/adopt 变化文件并原子激活")
+    a.add_argument("--manifest", required=True)
+    a.add_argument("--root", required=True, help="安装目录（versions 的父目录）")
+    a.add_argument("--dry-run", action="store_true", dest="dry_run")
+    a.add_argument("--adopt", default=None, help="本地已备好的版本目录（无渠道手动主路径）")
+    a.set_defaults(fn=_cmd_apply)
+    v = sub.add_parser("verify", help="全量重算激活/指定版本哈希")
+    v.add_argument("--manifest", required=True)
+    v.add_argument("--root", required=True)
+    v.add_argument("--version", default=None)
+    v.set_defaults(fn=_cmd_verify)
+    r = sub.add_parser("rollback", help="指针回退（不删坏版本目录）")
+    r.add_argument("--root", required=True)
+    r.add_argument("--package", required=True, choices=["agent", "web"])
+    r.add_argument("--version", default=None)
+    r.set_defaults(fn=_cmd_rollback)
     args = ap.parse_args(argv)
     return args.fn(args)
 
