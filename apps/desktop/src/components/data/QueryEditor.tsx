@@ -90,7 +90,7 @@ function HeavyQueryConfirmDialog(): JSX.Element | null {
             ⚠ {pending.message}
           </p>
           <p className="text-2xs" style={{ color: '#616161' }}>
-            该查询可能耗时较长。数据专家模式为只读（SELECT 白名单），并已强制注入 LIMIT 上限。
+            该查询可能耗时较长。数据模式为只读（SELECT 白名单），并已强制注入 LIMIT 上限。
           </p>
           <pre
             className="max-h-[160px] overflow-auto rounded p-2 font-mono text-2xs"
@@ -219,7 +219,7 @@ function SqlPane(): JSX.Element {
         onRun={runQuery}
         note={
           !readOnly
-            ? '⛔ 检测到写操作（UPDATE/DELETE/DROP…），数据专家模式只读，已禁用执行'
+            ? '⛔ 检测到写操作（UPDATE/DELETE/DROP…），数据模式只读，已禁用执行'
             : !hasSource
               ? '⚠ 未选择数据源 · 请在左侧「数据源 / 表结构」列表中点击选择一个数据源'
               : hasSelection

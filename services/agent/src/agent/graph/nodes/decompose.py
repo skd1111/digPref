@@ -74,6 +74,29 @@ _TIME_QUERY_KEYWORDS: tuple[str, ...] = (
     "节气",
 )
 
+# 天气类问题关键词 —— 命中即直接路由动态工具循环（weather），
+# 跳过编排决策器 LLM 调用（2026-09-11）。
+_WEATHER_QUERY_KEYWORDS: tuple[str, ...] = (
+    "天气",
+    "气温",
+    "下雨",
+    "下雨吗",
+    "晴天",
+    "阴天",
+    "风力",
+    "湿度",
+    "温度多少",
+    "多少度",
+    "冷不冷",
+    "热不热",
+    "要带伞",
+    "天气预报",
+    "会下雨",
+    "降雪",
+    "降温",
+    "升温",
+)
+
 
 def _is_time_query(prompt: str) -> bool:
     """短提示词命中时间/日期关键词 → 判定为工具查询（避免误伤长任务）。"""
@@ -81,6 +104,14 @@ def _is_time_query(prompt: str) -> bool:
     if not text or len(text) > 60:
         return False
     return any(k in text for k in _TIME_QUERY_KEYWORDS)
+
+
+def _is_weather_query(prompt: str) -> bool:
+    """短提示词命中天气关键词 → 判定为工具查询（避免误伤长任务）。"""
+    text = (prompt or "").strip()
+    if not text or len(text) > 80:
+        return False
+    return any(k in text for k in _WEATHER_QUERY_KEYWORDS)
 
 
 # 知识库/文档类查询关键词（RAG 优先作答的门控之一，2026-09-04）——
@@ -199,6 +230,28 @@ async def decompose_node(
                     "ok",
                     mode="TOOL_ONLY",
                     reason="time_query_fast_path",
+                )
+            ],
+        }
+    # 1.6) 天气类问题快速路径：直接走动态工具循环（weather），
+    #      不调编排决策器 LLM（2026-09-11）。
+    if (
+        intent == "query"
+        and getattr(settings, "tool_loop_enabled", True)
+        and _is_weather_query(user_prompt)
+    ):
+        return {
+            "decompose_decision": _tool_only_decision(
+                "天气类查询 → 快速路径直达动态工具循环",
+            ),
+            "multi_agent": False,
+            "sub_agent_reports": [],
+            "trace": [
+                record_trace(
+                    "decompose",
+                    "ok",
+                    mode="TOOL_ONLY",
+                    reason="weather_query_fast_path",
                 )
             ],
         }

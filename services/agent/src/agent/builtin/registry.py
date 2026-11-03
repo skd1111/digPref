@@ -36,6 +36,7 @@ from agent.builtin.extra import (
     builtin_http_post,
     builtin_text_split,
     builtin_uuid4,
+    builtin_weather,
 )
 from agent.builtin.files import (
     builtin_edit_file,
@@ -103,6 +104,7 @@ TOOL_RISK_LEVEL: dict[str, RiskLevel] = {
     "http_get": "low",
     "csv_parse": "low",
     "text_split": "low",
+    "weather": "low",
     # V4 扩展工具（2026-08-04）
     "http_post": "medium",  # 写接口 → 改变外部系统状态，走 HITL
     "git_status": "read",
@@ -230,6 +232,13 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "text_split": (
         "Split long text into chunks by character count or separator. "
         "Use before summarizing or processing large documents."
+    ),
+    "weather": (
+        "Query real-time weather + multi-day forecast for a city (Open-Meteo, free, no API key). "
+        "Returns current temperature / weather condition / wind / humidity and daily forecast "
+        "(max/min temp, weather, precipitation). Supports Chinese and English city names. "
+        "On network failure returns ok=false with error hint — tell the user honestly. "
+        "Use for: 今天天气如何 / 北京明天会下雨吗 / 上海未来三天天气."
     ),
     # V4 扩展工具（CODE/WORK 模式能力补齐，2026-08-04）
     "http_post": (
@@ -401,6 +410,7 @@ class BuiltinToolRegistry:
             "http_get": builtin_http_get,
             "csv_parse": builtin_csv_parse,
             "text_split": builtin_text_split,
+            "weather": builtin_weather,
             # V4 扩展工具（CODE/WORK 模式能力补齐）
             "http_post": builtin_http_post,
             "git_status": builtin_git_status,

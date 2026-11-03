@@ -10,13 +10,15 @@
 import { useState } from 'react';
 import { useCollabStore, formatRelativeTime } from '@/store/collabStore';
 import { ANCHOR_LABELS, USER_BY_ID } from '@/types/collab';
+import { useDictOptions } from '@/hooks/useDictOptions';
 
 interface ShareDialogProps {
   contextId: string;
   onClose: () => void;
 }
 
-const IM_OPTIONS = [
+// 内置兜底（数据字典不可用时降级）
+const FALLBACK_IM_OPTIONS = [
   { key: 'wecom', label: '企微', icon: '💬', color: '#07c160' },
   { key: 'dingtalk', label: '钉钉', icon: '📌', color: '#0089ff' },
   { key: 'feishu', label: '飞书', icon: '🚀', color: '#3370ff' },
@@ -25,15 +27,27 @@ const IM_OPTIONS = [
 export function ShareDialog({ contextId, onClose }: ShareDialogProps): JSX.Element {
   const ctx = useCollabStore((s) => s.contexts.find((c) => c.id === contextId));
   const generateDeepLink = useCollabStore((s) => s.generateDeepLink);
+
+  // 从数据字典动态读取 IM 渠道（实时生效）；不可用时降级到内置兜底
+  const { options: dictImOpts } = useDictOptions('IM渠道');
+  const imOptions = dictImOpts.length > 0
+    ? dictImOpts.map((o) => ({
+        key: o.value,
+        label: o.label,
+        icon: o.meta?.icon ? String(o.meta.icon) : '',
+        color: o.meta?.color ? String(o.meta.color) : '#1f1f1f',
+      }))
+    : [...FALLBACK_IM_OPTIONS];
+
   const [deepLink, setDeepLink] = useState<string | null>(null);
-  const [chosen, setChosen] = useState<typeof IM_OPTIONS[number]['key'] | null>(null);
+  const [chosen, setChosen] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   if (!ctx) return <></>;
 
   const meta = ANCHOR_LABELS[ctx.anchor_type];
 
-  const handleShare = (key: typeof IM_OPTIONS[number]['key']): void => {
+  const handleShare = (key: string): void => {
     setChosen(key);
     const link = generateDeepLink(ctx.id);
     setDeepLink(link);
@@ -157,7 +171,7 @@ export function ShareDialog({ contextId, onClose }: ShareDialogProps): JSX.Eleme
 
           {/* IM 选择 */}
           <div className="mt-3 grid grid-cols-3 gap-2">
-            {IM_OPTIONS.map((im) => (
+            {imOptions.map((im) => (
               <button
                 key={im.key}
                 type="button"

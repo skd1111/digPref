@@ -159,6 +159,12 @@ class Settings(BaseSettings):
     rag_hyde_enabled: bool = False
     # 检索期：Query Expansion（LLM/同义词扩展查询词，多路 BM25 合并）
     rag_query_expansion_enabled: bool = False
+    # 入库期：LLM 自动分类（category 为空时从数据字典读分类列表，分析文本判定分类）
+    rag_auto_classify_enabled: bool = False
+    # 入库期：LLM 实体抽取（从数据字典读实体类型列表，按父块抽取关键实体存入 entities 表）
+    rag_entity_extract_enabled: bool = False
+    # 检索期：实体通道（FTS5 匹配实体名 → 关联子块加入 RRF 融合；独立于入库抽取开关）
+    rag_entity_enabled: bool = True
 
     # ---- 意图向量快速路由（semantic-router 模式，2026-08-07）----
     # 总开关：命中预置 Route 时零 LLM 直出意图分析；未命中/不可用静默回退原链路。

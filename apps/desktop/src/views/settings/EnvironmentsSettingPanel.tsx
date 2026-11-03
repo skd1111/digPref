@@ -19,8 +19,10 @@
 import { useEffect, useState } from 'react';
 import { invoke } from '@/ipc/invoke';
 import { useEnvStore } from '@/store/envStore';
+import { useDictOptions } from '@/hooks/useDictOptions';
 
-const ENV_OPTIONS = [
+// 内置兜底（数据字典不可用时降级）
+const FALLBACK_ENV_OPTIONS = [
   { value: 'dev', label: '开发 (dev)' },
   { value: 'test', label: '测试 (test)' },
   { value: 'staging', label: '准生产 (staging)' },
@@ -88,6 +90,12 @@ export function EnvironmentsSettingPanel(): JSX.Element {
   const storeError = useEnvStore((s) => s.error);
   const refresh = useEnvStore((s) => s.refresh);
   const setActive = useEnvStore((s) => s.setActive);
+
+  // 从数据字典动态读取环境类型（实时生效）；不可用时降级到内置兜底
+  const { options: dictEnvOpts } = useDictOptions('环境类型');
+  const envOptions = dictEnvOpts.length > 0
+    ? dictEnvOpts.map((o) => ({ value: o.value, label: o.label }))
+    : [...FALLBACK_ENV_OPTIONS];
 
   // 本地 UI state
   const [editing, setEditing] = useState<EnvDetail | null>(null);
@@ -399,6 +407,7 @@ export function EnvironmentsSettingPanel(): JSX.Element {
       {creating && (
         <CreateEnvModal
           existingEnvNames={list.map((e) => e.environment)}
+          envOptions={envOptions}
           onCancel={() => setCreating(false)}
           onCreate={createEnv}
         />
@@ -417,10 +426,12 @@ function CreateEnvModal({
   onCancel,
   onCreate,
   existingEnvNames,
+  envOptions,
 }: {
   onCancel: () => void;
   onCreate: (env: string, label: string, description: string) => Promise<void>;
   existingEnvNames: string[];
+  envOptions: Array<{ value: string; label: string }>;
 }): JSX.Element {
   const [env, setEnv] = useState<string>('');
   const [label, setLabel] = useState('');
@@ -467,13 +478,13 @@ function CreateEnvModal({
         )}
 
         {/* 已有 / 推荐的 env 名，让用户能一键填入而不必手敲 */}
-        {(existingEnvNames.length > 0 || ENV_OPTIONS.length > 0) && (
+        {(existingEnvNames.length > 0 || envOptions.length > 0) && (
           <div className="mb-3">
             <span className="mb-1 block text-2xs text-fg-muted">
               {existingEnvNames.length > 0 ? '已存在（点击填入，可重命名）' : '推荐起始名（首次启动 seed）'}
             </span>
             <div className="flex flex-wrap gap-1">
-              {Array.from(new Set([...ENV_OPTIONS.map((o) => o.value), ...existingEnvNames])).map((name) => (
+              {Array.from(new Set([...envOptions.map((o) => o.value), ...existingEnvNames])).map((name) => (
                 <button
                   key={name}
                   type="button"

@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import shutil
@@ -111,6 +112,108 @@ class KnowledgeIngestion:
             logger.debug("llm contextual prefix skipped: %s", exc)
             return ""
 
+    async def _auto_classify(
+        self, full_text: str, title: str, file_name: str, llm: Any | None
+    ) -> str:
+        """LLM 自动分类：从数据字典读取分类列表，分析文本前 2000 字判定分类。
+
+        返回匹配到的分类 key；无法判定 / LLM 异常 / 无分类条目 → 返回空串。
+        """
+        from agent.knowledge.category import get_kb_categories
+
+        categories = get_kb_categories()
+        if not categories:
+            return ""
+        llm = llm or self._default_llm()
+        if llm is None:
+            return ""
+        valid_keys = {c["key"] for c in categories}
+        # 构造分类 prompt：列出所有分类的 label + description
+        cat_lines = "\n".join(
+            f"- {c['key']}: {c['label']}（{c['description']}）" for c in categories
+        )
+        prompt = (
+            "请根据以下文档内容，判断它最属于哪个分类。只返回分类代码（key），不要其他文字。\n\n"
+            f"可选分类：\n{cat_lines}\n\n"
+            f"文档标题：{title}\n"
+            f"文件名：{file_name}\n"
+            f"文档内容（前 2000 字）：\n{full_text[:2000]}"
+        )
+        try:
+            raw = await llm("kb_classify", prompt)
+            result = (raw or "").strip().split()[0].strip().lower() if raw else ""
+            if result in valid_keys:
+                return result
+            # LLM 可能返回 label 而非 key，尝试反向匹配
+            for c in categories:
+                if c["label"] in (raw or ""):
+                    return c["key"]
+            logger.debug("auto_classify: LLM returned unrecognized %r", raw)
+            return ""
+        except Exception as exc:
+            logger.debug("auto_classify skipped: %s", exc)
+            return ""
+
+    async def _extract_entities(
+        self, parent_text: str, llm: Any | None
+    ) -> list[dict[str, str]]:
+        """LLM 从父块文本中抽取实体（从数据字典读实体类型列表）。
+
+        返回 ``[{"entity_name": "张三", "entity_type": "person"}, ...]``。
+        异常 / 无实体类型条目 / LLM 不可用 → 返回空列表（best-effort）。
+        """
+        from agent.knowledge.entity_types import get_entity_types
+
+        entity_types = get_entity_types()
+        if not entity_types:
+            return []
+        llm = llm or self._default_llm()
+        if llm is None:
+            return []
+        valid_keys = {t["key"] for t in entity_types}
+        type_lines = "\n".join(
+            f"- {t['key']}: {t['label']}（{t['description']}）" for t in entity_types
+        )
+        prompt = (
+            "请从以下文档片段中提取关键实体，按类型分组返回 JSON 格式。\n\n"
+            f"实体类型：\n{type_lines}\n\n"
+            "要求：\n"
+            "1. 每类最多 5 个实体\n"
+            "2. 只提取有实际意义的实体，忽略泛化词\n"
+            "3. 直接返回 JSON，不要其他文字\n\n"
+            f"文档片段：\n{parent_text[:2000]}"
+        )
+        try:
+            raw = await llm("kb_entity_extract", prompt)
+            if not raw or not raw.strip():
+                return []
+            # 提取 JSON（LLM 可能包裹在 ```json``` 中）
+            text = raw.strip()
+            if "```" in text:
+                import re
+                m = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
+                if m:
+                    text = m.group(1).strip()
+            parsed = json.loads(text)
+            if not isinstance(parsed, dict):
+                return []
+            result: list[dict[str, str]] = []
+            for type_key, names in parsed.items():
+                if type_key not in valid_keys:
+                    continue
+                if not isinstance(names, list):
+                    continue
+                for name in names[:5]:
+                    name_str = str(name).strip()
+                    if name_str:
+                        result.append(
+                            {"entity_name": name_str, "entity_type": type_key}
+                        )
+            return result
+        except Exception as exc:
+            logger.debug("extract_entities skipped: %s", exc)
+            return []
+
     async def ingest_file(
         self,
         path: str | Path,
@@ -184,6 +287,22 @@ class KnowledgeIngestion:
             if not full_text.strip():
                 raise IngestionError("未提取到文本（可能为扫描件）")
 
+            # 自动分类（category 为空 + 总开关 + 子开关均开启时 LLM 判定）
+            if (
+                not category
+                and settings.rag_llm_enhance_enabled
+                and settings.rag_auto_classify_enabled
+            ):
+                auto_cat = await self._auto_classify(
+                    full_text, src.stem, src.name, llm
+                )
+                if auto_cat:
+                    category = auto_cat
+                    self.storage.set_category(doc_id, category)
+                    logger.info(
+                        "auto-classified doc_id=%s → %s", doc_id, category
+                    )
+
             result = self._chunk(
                 parsed,
                 full_text,
@@ -205,7 +324,22 @@ class KnowledgeIngestion:
             await self._embed_and_store(
                 doc_id, children, parent_map, prefix_by_parent, category, suffix.lstrip(".")
             )
-            self.storage.set_doc_status(doc_id, "ready", chunk_count=len(children))
+            # 实体抽取（总开关 + 子开关均开启时按父块逐块抽取）
+            ent_count = 0
+            if (
+                settings.rag_llm_enhance_enabled
+                and settings.rag_entity_extract_enabled
+            ):
+                for p in parents:
+                    ents = await self._extract_entities(p.text, llm)
+                    if ents:
+                        p_seq = parent_map.get(p.ord, 0)
+                        ent_count += self.storage.upsert_entities(
+                            doc_id, ents, p_seq
+                        )
+            self.storage.set_doc_status(
+                doc_id, "ready", chunk_count=len(children)
+            )
             # 新版本安全切换：索引就绪后才把该版本设为生效（就绪前旧版本仍可检索，无空窗）；
             # 全新单版本上传时为幂等（自身即唯一生效版本）。
             try:

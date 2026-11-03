@@ -44,6 +44,9 @@ const FIELDS: FieldDef[] = [
   { key: 'rag_llm_contextual_enabled', label: 'LLM 上下文前缀（实验）', desc: '入库期用大模型为分块生成上下文前缀；需先开启「大模型知识库验证」总开关。属索引期参数，改后需重建。', kind: 'bool', experimental: true },
   { key: 'rag_hyde_enabled', label: 'HyDE 假设文档（实验）', desc: '检索期先让大模型生成假设性回答，用其向量检索；需先开启总开关。', kind: 'bool', experimental: true },
   { key: 'rag_query_expansion_enabled', label: '查询扩展（实验）', desc: '检索期用大模型扩展多个查询视角，多路 BM25 合并；需先开启总开关。', kind: 'bool', experimental: true },
+  { key: 'rag_auto_classify_enabled', label: 'LLM 自动分类（实验）', desc: '入库期用大模型自动判定文档分类（财务/法务/合规/数据安全）；需先开启总开关。属索引期参数，改后需重建。', kind: 'bool', experimental: true },
+  { key: 'rag_entity_extract_enabled', label: 'LLM 实体抽取（实验）', desc: '入库期按父块用大模型抽取关键实体（人名/机构/法规/金额/日期/术语），存入实体表供检索通道使用；需先开启总开关。属索引期参数，改后需重建。', kind: 'bool', experimental: true },
+  { key: 'rag_entity_enabled', label: '实体检索通道', desc: '检索期用 FTS5 匹配实体名，关联子块加入 RRF 融合（第四路通道）。仅当已有实体数据时生效，不影响其余三通道。', kind: 'bool' },
 ];
 
 function clampNum(v: number, f: FieldDef): number {

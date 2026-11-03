@@ -204,4 +204,12 @@ export const EVT = {
   AGENT_ANSWER_DELTA: "agent://answer_delta",
   /** 写前 Diff 预览（含 call_id + path + unified diff，前端渲染+审批） */
   AGENT_FILE_WRITE_PREVIEW: "agent://file_write_preview",
+
+  // ---- Terminal shell/spawn（2026-09-11）----
+  /** 终端 stdout 数据（base64 编码） */
+  TERMINAL_STDOUT: "terminal://stdout",
+  /** 终端 stderr 数据（base64 编码） */
+  TERMINAL_STDERR: "terminal://stderr",
+  /** 终端进程退出（含 exit_code） */
+  TERMINAL_EXIT: "terminal://exit",
 } as const;

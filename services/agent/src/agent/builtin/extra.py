@@ -434,3 +434,142 @@ def builtin_text_split(
         )
     except Exception as exc:
         return ToolResult.from_exception(exc, risk_level="low")
+
+
+# ---- 天气查询工具（Open-Meteo，免费 / 无 API Key / JSON 返回，2026-09-11）----
+
+# WMO Weather Interpretation Code → 中文描述
+_WMO_CN: dict[int, str] = {
+    0: "晴", 1: "大部晴", 2: "多云", 3: "阴",
+    45: "雾", 48: "雾凇",
+    51: "小毛毛雨", 53: "中毛毛雨", 55: "大毛毛雨",
+    56: "冻毛毛雨（小）", 57: "冻毛毛雨（大）",
+    61: "小雨", 63: "中雨", 65: "大雨",
+    66: "冻雨（小）", 67: "冻雨（大）",
+    71: "小雪", 73: "中雪", 75: "大雪", 77: "雪粒",
+    80: "小阵雨", 81: "中阵雨", 82: "大阵雨",
+    85: "小阵雪", 86: "大阵雪",
+    95: "雷暴", 96: "雷暴+小冰雹", 99: "雷暴+大冰雹",
+}
+
+
+async def builtin_weather(
+    *,
+    city: str,
+    units: str = "celsius",
+    forecast_days: int = 3,
+) -> ToolResult:
+    """查询指定城市的实时天气 + 未来几天预报（Open-Meteo，免费无需 API Key）。
+
+    参数：
+        city: 城市名（中文 / 英文均可，如「北京」「Tokyo」）
+        units: 温度单位（celsius / fahrenheit，默认 celsius）
+        forecast_days: 预报天数（1~7，默认 3）
+
+    断网 / API 不可达时 ok=False + error 含网络错误信息，上层应如实告知用户。
+    """
+    if not city or not str(city).strip():
+        return ToolResult(ok=False, error="empty_city", hint="请提供城市名", risk_level="low")
+
+    city = str(city).strip()
+    forecast_days = max(1, min(7, int(forecast_days or 3)))
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=settings.builtin_http_timeout_sec, follow_redirects=True
+        ) as client:
+            # Step 1: 地理编码（城市名 → 经纬度）
+            geo_resp = await client.get(
+                "https://geocoding-api.open-meteo.com/v1/search",
+                params={"name": city, "count": 1, "language": "zh", "format": "json"},
+            )
+            geo_data = geo_resp.json()
+            results = geo_data.get("results") or []
+            if not results:
+                return ToolResult(
+                    ok=False,
+                    error="city_not_found",
+                    hint=f"未找到城市「{city}」，请检查拼写或尝试英文名",
+                    risk_level="low",
+                )
+            loc = results[0]
+            lat, lon = loc["latitude"], loc["longitude"]
+            display_name = loc.get("name", city)
+            country = loc.get("country", "")
+            admin = loc.get("admin1", "")
+            full_name = ", ".join(p for p in [display_name, admin, country] if p)
+
+            # Step 2: 天气数据（实时 + 逐日预报）
+            weather_resp = await client.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={
+                    "latitude": lat,
+                    "longitude": lon,
+                    "current": "temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m",
+                    "daily": "temperature_2m_max,temperature_2m_min,weather_code,precipitation_sum",
+                    "timezone": "auto",
+                    "forecast_days": forecast_days,
+                    "temperature_unit": units,
+                },
+            )
+            w = weather_resp.json()
+
+        # 组装结果
+        cur = w.get("current", {})
+        daily = w.get("daily", {})
+        unit_sym = "°F" if units == "fahrenheit" else "°C"
+        wind_unit = "mph" if units == "fahrenheit" else "km/h"
+
+        current: dict[str, Any] = {
+            "city": full_name,
+            "temperature": f"{cur.get('temperature_2m', 'N/A')}{unit_sym}",
+            "weather": _WMO_CN.get(int(cur.get("weather_code", -1)), "未知"),
+            "wmo_code": int(cur.get("weather_code", -1)),
+            "wind_speed": f"{cur.get('wind_speed_10m', 'N/A')} {wind_unit}",
+            "humidity": f"{cur.get('relative_humidity_2m', 'N/A')}%",
+            "time": cur.get("time", ""),
+        }
+
+        forecast: list[dict[str, Any]] = []
+        dates = daily.get("time", [])
+        for i, d in enumerate(dates):
+            fc: dict[str, Any] = {
+                "date": d,
+                "max": f"{daily.get('temperature_2m_max', ['N/A']*len(dates))[i]}{unit_sym}",
+                "min": f"{daily.get('temperature_2m_min', ['N/A']*len(dates))[i]}{unit_sym}",
+                "weather": _WMO_CN.get(
+                    int(daily.get("weather_code", ["-1"]*len(dates))[i]), "未知"
+                ),
+            }
+            precip = daily.get("precipitation_sum", [0]*len(dates))
+            if i < len(precip) and precip[i]:
+                fc["precipitation_mm"] = precip[i]
+            forecast.append(fc)
+
+        return ToolResult(
+            ok=True,
+            content={"current": current, "forecast": forecast},
+            meta={
+                "latitude": lat,
+                "longitude": lon,
+                "units": units,
+                "forecast_days": forecast_days,
+            },
+            risk_level="low",
+        )
+    except httpx.TimeoutException:
+        return ToolResult(
+            ok=False,
+            error="network_timeout",
+            hint="天气 API 请求超时，请检查网络连接后重试",
+            risk_level="low",
+        )
+    except httpx.ConnectError:
+        return ToolResult(
+            ok=False,
+            error="network_unreachable",
+            hint="无法连接天气 API（可能断网），请检查网络后重试",
+            risk_level="low",
+        )
+    except Exception as exc:
+        return ToolResult.from_exception(exc, risk_level="low")

@@ -9,7 +9,11 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from agent.graph.nodes.rag_retrieve import _augment_followup_query, rag_retrieve_node
+from agent.graph.nodes.rag_retrieve import (
+    _augment_followup_query,
+    _should_retrieve,
+    rag_retrieve_node,
+)
 
 
 class _Ctx:
@@ -82,3 +86,31 @@ def test_augment_noop_for_long_query():
 def test_augment_returns_query_when_no_prior_turn():
     state = {"user_prompt": "库里有吗", "messages": [{"role": "user", "content": "库里有吗"}]}
     assert _augment_followup_query("库里有吗", state) == "库里有吗"
+
+
+# ---- 排除关键词回归测试（2026-09-11）----------------------------------
+
+
+def test_should_retrieve_excludes_weather():
+    """天气查询不应触发 RAG 检索（根因：「如何」命中触发词）。"""
+    assert _should_retrieve("今天天气如何") is False
+    assert _should_retrieve("明天会下雨吗") is False
+    assert _should_retrieve("现在气温多少度") is False
+
+
+def test_should_retrieve_excludes_greetings():
+    assert _should_retrieve("你好") is False
+    assert _should_retrieve("hello") is False
+    assert _should_retrieve("谢谢") is False
+
+
+def test_should_retrieve_excludes_translation():
+    assert _should_retrieve("翻译这段话") is False
+    assert _should_retrieve("计算 1+1 等于多少") is False
+
+
+def test_should_retrieve_still_triggers_for_knowledge_query():
+    """真正的知识型查询仍应触发检索。"""
+    assert _should_retrieve("对公转账汇兑的规章制度文档") is True
+    assert _should_retrieve("公司报销流程是什么") is True
+    assert _should_retrieve("合规审核标准") is True

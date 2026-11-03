@@ -3,6 +3,22 @@
 > 本文件是项目唯一的版本变更记录台账。每??Phase 交付或重大变更时必须在此追加记录??
 ---
 
+## 2026-09-11
+
+### v2.138 — 新增天气查询内置工具（Open-Meteo）
+
+- **背景**：用户反馈「今天天气如何」等日常查询无工具可用，Agent 只能回复「没有天气查询能力」。现有 40+ 内置工具覆盖文件/代码/Git/文档/HTTP/时间，但缺少天气类日常工具。
+- **改动**：
+  - **新工具 `builtin_weather`**：[extra.py](../services/agent/src/agent/builtin/extra.py) 新增异步工具，调用 Open-Meteo 免费 API（无需 API Key），支持地理编码（中/英文城市名）+ 实时天气 + 多日预报（1~7 天），返回温度/天气状况/风力/湿度/降水。断网时 `ok=false` + 网络错误提示，上层如实告知用户。
+  - **工具注册**：[registry.py](../services/agent/src/agent/builtin/registry.py) 添加 `weather` 描述 + 风险等级 `low` + 可调用映射；[schemas.py](../services/agent/src/agent/builtin/schemas.py) 添加 JSON Schema（`city` 必填，`units`/`forecast_days` 可选）；[models.py](../services/agent/src/agent/builtin/models.py) `BUILTIN_TOOL_NAMES` 添加 `weather`；[catalog.py](../services/agent/src/agent/tools/catalog.py) 添加天气关键词映射。
+  - **快速路径**：[decompose.py](../services/agent/src/agent/graph/nodes/decompose.py) 新增 `_WEATHER_QUERY_KEYWORDS`（天气/气温/下雨/晴天/阴天/风力/湿度/温度多少/多少度/冷不冷/热不热/要带伞/天气预报/会下雨/降雪/降温/升温）+ `_is_weather_query()` 函数，命中即直连 TOOL_ONLY 动态工具循环，跳过编排决策器 LLM 调用（与时间类快速路径同源设计）。
+  - **RAG 排除**：天气关键词已在 `rag_retrieve._RAG_EXCLUDED_KEYWORDS` 中，零检索（无需额外改动）。
+  - **测试**：[test_tool_loop.py](../services/agent/tests/test_tool_loop.py) 新增 3 例（空城市/城市未找到/成功查询含 mock httpx），全量 126 例通过。
+- **影响**：用户问「今天天气如何」「北京明天会下雨吗」等，Agent 自动调用 weather 工具返回实时天气 + 预报，无需 LLM 编排决策。断网时诚实告知无法联网。无新依赖（复用 httpx）。
+- **验证**：`uv run pytest services/agent/tests/test_tool_loop.py services/agent/tests/test_builtin_v1.py` 126 例全绿。
+
+---
+
 ## 2026-09-09
 
 ### v2.137 — 知识库按分类检索 P1（文档审核 risk_type→分类软优先 + 未分类通用 + 命中不足放宽兜底）

@@ -20,6 +20,7 @@ from agent.builtin.extra import (
     builtin_http_get,
     builtin_text_split,
     builtin_uuid4,
+    builtin_weather,
 )
 from agent.builtin.fallbacks import (
     builtin_base64_py,
@@ -836,6 +837,104 @@ class TestExtraTools:
         result = await builtin_http_get(url="https://example.com/api")
         assert result.ok is True
         assert result.content["status_code"] == 200
+
+    async def test_weather_empty_city(self):
+        result = await builtin_weather(city="")
+        assert result.ok is False
+        assert result.error == "empty_city"
+
+    async def test_weather_city_not_found(self, monkeypatch):
+        import httpx
+
+        class _FakeResp:
+            def json(self):
+                return {"results": []}
+
+        class _FakeClient:
+            def __init__(self, *a, **kw):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return None
+
+            async def get(self, url, params=None):
+                return _FakeResp()
+
+        monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+        result = await builtin_weather(city="NoSuchCityXYZ")
+        assert result.ok is False
+        assert result.error == "city_not_found"
+
+    async def test_weather_success(self, monkeypatch):
+        import httpx
+
+        geo_json = {
+            "results": [
+                {
+                    "name": "Beijing",
+                    "latitude": 39.9,
+                    "longitude": 116.4,
+                    "country": "China",
+                    "admin1": "Beijing",
+                }
+            ]
+        }
+        weather_json = {
+            "current": {
+                "time": "2026-09-11T14:00",
+                "temperature_2m": 28.5,
+                "weather_code": 0,
+                "wind_speed_10m": 12.3,
+                "relative_humidity_2m": 55,
+            },
+            "daily": {
+                "time": ["2026-09-11", "2026-09-12", "2026-09-13"],
+                "temperature_2m_max": [30.0, 29.0, 27.0],
+                "temperature_2m_min": [20.0, 19.0, 18.0],
+                "weather_code": [0, 2, 61],
+                "precipitation_sum": [0.0, 0.0, 5.2],
+            },
+        }
+        call_count = 0
+
+        class _FakeResp:
+            def __init__(self, data):
+                self._data = data
+
+            def json(self):
+                return self._data
+
+        class _FakeClient:
+            def __init__(self, *a, **kw):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return None
+
+            async def get(self, url, params=None):
+                nonlocal call_count
+                call_count += 1
+                if "geocoding" in url:
+                    return _FakeResp(geo_json)
+                return _FakeResp(weather_json)
+
+        monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+        result = await builtin_weather(city="Beijing", forecast_days=3)
+        assert result.ok is True
+        assert call_count == 2  # geocoding + weather
+        cur = result.content["current"]
+        assert cur["city"] == "Beijing, Beijing, China"
+        assert cur["temperature"] == "28.5°C"
+        assert cur["weather"] == "晴"
+        assert cur["humidity"] == "55%"
+        assert len(result.content["forecast"]) == 3
+        assert result.content["forecast"][2]["precipitation_mm"] == 5.2
 
 
 # ---- Rust 工具 Python 兜底 ---------------------------------------------------

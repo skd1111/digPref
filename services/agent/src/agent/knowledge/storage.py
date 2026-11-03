@@ -30,6 +30,8 @@ logger = logging.getLogger(__name__)
 
 _CHUNK_VEC_TABLE = "kb_chunks_vec"
 _FTS_TABLE = "chunks_fts"
+_DOCS_FTS_TABLE = "docs_fts"
+_ENT_FTS_TABLE = "entities_fts"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS docs (
@@ -96,10 +98,33 @@ CREATE TABLE IF NOT EXISTS kb_config (
     value      TEXT NOT NULL DEFAULT '',
     updated_at INTEGER NOT NULL DEFAULT 0
 );
+
+-- 实体索引（知识图谱阶段一：入库期 LLM 抽取，检索期 FTS5 匹配）
+CREATE TABLE IF NOT EXISTS entities (
+    seq          INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_name  TEXT NOT NULL,
+    entity_type  TEXT NOT NULL DEFAULT '',
+    doc_id       TEXT NOT NULL,
+    parent_seq   INTEGER NOT NULL DEFAULT 0,
+    created_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_entities_doc ON entities (doc_id);
+CREATE INDEX IF NOT EXISTS idx_entities_type ON entities (entity_type);
 """
 
 # FTS5 虚表单独建（虚拟表 DDL 与普通表分开更清晰；unicode61 分词，token 已由 jieba 预切）
 _FTS_SCHEMA = f"CREATE VIRTUAL TABLE IF NOT EXISTS {_FTS_TABLE} USING fts5(tokens);"
+
+# 文档级 FTS5：索引 title + file_name，供文档列表搜索（万级规模 <10ms）
+_DOCS_FTS_SCHEMA = (
+    f"CREATE VIRTUAL TABLE IF NOT EXISTS {_DOCS_FTS_TABLE} USING fts5(doc_id, tokens);"
+)
+
+# 实体级 FTS5：索引 entity_name + entity_type，供检索期匹配实体名
+_ENT_FTS_SCHEMA = (
+    f"CREATE VIRTUAL TABLE IF NOT EXISTS {_ENT_FTS_TABLE}"
+    f" USING fts5(entity_name, entity_type, content=entities, content_rowid=seq);"
+)
 
 # 新增列（对旧库渐进迁移；缺列时 ALTER 补，默认值保证既有行为不变）
 _CHUNK_COLUMNS: tuple[tuple[str, str], ...] = (
@@ -149,6 +174,14 @@ class KnowledgeStorage:
             conn.execute(_FTS_SCHEMA)
         except sqlite3.Error as exc:  # pragma: no cover - FTS5 缺失极罕见
             logger.warning("[KB storage] FTS5 unavailable: %s", exc)
+        try:
+            conn.execute(_DOCS_FTS_SCHEMA)
+        except sqlite3.Error as exc:
+            logger.debug("[KB storage] docs FTS5 unavailable: %s", exc)
+        try:
+            conn.execute(_ENT_FTS_SCHEMA)
+        except sqlite3.Error as exc:
+            logger.debug("[KB storage] entities FTS5 unavailable: %s", exc)
         self._migrate_columns(conn)
         self._migrate_docs_columns(conn)
         # idx_docs_group 引用版本化新列，必须在 _migrate_docs_columns 补列之后建
@@ -157,6 +190,11 @@ class KnowledgeStorage:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_docs_group ON docs (group_id, is_active)")
         except sqlite3.Error as exc:  # pragma: no cover - 索引建失败不阻断读写
             logger.debug("[KB storage] create idx_docs_group failed: %s", exc)
+        # 文档搜索 FTS 全量重建（万级规模 <100ms，保证旧库升级/数据漂移后索引正确）
+        try:
+            self._rebuild_docs_fts(conn)
+        except sqlite3.Error as exc:
+            logger.debug("[KB storage] rebuild docs FTS failed: %s", exc)
         return conn
 
     @staticmethod
@@ -190,6 +228,42 @@ class KnowledgeStorage:
             conn.execute("UPDATE docs SET version = 1 WHERE version IS NULL")
             conn.execute("UPDATE docs SET is_active = 1 WHERE is_active IS NULL")
             conn.commit()
+
+    # ---- 文档搜索 FTS5（title + file_name 全文索引，供列表搜索）-----------------
+
+    def _rebuild_docs_fts(self, conn: sqlite3.Connection) -> None:
+        """全量重建文档搜索 FTS（遍历未删除且生效的 docs）；万级规模 <100ms。"""
+        conn.execute(f"DELETE FROM {_DOCS_FTS_TABLE}")
+        rows = conn.execute(
+            "SELECT doc_id, title, file_name FROM docs WHERE deleted_at IS NULL AND is_active = 1"
+        ).fetchall()
+        for r in rows:
+            tokens = tk.tokens_to_fts(f"{r['title']} {r['file_name']}")
+            if tokens.strip():
+                conn.execute(
+                    f"INSERT INTO {_DOCS_FTS_TABLE}(doc_id, tokens) VALUES (?, ?)",
+                    (r["doc_id"], tokens),
+                )
+
+    def _sync_docs_fts(self, conn: sqlite3.Connection, doc_id: str) -> None:
+        """单条文档 FTS 增量同步（先删后插；文档不存在时仅删）。"""
+        conn.execute(f"DELETE FROM {_DOCS_FTS_TABLE} WHERE doc_id = ?", (doc_id,))
+        row = conn.execute(
+            "SELECT title, file_name FROM docs WHERE doc_id = ?"
+            " AND deleted_at IS NULL AND is_active = 1",
+            (doc_id,),
+        ).fetchone()
+        if row:
+            tokens = tk.tokens_to_fts(f"{row['title']} {row['file_name']}")
+            if tokens.strip():
+                conn.execute(
+                    f"INSERT INTO {_DOCS_FTS_TABLE}(doc_id, tokens) VALUES (?, ?)",
+                    (doc_id, tokens),
+                )
+
+    def _remove_docs_fts(self, conn: sqlite3.Connection, doc_id: str) -> None:
+        """从文档搜索 FTS 移除指定文档。"""
+        conn.execute(f"DELETE FROM {_DOCS_FTS_TABLE} WHERE doc_id = ?", (doc_id,))
 
     # ---- 迁移健康度（模型/维度漂移检测）--------------------------------------
 
@@ -288,6 +362,7 @@ class KnowledgeStorage:
                 ),
             )
             conn.commit()
+            self._sync_docs_fts(conn, doc_id)
 
     # 兼容旧符号（api.py 调 upsert_doc）
     def upsert_doc(self, doc: Any) -> Any:
@@ -373,8 +448,14 @@ class KnowledgeStorage:
         *,
         include_deleted: bool = False,
         active_only: bool = True,
+        q: str | None = None,
+        category: str | None = None,
     ) -> list[dict[str, Any]]:
-        """列出文档；默认每个逻辑资料只返回其生效版本（active_only），并附 version_count。"""
+        """列出文档；默认每个逻辑资料只返回其生效版本（active_only），并附 version_count。
+
+        q 非空时走 FTS5 全文检索（title + file_name），按 BM25 排序；
+        category 非空时按分类精确过滤。
+        """
         clauses: list[str] = []
         params: list[Any] = []
         if not include_deleted:
@@ -384,11 +465,42 @@ class KnowledgeStorage:
         if source_type:
             clauses.append("d.source_type = ?")
             params.append(source_type)
+        if category:
+            clauses.append("d.category = ?")
+            params.append(category)
+
+        fts_doc_ids: list[str] | None = None
+        if q and q.strip():
+            match_q = tk.build_match_query(q)
+            if match_q:
+                try:
+                    with self._connect() as fts_conn:
+                        fts_rows = fts_conn.execute(
+                            f"SELECT doc_id FROM {_DOCS_FTS_TABLE}"
+                            f" WHERE tokens MATCH ? ORDER BY bm25({_DOCS_FTS_TABLE})",
+                            (match_q,),
+                        ).fetchall()
+                    fts_doc_ids = [str(r["doc_id"]) for r in fts_rows]
+                except sqlite3.Error as exc:
+                    logger.debug("docs FTS search failed, returning empty: %s", exc)
+                    return []
+                if not fts_doc_ids:
+                    return []
+                clauses.append(f"d.doc_id IN ({','.join('?' * len(fts_doc_ids))})")
+                params.extend(fts_doc_ids)
+
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        order = "ORDER BY d.created_at DESC"
+        if q and q.strip() and fts_doc_ids is not None:
+            rank_sub = (
+                f"(SELECT bm25({_DOCS_FTS_TABLE}) FROM {_DOCS_FTS_TABLE} WHERE doc_id = d.doc_id)"
+            )
+            order = f"ORDER BY {rank_sub}"
+
         sql = (
             "SELECT d.*, (SELECT COUNT(*) FROM docs d2 WHERE d2.group_id = d.group_id"
             " AND d2.deleted_at IS NULL) AS version_count"
-            f" FROM docs d{where} ORDER BY d.created_at DESC LIMIT ? OFFSET ?"
+            f" FROM docs d{where} {order} LIMIT ? OFFSET ?"
         )
         params.extend([int(limit), int(offset)])
         with self._connect() as conn:
@@ -406,6 +518,8 @@ class KnowledgeStorage:
         *,
         include_deleted: bool = False,
         active_only: bool = True,
+        q: str | None = None,
+        category: str | None = None,
     ) -> int:
         sql = "SELECT COUNT(*) FROM docs"
         clauses: list[str] = []
@@ -417,6 +531,27 @@ class KnowledgeStorage:
         if source_type:
             clauses.append("source_type = ?")
             params.append(source_type)
+        if category:
+            clauses.append("category = ?")
+            params.append(category)
+        if q and q.strip():
+            match_q = tk.build_match_query(q)
+            if match_q:
+                try:
+                    with self._connect() as conn:
+                        fts_rows = conn.execute(
+                            f"SELECT doc_id FROM {_DOCS_FTS_TABLE} WHERE tokens MATCH ?",
+                            (match_q,),
+                        ).fetchall()
+                    fts_ids = [str(r["doc_id"]) for r in fts_rows]
+                except sqlite3.Error:
+                    return 0
+                if not fts_ids:
+                    return 0
+                clauses.append(f"doc_id IN ({','.join('?' * len(fts_ids))})")
+                params.extend(fts_ids)
+            else:
+                return 0
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         with self._connect() as conn:
@@ -449,6 +584,7 @@ class KnowledgeStorage:
                 "UPDATE docs SET deleted_at = ?, updated_at = ? WHERE doc_id = ? AND deleted_at IS NULL",
                 (int(time.time()), int(time.time()), doc_id),
             )
+            self._remove_docs_fts(conn, doc_id)
             conn.commit()
             return (cur.rowcount or 0) > 0
 
@@ -491,13 +627,15 @@ class KnowledgeStorage:
         return deleted
 
     def _hard_delete_one(self, doc_id: str, *, delete_file: bool = False) -> bool:
-        """硬删单个版本文档：chunks(+FTS+vec) → parents → docs 行（可选删复制文件）。"""
+        """硬删单个版本文档：chunks(+FTS+vec) → entities(+FTS) → parents → docs 行。"""
         self.delete_chunks_by_doc(doc_id)
+        self.delete_entities_by_doc(doc_id)
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT source_relpath FROM docs WHERE doc_id = ?", (doc_id,)
             ).fetchone()
             conn.execute("DELETE FROM parents WHERE doc_id = ?", (doc_id,))
+            self._remove_docs_fts(conn, doc_id)
             cur = conn.execute("DELETE FROM docs WHERE doc_id = ?", (doc_id,))
             conn.commit()
         if delete_file and row and row[0]:
@@ -571,6 +709,13 @@ class KnowledgeStorage:
                 (now, doc_id),
             )
             conn.commit()
+            # 刷新文档搜索 FTS：新生效版本加入，同组其余版本移出
+            self._sync_docs_fts(conn, doc_id)
+            for r in conn.execute(
+                "SELECT doc_id FROM docs WHERE group_id = ? AND doc_id != ? AND deleted_at IS NULL",
+                (gid, doc_id),
+            ).fetchall():
+                self._remove_docs_fts(conn, str(r["doc_id"]))
             return (cur.rowcount or 0) > 0
 
     def set_category(self, doc_id: str, category: str) -> bool:
@@ -772,6 +917,141 @@ class KnowledgeStorage:
             cursor = conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
             conn.commit()
             return cursor.rowcount or 0
+
+    # ---- 实体索引（知识图谱阶段一）----------------------------------------------
+
+    def _ent_fts_ready(self, conn: sqlite3.Connection) -> bool:
+        """实体 FTS5 虚表是否可用。"""
+        try:
+            conn.execute(f"SELECT count(*) FROM {_ENT_FTS_TABLE}").fetchone()
+            return True
+        except sqlite3.Error:
+            return False
+
+    def upsert_entities(
+        self, doc_id: str, entities: list[dict[str, Any]], parent_seq: int
+    ) -> int:
+        """写入一个父块抽取到的实体列表；返回写入条数。
+
+        每个 dict 需含 entity_name；可选 entity_type（缺省空串）。
+        同步维护 entities_fts 内容外部表触发器（INSERT/DELETE 自动同步）。
+        """
+        if not entities:
+            return 0
+        now = int(time.time())
+        inserted = 0
+        with self._connect() as conn:
+            for ent in entities:
+                name = str(ent.get("entity_name", "")).strip()
+                if not name:
+                    continue
+                etype = str(ent.get("entity_type", "") or "")
+                conn.execute(
+                    "INSERT INTO entities (entity_name, entity_type, doc_id, parent_seq, created_at)"
+                    " VALUES (?,?,?,?,?)",
+                    (name, etype, doc_id, int(parent_seq), now),
+                )
+                inserted += 1
+            conn.commit()
+        return inserted
+
+    def delete_entities_by_doc(self, doc_id: str) -> int:
+        """删除文档全部实体（FTS 内容外部表触发器自动清理）；返回删除条数。"""
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM entities WHERE doc_id = ?", (doc_id,))
+            conn.commit()
+            return cur.rowcount or 0
+
+    def search_entities(
+        self,
+        query_text: str,
+        limit: int = 20,
+        *,
+        filter: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """FTS5 匹配实体名，返回 [{entity_name, entity_type, doc_id, parent_seq}]。
+
+        filter 支持 entity_type / doc_id 过滤。FTS5 不可用 → 回退 LIKE。
+        """
+        text = (query_text or "").strip()
+        if not text:
+            return []
+        filt = dict(filter or {})
+        clauses: list[str] = []
+        params: list[Any] = []
+        et = filt.get("entity_type")
+        if et:
+            clauses.append("e.entity_type = ?")
+            params.append(str(et))
+        did = filt.get("doc_id")
+        if did:
+            clauses.append("e.doc_id = ?")
+            params.append(str(did))
+        and_clause = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+
+        with self._connect() as conn:
+            # 优先 FTS5
+            if self._ent_fts_ready(conn):
+                try:
+                    match_q = tk.build_match_query(text)
+                    if match_q:
+                        fts_sql = (
+                            f"SELECT e.entity_name, e.entity_type, e.doc_id, e.parent_seq"
+                            f" FROM {_ENT_FTS_TABLE} f"
+                            f" JOIN entities e ON e.seq = f.rowid"
+                            f" WHERE {_ENT_FTS_TABLE} MATCH ?"
+                            + (f" AND {' AND '.join(clauses)}" if clauses else "")
+                            + f" LIMIT ?"
+                        )
+                        rows = conn.execute(
+                            fts_sql, (match_q, *params, int(limit))
+                        ).fetchall()
+                        if rows:
+                            return [
+                                {
+                                    "entity_name": str(r["entity_name"]),
+                                    "entity_type": str(r["entity_type"]),
+                                    "doc_id": str(r["doc_id"]),
+                                    "parent_seq": int(r["parent_seq"]),
+                                }
+                                for r in rows
+                            ]
+                except sqlite3.Error as exc:
+                    logger.debug("[KB storage] entity FTS match failed: %s", exc)
+            # LIKE 兜底
+            like_sql = (
+                "SELECT entity_name, entity_type, doc_id, parent_seq FROM entities e"
+                f" WHERE e.entity_name LIKE ?{and_clause} LIMIT ?"
+            )
+            rows = conn.execute(
+                like_sql, (f"%{text}%", *params, int(limit))
+            ).fetchall()
+            return [
+                {
+                    "entity_name": str(r["entity_name"]),
+                    "entity_type": str(r["entity_type"]),
+                    "doc_id": str(r["doc_id"]),
+                    "parent_seq": int(r["parent_seq"]),
+                }
+                for r in rows
+            ]
+
+    def get_entities_by_doc(self, doc_id: str) -> list[dict[str, Any]]:
+        """列出文档全部实体（按类型分组排序，供前端文档详情展示）。"""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT entity_name, entity_type, parent_seq FROM entities"
+                " WHERE doc_id = ? ORDER BY entity_type, entity_name",
+                (doc_id,),
+            ).fetchall()
+        return [
+            {
+                "entity_name": str(r["entity_name"]),
+                "entity_type": str(r["entity_type"]),
+                "parent_seq": int(r["parent_seq"]),
+            }
+            for r in rows
+        ]
 
     # ---- 检索通道 -----------------------------------------------------------
 

@@ -249,12 +249,38 @@ class HybridRetriever:
                 for rank, h in enumerate(vhits):
                     vec_rank[int(h["seq"])] = rank
 
+        # --- 实体通道：FTS5 匹配实体名 → 关联父块 → 展开到子块 ---
+        ent_rank: dict[int, int] = {}
+        if settings.rag_entity_enabled and settings.rag_entity_extract_enabled:
+            try:
+                ent_hits = self.storage.search_entities(query, limit=cand_n)
+                if ent_hits:
+                    # 收集 (doc_id, parent_seq) → 批量查对应子块 seq
+                    parent_pairs = {
+                        (str(h["doc_id"]), int(h["parent_seq"])) for h in ent_hits
+                    }
+                    p2c = self._resolve_parent_to_children(parent_pairs)
+                    ent_seqs: list[int] = []
+                    for h in ent_hits:
+                        key = (str(h["doc_id"]), int(h["parent_seq"]))
+                        ent_seqs.extend(p2c.get(key, []))
+                    # 去重保序
+                    seen_ent: set[int] = set()
+                    for s in ent_seqs:
+                        if s not in seen_ent:
+                            ent_rank[s] = len(seen_ent)
+                            seen_ent.add(s)
+            except Exception as exc:
+                logger.debug("entity channel failed: %s", exc)
+
         # --- RRF 融合 ---
         rrf_k = int(settings.rag_rrf_k)
         fused: dict[int, float] = {}
         for seq, rank in bm25_rank.items():
             fused[seq] = fused.get(seq, 0.0) + 1.0 / (rrf_k + rank + 1)
         for seq, rank in vec_rank.items():
+            fused[seq] = fused.get(seq, 0.0) + 1.0 / (rrf_k + rank + 1)
+        for seq, rank in ent_rank.items():
             fused[seq] = fused.get(seq, 0.0) + 1.0 / (rrf_k + rank + 1)
 
         # 两通道皆空但库非空 -> LIKE 兜底
@@ -346,10 +372,11 @@ class HybridRetriever:
                 )
             )
         logger.info(
-            "hybrid_search query_chars=%d bm25=%d vec=%d fused=%d rerank=%s hits=%d elapsed=%.1fms rerank=%.1fms",
+            "hybrid_search query_chars=%d bm25=%d vec=%d ent=%d fused=%d rerank=%s hits=%d elapsed=%.1fms rerank=%.1fms",
             len(query),
             len(bm25_rank),
             len(vec_rank),
+            len(ent_rank),
             len(fused),
             rerank_enabled,
             len(results),
@@ -375,6 +402,38 @@ class HybridRetriever:
             logger.debug("load parents failed: %s", exc)
             return {}
         return {int(seq): str(p.get("content", "")) for seq, p in parents.items()}
+
+    def _resolve_parent_to_children(
+        self, pairs: set[tuple[str, int]]
+    ) -> dict[tuple[str, int], list[int]]:
+        """批量查 (doc_id, parent_seq) → 该父块下所有子块 seq 列表。
+
+        通过 chunks 表的 parent_seq 字段反查；结果供实体通道展开用。
+        """
+        if not pairs:
+            return {}
+        result: dict[tuple[str, int], list[int]] = {}
+        # 按 doc_id 分组查询，减少 SQL 次数
+        by_doc: dict[str, list[int]] = {}
+        for doc_id, pseq in pairs:
+            by_doc.setdefault(doc_id, []).append(pseq)
+        try:
+            with self.storage._connect() as conn:
+                for doc_id, pseqs in by_doc.items():
+                    qmarks = ",".join("?" * len(pseqs))
+                    rows = conn.execute(
+                        f"SELECT seq, parent_seq FROM chunks"
+                        f" WHERE doc_id = ? AND parent_seq IN ({qmarks})"
+                        f" AND NOT EXISTS (SELECT 1 FROM docs d WHERE d.doc_id = chunks.doc_id"
+                        f" AND (d.deleted_at IS NOT NULL OR d.is_active = 0))",
+                        [doc_id, *pseqs],
+                    ).fetchall()
+                    for r in rows:
+                        key = (doc_id, int(r["parent_seq"]))
+                        result.setdefault(key, []).append(int(r["seq"]))
+        except Exception as exc:
+            logger.debug("resolve_parent_to_children failed: %s", exc)
+        return result
 
 
 # ---- 单例 --------------------------------------------------------------------

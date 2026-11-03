@@ -53,6 +53,10 @@ TaskKind = Literal[
     "kb_hyde",
     "kb_expand",
     "kb_contextual",
+    # 入库期：LLM 自动分类（从数据字典读分类列表，分析文本判定 category）
+    "kb_classify",
+    # 入库期：LLM 实体抽取（从数据字典读实体类型列表，按父块抽取关键实体存入 entities 表）
+    "kb_entity_extract",
     # 会话历史压缩（2026-08-17）：LLM 摘要旧对话（含用户原始内容 → 本地红线）
     "history_compress",
     # Phase 19 V0：失败轨迹反思（输入含用户任务内容 → 本地红线）

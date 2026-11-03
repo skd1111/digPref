@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import uuid
 from typing import Any
 
@@ -81,6 +82,7 @@ async def responder_node(state: AgentState, llm: LMRouter) -> dict:
                     "trace": [record_trace("responder", "ok", mode="chitchat")],
                 }
             try:
+                _t0 = time.monotonic()
                 answer, sources = await _summarise_maybe_stream(
                     state,
                     llm,
@@ -90,6 +92,7 @@ async def responder_node(state: AgentState, llm: LMRouter) -> dict:
                     results=[],
                     history=_history_for_answer(state),
                 )
+                _infer_ms = int((time.monotonic() - _t0) * 1000)
             except Exception:
                 # 全链不可用时回退模板，不阻断（宁模板不可空白）
                 return {
@@ -100,7 +103,7 @@ async def responder_node(state: AgentState, llm: LMRouter) -> dict:
             return {
                 "final_answer": answer,
                 "sources": sources,
-                "trace": [record_trace("responder", "ok", mode="chitchat_mid_session")],
+                "trace": [record_trace("responder", "ok", mode="chitchat_mid_session", elapsed_ms=_infer_ms)],
             }
         # Phase 12 V2：多智能体模式 —— 汇总各子 Agent 回报
         if sub_agent_reports:
@@ -126,6 +129,7 @@ async def responder_node(state: AgentState, llm: LMRouter) -> dict:
         }
 
     try:
+        _t_responder = time.monotonic()
         answer, sources = await _summarise_maybe_stream(
             state,
             llm,
@@ -135,6 +139,7 @@ async def responder_node(state: AgentState, llm: LMRouter) -> dict:
             results=tool_results,
             history=_history_for_answer(state),
         )
+        _llm_infer_ms = int((time.monotonic() - _t_responder) * 1000)
     except Exception as exc:
         if tool_results:
             body = (
@@ -153,7 +158,7 @@ async def responder_node(state: AgentState, llm: LMRouter) -> dict:
         "final_answer": answer,
         "sources": sources,
         "truncated_any": state.get("truncated_any", False),
-        "trace": [record_trace("responder", "ok", sources=len(sources))],
+        "trace": [record_trace("responder", "ok", sources=len(sources), elapsed_ms=_llm_infer_ms)],
     }
 
 
@@ -237,6 +242,8 @@ def _no_model_answer(exc: Exception) -> str:
 
 
 def _terminal_answer(body: str, mode: str, state: AgentState) -> dict:
+    # BUGFIX #165：修复模型把多个选项塞进同一个 option.text 的问题
+    body = _fix_existing_clarify_block(body)
     return {
         "final_answer": body,
         "sources": [],
@@ -281,6 +288,7 @@ async def _rewrite_to_chinese(state: AgentState, llm: LMRouter, draft: str) -> d
     重写异常 / 重写结果仍不含中文（模型不听话）→ 回退原草稿，不劣化终答。
     """
     try:
+        _t0 = time.monotonic()
         answer, sources = await _summarise_maybe_stream(
             state,
             llm,
@@ -289,14 +297,16 @@ async def _rewrite_to_chinese(state: AgentState, llm: LMRouter, draft: str) -> d
             plan=[],
             results=[{"tool": "language_rewrite", "ok": True, "result": draft}],
         )
+        _infer_ms = int((time.monotonic() - _t0) * 1000)
     except Exception:
         return _terminal_answer(draft, "tool_loop", state)
     if not str(answer).strip() or not _CJK_RE.search(str(answer)):
         return _terminal_answer(draft, "tool_loop", state)
+    # BUGFIX #165：重写后的答案也可能含合并选项，统一修复
     return {
-        "final_answer": str(answer),
+        "final_answer": _fix_existing_clarify_block(str(answer)),
         "sources": sources,
-        "trace": [record_trace("responder", "ok", mode="tool_loop", lang_rewrite=True)],
+        "trace": [record_trace("responder", "ok", mode="tool_loop", lang_rewrite=True, elapsed_ms=_infer_ms)],
     }
 
 
@@ -424,6 +434,9 @@ _CHOICE_CUE_RE = re.compile(
 )
 # 多选题判定（题干含「多选」类字样 → clarify 项带 multi 标记，前端渲染复选框）
 _MULTI_CUE_RE = re.compile(r"多选|多项选择|选择多个|可选多个")
+# BUGFIX #165（2026-09-11）：模型常把多个选项塞进同一个 text 字段（如「①…；②…；③…」），
+# 导致前端 ClarifyCard 只显示一个大卡片。此处正则用于检测并拆分。
+_CIRCLED_NUM_RE = re.compile(r'[①②③④⑤⑥⑦⑧⑨⑩]')
 
 # ---- 多维参数确认式追问（2026-08-27 用户反馈漏卡）----------------------
 #
@@ -536,6 +549,88 @@ def _attach_clarify_from_text(answer: str) -> str:
     return f"{answer}\n\n```clarify\n{block}\n```"
 
 
+# ---- 修复已存在的 clarify 块中合并选项（BUGFIX #165，2026-09-11）----------
+#
+# 模型有时会把多个选项塞进同一个 option.text（如「①提供城市名称…；②若内网已部署…；
+# 换一个本页面能处理的问题。」），导致前端 ClarifyCard 只显示一个大卡片。
+# 此处在出口做确定性修复：检测到单个 option.text 含 ≥2 个圈号数字 → 拆成多个独立 option。
+# 解析失败一律返回原文（宁可不动不可破坏结构）。
+
+_CLARIFY_FENCE_RE = re.compile(r'```clarify\s*([\s\S]*?)```')
+
+
+def _split_circled_options_in_block(block_json: str) -> str | None:
+    """尝试将 clarify JSON 块中含多个圈号数字的单个 option 拆成多个独立 option。
+
+    输入：原始 JSON 字符串（不含 fence）。输出：修复后的 JSON 字符串或 None（无需修复/解析失败）。
+    """
+    try:
+        data = json.loads(block_json)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(data, list):
+        return None
+
+    changed = False
+    new_items: list[dict] = []
+    for item in data:
+        if not isinstance(item, dict) or not isinstance(item.get("options"), list):
+            new_items.append(item)
+            continue
+        question = item.get("question", "")
+        opts: list[dict] = item["options"]
+        new_opts: list[dict] = []
+        for opt in opts:
+            if not isinstance(opt, dict):
+                new_opts.append(opt)
+                continue
+            text = str(opt.get("text", ""))
+            # 检测是否含 ≥2 个圈号数字
+            circled_matches = _CIRCLED_NUM_RE.findall(text)
+            if len(circled_matches) >= 2:
+                # 按圈号数字拆分
+                parts = _CIRCLED_NUM_RE.split(text)
+                # parts[0] 是第一个圈号前的内容（通常是题干重复），跳过
+                split_opts = [p.strip().strip("；;。，,、:：") for p in parts[1:] if p.strip()]
+                if len(split_opts) >= 2:
+                    changed = True
+                    for si, so in enumerate(split_opts[:5]):  # 最多保留 5 个
+                        new_opts.append({
+                            "text": so,
+                            "reason": opt.get("reason", ""),
+                            "recommended": opt.get("recommended", False) and si == 0,
+                        })
+                else:
+                    new_opts.append(opt)
+            else:
+                new_opts.append(opt)
+        new_item = dict(item)
+        new_item["options"] = new_opts
+        new_items.append(new_item)
+
+    if not changed:
+        return None
+    return json.dumps(new_items, ensure_ascii=False, indent=2)
+
+
+def _fix_existing_clarify_block(answer: str) -> str:
+    """修复已存在的 clarify 块中合并选项的问题（BUGFIX #165）。
+
+    检测到单个 option.text 含 ≥2 个圈号数字 → 拆成多个独立 option。
+    无 clarify 块 / 解析失败 / 无需修复 → 返回原文。
+    """
+    m = _CLARIFY_FENCE_RE.search(answer)
+    if not m:
+        return answer
+    original_fence = m.group(0)
+    block_json = m.group(1).strip()
+    fixed = _split_circled_options_in_block(block_json)
+    if fixed is None:
+        return answer
+    new_fence = f"```clarify\n{fixed}\n```"
+    return answer.replace(original_fence, new_fence, 1)
+
+
 async def _synthesise_tool_results(
     state: AgentState,
     llm: LMRouter,
@@ -553,6 +648,7 @@ async def _synthesise_tool_results(
             }
         )
     try:
+        _t0 = time.monotonic()
         answer, sources = await _summarise_maybe_stream(
             state,
             llm,
@@ -562,6 +658,7 @@ async def _synthesise_tool_results(
             results=rows,
             history=_history_for_answer(state),
         )
+        _infer_ms = int((time.monotonic() - _t0) * 1000)
     except Exception as exc:
         return {
             "final_answer": _no_model_answer(exc)
@@ -571,9 +668,9 @@ async def _synthesise_tool_results(
             "trace": [record_trace("responder", "fail", mode="tool_loop", error=str(exc))],
         }
     return {
-        "final_answer": _attach_clarify_from_text(answer),
+        "final_answer": _fix_existing_clarify_block(_attach_clarify_from_text(answer)),
         "sources": sources,
-        "trace": [record_trace("responder", "ok", mode="tool_loop", tools=len(rows))],
+        "trace": [record_trace("responder", "ok", mode="tool_loop", tools=len(rows), elapsed_ms=_infer_ms)],
     }
 
 
@@ -586,6 +683,7 @@ def _truncate_result(value: Any, limit: int = 4000) -> Any:
 async def _answer_directly(state: AgentState, llm: LMRouter) -> dict:
     """MAIN_AGENT：由主智能体直接回答（不调用工具、不派生子智能体）。"""
     try:
+        _t0 = time.monotonic()
         answer, sources = await _summarise_maybe_stream(
             state,
             llm,
@@ -595,6 +693,7 @@ async def _answer_directly(state: AgentState, llm: LMRouter) -> dict:
             results=[],
             history=_history_for_answer(state),
         )
+        _infer_ms = int((time.monotonic() - _t0) * 1000)
     except Exception as exc:
         return {
             "final_answer": _no_model_answer(exc),
@@ -602,9 +701,9 @@ async def _answer_directly(state: AgentState, llm: LMRouter) -> dict:
             "trace": [record_trace("responder", "fail", mode="main_agent", error=str(exc))],
         }
     return {
-        "final_answer": _attach_clarify_from_text(answer),
+        "final_answer": _fix_existing_clarify_block(_attach_clarify_from_text(answer)),
         "sources": sources,
-        "trace": [record_trace("responder", "ok", mode="main_agent")],
+        "trace": [record_trace("responder", "ok", mode="main_agent", elapsed_ms=_infer_ms)],
     }
 
 
@@ -630,6 +729,7 @@ async def _respond_from_sub_agents(
         )
 
     try:
+        _t0 = time.monotonic()
         answer, sources = await _summarise_maybe_stream(
             state,
             llm,
@@ -639,6 +739,7 @@ async def _respond_from_sub_agents(
             results=rows,
             history=_history_for_answer(state),
         )
+        _infer_ms = int((time.monotonic() - _t0) * 1000)
     except Exception as exc:
         fallback = "\n\n".join(
             f"**{r.get('sub_agent_id', '?')}**（{r.get('task_type', '?')}）:\n"
@@ -664,6 +765,7 @@ async def _respond_from_sub_agents(
                 "ok",
                 mode="multi_agent",
                 sub_agents=len(rows),
+                elapsed_ms=_infer_ms,
             )
         ],
     }

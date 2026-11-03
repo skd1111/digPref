@@ -48,6 +48,30 @@ _RISK_TYPE_TO_KB_CATEGORY: dict[str, str] = {
 }
 
 
+def _resolve_risk_type_to_kb_category(risk_type: str) -> str:
+    """risk_type → KB category 映射：优先从数据字典动态读取，回退硬编码常量。
+
+    数据字典中 key 与 risk_type 同名（legal/compliance/data_security）或显式映射
+    （financial→finance）；字典不可用 / 无对应条目 → 回退 _RISK_TYPE_TO_KB_CATEGORY。
+    """
+    if not risk_type:
+        return ""
+    # 数据字典动态读取（实时生效）
+    try:
+        from agent.knowledge.category import get_kb_categories
+
+        cats = get_kb_categories()
+        valid_keys = {c["key"] for c in cats}
+        # financial → finance 显式映射
+        mapped = "finance" if risk_type == "financial" else risk_type
+        if mapped in valid_keys:
+            return mapped
+    except Exception:
+        pass
+    # 回退硬编码
+    return _RISK_TYPE_TO_KB_CATEGORY.get(risk_type, "")
+
+
 async def _attach_kb_refs(
     findings: list[dict[str, Any]], *, use_rerank: bool = False
 ) -> list[dict[str, Any]]:
@@ -88,7 +112,9 @@ async def _attach_kb_refs(
             # 无 risk_type / 未映射 / 开关关闭 → 不传 filter，调用与既有行为完全一致。
             extra: dict[str, Any] = {}
             if settings.doc_review_kb_category_filter_enabled:
-                cat = _RISK_TYPE_TO_KB_CATEGORY.get(str(item.get("risk_type", "") or ""))
+                cat = _resolve_risk_type_to_kb_category(
+                    str(item.get("risk_type", "") or "")
+                )
                 if cat:
                     extra["filter"] = {"category": [cat, ""]}
                     extra["filter_relax_below"] = 3

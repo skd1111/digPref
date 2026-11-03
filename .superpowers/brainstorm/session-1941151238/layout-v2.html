@@ -1,0 +1,145 @@
+<h2>方向 C 详细版：分组仪表盘</h2>
+<p class="subtitle">用你截图里的真实数据渲染。下面是 4 个分区。点选每区右上角的小决策（默认项已标 ✅），或者直接在终端告诉我"按默认走" / 改某项。</p>
+
+<!-- ===== 1. 顶部 header ===== -->
+<div class="mockup" style="margin-bottom:10px">
+  <div class="mockup-header">① 顶部 header（汇总 + 排序）</div>
+  <div class="mockup-body" style="background:#fff;border:1px solid #e5e5e5;border-radius:8px;padding:10px 12px;font-size:11.5px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+      <div>
+        <div><span style="color:#888">当前会话</span> · <span style="font-weight:600">¥0.8546</span> · 调用 74 · 缓存命中 94.1%</div>
+        <div style="color:#666;margin-top:2px">全部会话 <span style="font-weight:600">¥5.6696</span> · 计入 6 · 未定价模型 1 · 价格表 2026-10-12</div>
+      </div>
+      <div style="display:flex;gap:4px;background:#f3f3f3;padding:2px;border-radius:6px;flex-shrink:0">
+        <span style="background:#fff;padding:3px 10px;border-radius:4px;border:1px solid #ddd;font-size:11px">按时间</span>
+        <span style="padding:3px 10px;color:#888;font-size:11px">按花费</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 2. 统计卡（3 张） ===== -->
+<div class="mockup" style="margin-bottom:10px">
+  <div class="mockup-header" style="display:flex;justify-content:space-between;align-items:center">
+    <span>② 统计卡（3 张，并排）</span>
+    <span style="display:flex;gap:6px;font-size:10px">
+      <span class="option" data-choice="stat-total" onclick="toggleSelect(this)" style="padding:2px 6px;border:1px solid #ccc;border-radius:4px;cursor:pointer">总费用</span>
+      <span class="option" data-choice="stat-month" onclick="toggleSelect(this)" style="padding:2px 6px;border:1px solid #ccc;border-radius:4px;cursor:pointer;opacity:.5">本月</span>
+      <span class="option" data-choice="stat-unpriced" onclick="toggleSelect(this)" style="padding:2px 6px;border:1px solid #ccc;border-radius:4px;cursor:pointer;background:#eef5ff">未定价</span>
+      <span class="option" data-choice="stat-counted" onclick="toggleSelect(this)" style="padding:2px 6px;border:1px solid #ccc;border-radius:4px;cursor:pointer">计入</span>
+      <span style="color:#888">— 默认 ✅：总费用 / 未定价 / 计入</span>
+    </span>
+  </div>
+  <div class="mockup-body" style="background:#fafafa;padding:8px;border-radius:8px">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+      <div style="background:#fff;border:1px solid #e5e5e5;border-radius:6px;padding:10px 12px">
+        <div style="color:#888;font-size:10px">总费用</div>
+        <div style="font-size:22px;font-weight:600;margin-top:2px;font-variant-numeric:tabular-nums">¥5.6696</div>
+        <div style="color:#aaa;font-size:9px;margin-top:2px">33 calls · 缓存命中 79.7%</div>
+      </div>
+      <div style="background:#fff;border:1px solid #e5e5e5;border-radius:6px;padding:10px 12px">
+        <div style="color:#888;font-size:10px">未定价</div>
+        <div style="font-size:22px;font-weight:600;margin-top:2px">1 <span style="font-size:11px;color:#888;font-weight:400">模型</span></div>
+        <div style="color:#aaa;font-size:9px;margin-top:2px">MiniMax-M3.1-Flash-Preview</div>
+      </div>
+      <div style="background:#fff;border:1px solid #e5e5e5;border-radius:6px;padding:10px 12px">
+        <div style="color:#888;font-size:10px">计入</div>
+        <div style="font-size:22px;font-weight:600;margin-top:2px">6 <span style="font-size:11px;color:#888;font-weight:400">会话</span></div>
+        <div style="color:#aaa;font-size:9px;margin-top:2px">已排除 2 个未定价/未计算</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 3. 工作区分组 ===== -->
+<div class="mockup" style="margin-bottom:10px">
+  <div class="mockup-header" style="display:flex;justify-content:space-between;align-items:center">
+    <span>③ 工作区分组（每组可折叠）</span>
+    <span style="display:flex;gap:6px;font-size:10px">
+      <span class="option" data-choice="grp-all-open" onclick="toggleSelect(this)" style="padding:2px 6px;border:1px solid #ccc;border-radius:4px;cursor:pointer;background:#eef5ff">全部展开</span>
+      <span class="option" data-choice="grp-all-closed" onclick="toggleSelect(this)" style="padding:2px 6px;border:1px solid #ccc;border-radius:4px;cursor:pointer;opacity:.5">全部折叠</span>
+      <span class="option" data-choice="grp-current-only" onclick="toggleSelect(this)" style="padding:2px 6px;border:1px solid #ccc;border-radius:4px;cursor:pointer;opacity:.5">仅当前组</span>
+      <span style="color:#888">— 默认 ✅：全部展开（数据少，没必要藏）</span>
+    </span>
+  </div>
+  <div class="mockup-body" style="background:#fafafa;padding:8px;border-radius:8px;display:flex;flex-direction:column;gap:6px">
+
+    <div style="background:#fff;border:1px solid #e5e5e5;border-radius:6px;overflow:hidden">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;background:#f8f8f8;cursor:pointer">
+        <span style="font-size:11px">▼ <b>other</b> <span style="color:#888">· 3 会话</span></span>
+        <span style="font-size:11px;color:#888">¥0.0246</span>
+      </div>
+      <div style="padding:0 10px">
+        <div style="display:grid;grid-template-columns:1fr 70px 130px 1fr 70px;gap:8px;padding:5px 0;border-bottom:1px solid #f0f0f0;font-size:10.5px">
+          <span>你好</span><span style="color:#888">13 分钟前</span><span style="color:#666">deepseek-flash</span><span></span><span style="text-align:right;font-variant-numeric:tabular-nums">¥0.0246</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 70px 130px 1fr 70px;gap:8px;padding:5px 0;border-bottom:1px solid #f0f0f0;font-size:10.5px">
+          <span>如何显示指定 skill</span><span style="color:#888">6 小时前</span><span style="color:#a07000">MiniMax-M3.1-Flash-Preview · 未定价</span><span></span><span style="text-align:right;color:#aaa">—</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 70px 130px 1fr 70px;gap:8px;padding:5px 0;font-size:10.5px">
+          <span>你可以调用 skill 吗</span><span style="color:#888">6 小时前</span><span style="color:#a07000">MiniMax-M3.1-Flash-Preview · 未定价</span><span style="color:#888">已归档</span><span style="text-align:right;color:#aaa">—</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="background:#fff;border:1px solid #e5e5e5;border-radius:6px;overflow:hidden">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;background:#f8f8f8;cursor:pointer">
+        <span style="font-size:11px">▼ <b>ditPref</b> <span style="color:#888">· 3 会话</span></span>
+        <span style="font-size:11px;color:#888">¥3.8606</span>
+      </div>
+      <div style="padding:0 10px">
+        <div style="display:grid;grid-template-columns:1fr 70px 130px 1fr 70px;gap:8px;padding:5px 0;border-bottom:1px solid #f0f0f0;font-size:10.5px">
+          <span>Java 全栈面试宝典 (1)</span><span style="color:#888">6 小时前</span><span style="color:#666">deepseek-flash</span><span style="color:#888">已归档</span><span style="text-align:right;font-variant-numeric:tabular-nums">¥0.9297</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 70px 130px 1fr 70px;gap:8px;padding:5px 0;border-bottom:1px solid #f0f0f0;font-size:10.5px">
+          <span>ditPref</span><span style="color:#888">6 小时前</span><span style="color:#aaa">—</span><span></span><span style="text-align:right;font-variant-numeric:tabular-nums">¥0.0000</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 70px 130px 1fr 70px;gap:8px;padding:5px 0;font-size:10.5px">
+          <span>include:session-cost 完整名称 file://</span><span style="color:#888">7 小时前</span><span style="color:#666">MiniMax-M3</span><span style="color:#888">已归档</span><span style="text-align:right;font-variant-numeric:tabular-nums">¥2.9309</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="background:#fff;border:1px solid #e5e5e5;border-radius:6px;overflow:hidden;border-left:3px solid #2a6cdf">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;background:#f0f6ff;cursor:pointer">
+        <span style="font-size:11px">▼ <b>未分组会话</b> <span style="color:#888">· 4 会话</span> <span style="background:#2a6cdf;color:#fff;padding:1px 6px;border-radius:3px;font-size:9px;margin-left:4px">当前在此组</span></span>
+        <span style="font-size:11px;font-weight:600">¥0.8546</span>
+      </div>
+      <div style="padding:0 10px">
+        <div style="display:grid;grid-template-columns:1fr 70px 130px 1fr 70px;gap:8px;padding:5px 0;border-bottom:1px solid #f0f0f0;font-size:10.5px;background:#f0f6ff;margin:0 -10px;padding-left:10px;padding-right:10px">
+          <span><b>审查这个项目，给出评价</b></span><span style="color:#888">18 分钟前</span><span style="color:#666">deepseek-flash</span><span><span style="background:#eef5ff;color:#2a6cdf;padding:1px 5px;border-radius:3px;font-size:9px">当前</span></span><span style="text-align:right;font-weight:600;font-variant-numeric:tabular-nums">¥0.8546</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 70px 130px 1fr 70px;gap:8px;padding:5px 0;border-bottom:1px solid #f0f0f0;font-size:10.5px">
+          <span>final small hardening + a</span><span style="color:#888">22 小时前</span><span style="color:#a07000">未计算（等待预热）</span><span style="color:#888">子代理</span><span style="text-align:right;color:#aaa">—</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 70px 130px 1fr 70px;gap:8px;padding:5px 0;border-bottom:1px solid #f0f0f0;font-size:10.5px">
+          <span>插件计算会话耗费</span><span style="color:#888">8 小时前</span><span style="color:#a07000">未计算（等待预热）</span><span style="color:#888">已归档</span><span style="text-align:right;color:#aaa">—</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 70px 130px 1fr 70px;gap:8px;padding:5px 0;font-size:10.5px">
+          <span>Java 全栈面试宝典</span><span style="color:#888">4 小时前</span><span style="color:#666">deepseek-flash</span><span></span><span style="text-align:right;font-variant-numeric:tabular-nums">¥0.9297</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ===== 4. footer / 详情 ===== -->
+<div class="mockup">
+  <div class="mockup-header" style="display:flex;justify-content:space-between;align-items:center">
+    <span>④ 底部 footer</span>
+    <span style="display:flex;gap:6px;font-size:10px">
+      <span class="option" data-choice="foot-full" onclick="toggleSelect(this)" style="padding:2px 6px;border:1px solid #ccc;border-radius:4px;cursor:pointer;opacity:.5">全保留（4 行）</span>
+      <span class="option" data-choice="foot-compact" onclick="toggleSelect(this)" style="padding:2px 6px;border:1px solid #ccc;border-radius:4px;cursor:pointer;background:#eef5ff">只留元信息</span>
+      <span class="option" data-choice="foot-info" onclick="toggleSelect(this)" style="padding:2px 6px;border:1px solid #ccc;border-radius:4px;cursor:pointer">元信息 + ⓘ 折叠说明</span>
+      <span style="color:#888">— 默认 ✅：foot-info（最干净）</span>
+    </span>
+  </div>
+  <div class="mockup-body" style="background:#fff;border:1px solid #e5e5e5;border-radius:8px;padding:6px 10px;font-size:10.5px;display:flex;justify-content:space-between;align-items:center">
+    <span style="color:#666">币种 CNY · 单价指纹 <code style="background:#f3f3f3;padding:1px 4px;border-radius:3px">2749c741cfe3</code></span>
+    <span style="color:#888;cursor:help" title="缓存写入缺价时按输入未命中价估算 · priority 档（1.5×）不自动识别 · 中国法定节假日无法离线判定">ⓘ 关于口径</span>
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top:14px">展开单行查看按模型明细（沿用现在的逻辑：点击行 → 下方追加一行，展示 cache read / uncached input / output / 缓存写、peak/off-peak 次数、每模型小计）。展开状态保留在 useState。</p>
+<p class="subtitle">在终端回复 <b>"按默认走"</b> 直接进实现，或者改某项。</p>

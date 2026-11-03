@@ -36,12 +36,12 @@ const TABS: TabDef[] = [
   },
   {
     id: 'auditor',
-    label: '审核专家模式',
+    label: '审核模式',
     hint: '3 栏：审批工作台 + Monaco Diff 详情 + 审计与合规（金融级审批）',
   },
   {
     id: 'analyst',
-    label: '数据专家模式',
+    label: '数据模式',
     hint: '4 象限：数据源 + SQL/Python/对话 + 数据网格 + 图表（NL2SQL 智能分析）',
   },
 ];

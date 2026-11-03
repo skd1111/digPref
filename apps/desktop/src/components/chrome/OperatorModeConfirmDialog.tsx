@@ -161,7 +161,7 @@ export const OPERATOR_MODE_CONTENT: AdvancedModeDialogContent = {
 };
 
 export const AUDITOR_MODE_CONTENT: AdvancedModeDialogContent = {
-  title: '切换到审核专家模式',
+  title: '切换到审核模式',
   bullets: [
     '面向金融合规审计 / 风控 / 审批负责人，UI 采用三栏布局（审批工作台 + Diff 详情 + 审计与合规）',
     '核心：Monaco Diff 审核 + 风险可视化（🔴高 / 🟡中 / 🟢低）+ Evidence Chain 证据链',
@@ -169,20 +169,20 @@ export const AUDITOR_MODE_CONTENT: AdvancedModeDialogContent = {
     '审计日志采用 哈希签名链 防篡改，研发操作 → 运营执行 → 审核把关 全链路闭环',
     'Arthas 热更、业务规则变更、知识库合规检查 都会推送到此工作台',
   ],
-  footerHint: '审核专家模式独立三栏 UI，不复用运营专家两栏布局。模式选择会持久化到本地。',
+  footerHint: '审核模式独立三栏 UI，不复用运营两栏布局。模式选择会持久化到本地。',
   accentColor: '#b25c1a', // 暖橙色 — 区别于运营专家的蓝色
 };
 
 export const DATA_MODE_CONTENT: AdvancedModeDialogContent = {
-  title: '切换到数据专家模式',
+  title: '切换到数据模式',
   bullets: [
     '面向数据分析师 / BI 工程师 / 财务运营，UI 采用四象限布局（数据源 + SQL/Python/对话编辑器 + 数据网格 + 图表）',
     '自然语言驱动：输入"对比上月各分行坏账率"，AI 自动生成 SQL（NL2SQL），一键出图表',
-    '🔒 只读铁律：数据专家模式禁 UPDATE/DELETE/DROP，仅允许 SELECT 查询',
+    '🔒 只读铁律：数据模式禁 UPDATE/DELETE/DROP，仅允许 SELECT 查询',
     '导出 Excel/PDF/CSV 会经过 PII 脱敏 + 数字水印 + 导出审计（合规可溯源）',
     '复杂清洗走受限 Python 沙箱（白名单 pandas/numpy，禁系统/网络调用）',
   ],
-  footerHint: '数据专家模式独立四象限 UI。模式选择会持久化到本地，下次启动自动恢复。',
+  footerHint: '数据模式独立四象限 UI。模式选择会持久化到本地，下次启动自动恢复。',
   accentColor: '#059669', // 青绿色 — 数据/分析主题，区别于蓝(开发)与橙(审核)
 };
 

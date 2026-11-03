@@ -263,7 +263,7 @@ export function OperationsWorkbench(): JSX.Element {
           className="flex-shrink-0 border-t px-3 py-1.5 text-2xs"
           style={{ borderColor: "#d4d4d4", color: "#616161" }}
         >
-          运营工作台 · 专家团验收交付 · 统计报表由数据专家模式承接
+          运营工作台 · 专家团验收交付 · 统计报表由数据模式承接
         </div>
       </aside>
 

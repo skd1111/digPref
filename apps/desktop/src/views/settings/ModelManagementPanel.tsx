@@ -7,6 +7,7 @@
  */
 import { useEffect, useState } from 'react';
 import { DSparkConfigSection } from './DSparkConfigSection';
+import { useDictOptions } from '@/hooks/useDictOptions';
 
 type BackendType = 'local' | 'private' | 'cloud';
 type Residency = 'local' | 'private' | 'cloud';
@@ -64,29 +65,24 @@ interface Backend {
   role: 'utility' | 'reasoning' | 'execution';
 }
 
-const TYPE_BADGE: Record<BackendType, { label: string; color: string }> = {
-  local: { label: '端侧', color: '#059669' },
-  private: { label: '私有部署', color: '#0451a5' },
-  cloud: { label: '云端', color: '#c586c0' },
-};
-
-/** 类型/驻留下拉框的中文标签（值仍为英文，与后端 router.db 契约保持一致） */
-const TYPE_OPTIONS: Array<{ value: BackendType; label: string }> = [
+// 内置兜底（数据字典不可用时降级）
+const FALLBACK_TYPE_OPTIONS: Array<{ value: BackendType; label: string }> = [
   { value: 'local', label: '端侧' },
   { value: 'private', label: '私有部署' },
   { value: 'cloud', label: '云端' },
 ];
 
-const RESIDENCY_OPTIONS: Array<{ value: Residency; label: string }> = [
+const FALLBACK_RESIDENCY_OPTIONS: Array<{ value: Residency; label: string }> = [
   { value: 'local', label: '端侧' },
   { value: 'private', label: '私有部署' },
   { value: 'cloud', label: '云端' },
 ];
 
-const RESIDENCY_LABEL: Record<Residency, string> = {
-  local: '端侧',
-  private: '私有部署',
-  cloud: '云端',
+// 默认徽标色（动态选项无 color 元数据时降级）
+const DEFAULT_BADGE_COLORS: Record<string, string> = {
+  local: '#059669',
+  private: '#0451a5',
+  cloud: '#c586c0',
 };
 
 const CB_PILL: Record<CircuitState, { label: string; color: string }> = {
@@ -105,6 +101,22 @@ export function ModelManagementPanel(): JSX.Element {
   void loadingBackends; // 暂未在 UI 展示，预留给后续 loading 骨架屏
   /** 正在探测的模型名（按钮 disabled + spinner 用） */
   const [testing, setTesting] = useState<string | null>(null);
+
+  // 从数据字典动态读取模型部署类型（实时生效）；不可用时降级到内置兜底
+  const { options: dictDeployOpts } = useDictOptions('模型部署类型');
+  const typeOptions = dictDeployOpts.length > 0
+    ? dictDeployOpts.map((o) => ({ value: o.value, label: o.label }))
+    : [...FALLBACK_TYPE_OPTIONS];
+  const residencyOptions = dictDeployOpts.length > 0
+    ? dictDeployOpts.map((o) => ({ value: o.value, label: o.label }))
+    : [...FALLBACK_RESIDENCY_OPTIONS];
+  // 从动态选项构建徽标/标签映射
+  const typeBadge = Object.fromEntries(
+    typeOptions.map((o) => [o.value, { label: o.label, color: DEFAULT_BADGE_COLORS[o.value] ?? '#616161' }]),
+  ) as Record<string, { label: string; color: string }>;
+  const residencyLabel = Object.fromEntries(
+    residencyOptions.map((o) => [o.value, o.label]),
+  ) as Record<string, string>;
 
   /** 启动时从 router.db 拉真实模型列表（持久化真源）。
    * 修复启动竞态：先 agentWaitReady（最多 15s），再 retry 一次 routerListBackends。
@@ -497,7 +509,7 @@ export function ModelManagementPanel(): JSX.Element {
         <SectionTitle>模型列表（{backends.length}）</SectionTitle>
         <div className="space-y-2">
           {backends.map((b) => {
-            const badge = TYPE_BADGE[b.type];
+            const badge = typeBadge[b.type] ?? { label: b.type, color: '#616161' };
             const cb = CB_PILL[b.circuit];
             return (
               <div
@@ -541,7 +553,7 @@ export function ModelManagementPanel(): JSX.Element {
                 </div>
                 <div className="mt-1.5 grid grid-cols-5 gap-x-4 gap-y-1 text-2xs" style={{ color: '#6e6e6e' }}>
                   <span>模型：<span style={{ color: '#795e26' }}>{b.model}</span></span>
-                  <span>驻留：<span style={{ color: b.residency === 'cloud' ? '#c586c0' : '#059669' }}>{RESIDENCY_LABEL[b.residency]}</span></span>
+                  <span>驻留：<span style={{ color: b.residency === 'cloud' ? '#c586c0' : '#059669' }}>{residencyLabel[b.residency] ?? b.residency}</span></span>
                   <span>上下文：<span style={{ color: '#0b6bcb' }}>{formatContextTokens(b.maxContext)}</span></span>
                   <span>成本：{b.costPer1k === 0 ? '免费' : `$${b.costPer1k}/1k`}</span>
                   <span>超时：{b.timeout}s</span>
@@ -579,6 +591,9 @@ export function ModelManagementPanel(): JSX.Element {
         <BackendEditModal
           initial={editing}
           existingNames={backends.map((b) => b.name)}
+          typeOptions={typeOptions}
+          residencyOptions={residencyOptions}
+          typeBadge={typeBadge}
           onCancel={() => { setEditing(null); setCreating(false); }}
           onSave={(b) => void saveBackend(b)}
         />
@@ -595,11 +610,17 @@ export function ModelManagementPanel(): JSX.Element {
 function BackendEditModal({
   initial,
   existingNames,
+  typeOptions,
+  residencyOptions,
+  typeBadge,
   onCancel,
   onSave,
 }: {
   initial: Backend | null;
   existingNames: string[];
+  typeOptions: Array<{ value: string; label: string }>;
+  residencyOptions: Array<{ value: string; label: string }>;
+  typeBadge: Record<string, { label: string; color: string }>;
   onCancel: () => void;
   onSave: (b: Backend) => void;
 }): JSX.Element {
@@ -637,7 +658,8 @@ function BackendEditModal({
     }
     // 类型协议校验
     if ((b.type === 'private' || b.type === 'cloud') && !b.baseUrl.trim()) {
-      return setErr(`${TYPE_BADGE[b.type].label}模型必须配置服务地址`);
+      const badgeInfo = typeBadge[b.type];
+      return setErr(`${badgeInfo ? badgeInfo.label : b.type}模型必须配置服务地址`);
     }
     if (b.type === 'cloud' && !apiKey.trim() && isNew) {
       return setErr('云端模型必须配置 API 密钥（内网模型请选择“私有部署”类型）');
@@ -661,8 +683,8 @@ function BackendEditModal({
         <div className="space-y-3 p-4">
           <Field label="名称（唯一）" value={b.name} disabled={!isNew} onChange={(v) => set('name', v)} />
           <div className="grid grid-cols-2 gap-3">
-            <Select label="类型" value={b.type} options={TYPE_OPTIONS} onChange={(v) => set('type', v as BackendType)} />
-            <Select label="数据驻留" value={b.residency} options={RESIDENCY_OPTIONS} onChange={(v) => set('residency', v as Residency)} />
+            <Select label="类型" value={b.type} options={typeOptions} onChange={(v) => set('type', v as BackendType)} />
+            <Select label="数据驻留" value={b.residency} options={residencyOptions} onChange={(v) => set('residency', v as Residency)} />
           </div>
           {/* 模型角色（utility / reasoning / execution）*/}
           <div>

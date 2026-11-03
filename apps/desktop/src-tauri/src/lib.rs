@@ -428,6 +428,12 @@ pub fn run() {
             commands::office::office_preview_stop,
             // BUGFIX #193：设置页「一键导出全部日志」
             commands::logs::export_all_logs,
+            // Terminal shell/spawn（2026-09-11）
+            commands::terminal::terminal_spawn,
+            commands::terminal::terminal_write,
+            commands::terminal::terminal_write_key,
+            commands::terminal::terminal_kill,
+            commands::terminal::terminal_alive,
         ])
         .run(tauri::generate_context!());
 

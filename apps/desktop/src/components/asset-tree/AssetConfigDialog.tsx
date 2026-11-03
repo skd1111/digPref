@@ -12,6 +12,7 @@
 import { useState, useCallback } from "react";
 import { useAssetStore, type AssetNode } from "@/store/assetStore";
 import { ipc } from "@/ipc/invoke";
+import { useDictOptions, type DictOption } from "@/hooks/useDictOptions";
 
 interface Props {
   /** 编辑模式传入现有节点；新增模式传 null */
@@ -21,11 +22,12 @@ interface Props {
   onClose: () => void;
 }
 
-const TYPE_OPTIONS: Array<{ value: AssetNode["type"]; label: string }> = [
-  { value: "database", label: "🗄 数据库" },
-  { value: "rest", label: "🌐 REST API" },
-  { value: "ssh", label: "🔐 SSH" },
-  { value: "rpa", label: "🤖 RPA" },
+// 内置兜底（数据字典不可用时降级）
+const FALLBACK_TYPE_OPTIONS: Array<{ value: AssetNode["type"]; label: string; icon?: string }> = [
+  { value: "database", label: "数据库", icon: "🗄" },
+  { value: "rest", label: "REST API", icon: "🌐" },
+  { value: "ssh", label: "SSH", icon: "🔐" },
+  { value: "rpa", label: "RPA", icon: "🤖" },
 ];
 
 // ---- 数据库类型注册表（主流 + 国产/信创）------------------------------------------
@@ -39,7 +41,8 @@ interface DbTypeInfo {
   placeholderUser?: string;
 }
 
-const DB_TYPE_OPTIONS: DbTypeInfo[] = [
+// 内置兜底（数据字典不可用时降级）
+const FALLBACK_DB_TYPE_OPTIONS: DbTypeInfo[] = [
   // 主流
   {
     value: "mysql",
@@ -159,8 +162,23 @@ const DB_TYPE_OPTIONS: DbTypeInfo[] = [
   { value: "excel", label: "Excel 文件", defaultPort: 0, category: "file" },
 ];
 
-function getDbTypeInfo(dbType: string): DbTypeInfo {
-  return DB_TYPE_OPTIONS.find((d) => d.value === dbType) ?? DB_TYPE_OPTIONS[0];
+function getDbTypeInfo(dbType: string, dbTypes?: DbTypeInfo[]): DbTypeInfo {
+  const list = dbTypes && dbTypes.length > 0 ? dbTypes : FALLBACK_DB_TYPE_OPTIONS;
+  return list.find((d) => d.value === dbType) ?? list[0];
+}
+
+/** 将 DictOption 的 meta 转换为 DbTypeInfo */
+function dictOptionToDbTypeInfo(opt: DictOption): DbTypeInfo {
+  const m = opt.meta ?? {};
+  const info: DbTypeInfo = {
+    value: opt.value,
+    label: opt.label,
+    defaultPort: Number(m.defaultPort ?? 0),
+    category: (m.dbCategory as DbTypeInfo["category"]) ?? "mainstream",
+  };
+  if (m.placeholderDb) info.placeholderDb = String(m.placeholderDb);
+  if (m.placeholderUser) info.placeholderUser = String(m.placeholderUser);
+  return info;
 }
 
 export function AssetConfigDialog({
@@ -170,6 +188,16 @@ export function AssetConfigDialog({
 }: Props): JSX.Element {
   const addAsset = useAssetStore((s) => s.addAsset);
   const updateAsset = useAssetStore((s) => s.updateAsset);
+
+  // 从数据字典动态读取资产类型和数据库类型（实时生效）；不可用时降级到内置兜底
+  const { options: dictTypeOpts } = useDictOptions('资产类型');
+  const { options: dictDbOpts } = useDictOptions('数据库类型');
+  const typeOptions = dictTypeOpts.length > 0
+    ? dictTypeOpts.map((o) => ({ value: o.value as AssetNode["type"], label: o.label, icon: o.meta?.icon ? String(o.meta.icon) : undefined }))
+    : FALLBACK_TYPE_OPTIONS;
+  const dbTypes: DbTypeInfo[] = dictDbOpts.length > 0
+    ? dictDbOpts.map(dictOptionToDbTypeInfo)
+    : FALLBACK_DB_TYPE_OPTIONS;
 
   const [type, setType] = useState<AssetNode["type"]>(
     node?.type ?? defaultType,
@@ -196,7 +224,7 @@ export function AssetConfigDialog({
     let finalMeta = meta;
     if (type === "database") {
       const dbType = meta.db_type || "mysql";
-      const info = getDbTypeInfo(dbType);
+      const info = getDbTypeInfo(dbType, dbTypes);
       finalMeta = {
         ...meta,
         db_type: dbType,
@@ -241,7 +269,7 @@ export function AssetConfigDialog({
         <div className="mb-3">
           <Label text="类型" />
           <div className="flex gap-2">
-            {TYPE_OPTIONS.map((opt) => (
+            {typeOptions.map((opt) => (
               <button
                 key={opt.value}
                 type="button"
@@ -272,7 +300,7 @@ export function AssetConfigDialog({
 
         {/* 按类型渲染字段 */}
         {type === "database" && (
-          <DatabaseFields meta={meta} setField={setField} />
+          <DatabaseFields meta={meta} setField={setField} dbTypes={dbTypes} />
         )}
         {type === "rest" && <RestFields meta={meta} setField={setField} />}
         {type === "ssh" && <SshFields meta={meta} setField={setField} />}
@@ -305,9 +333,9 @@ export function AssetConfigDialog({
 
 // ---- 各类型字段表单 ----------------------------------------------------------
 
-function DatabaseFields({ meta, setField }: FieldProps): JSX.Element {
+function DatabaseFields({ meta, setField, dbTypes }: FieldProps & { dbTypes: DbTypeInfo[] }): JSX.Element {
   const dbType = meta.db_type || "mysql";
-  const info = getDbTypeInfo(dbType);
+  const info = getDbTypeInfo(dbType, dbTypes);
   const isFile = info.category === "file";
 
   // 测试连接状态
@@ -319,7 +347,7 @@ function DatabaseFields({ meta, setField }: FieldProps): JSX.Element {
 
   const handleTypeChange = useCallback(
     (newType: string) => {
-      const newInfo = getDbTypeInfo(newType);
+      const newInfo = getDbTypeInfo(newType, dbTypes);
       setField("db_type", newType);
       // 智能填充默认端口
       if (newInfo.defaultPort > 0) {
@@ -331,7 +359,7 @@ function DatabaseFields({ meta, setField }: FieldProps): JSX.Element {
       }
       setTestResult(null);
     },
-    [meta.username, setField],
+    [meta.username, setField, dbTypes],
   );
 
   const handleTestConnection = useCallback(async () => {
@@ -364,7 +392,7 @@ function DatabaseFields({ meta, setField }: FieldProps): JSX.Element {
       <div className="space-y-2">
         <div>
           <Label text="数据库类型" />
-          <DbTypeSelect value={dbType} onChange={handleTypeChange} />
+          <DbTypeSelect value={dbType} onChange={handleTypeChange} dbTypes={dbTypes} />
         </div>
         <div>
           <Label text="文件路径" />
@@ -390,7 +418,7 @@ function DatabaseFields({ meta, setField }: FieldProps): JSX.Element {
       {/* 数据库类型下拉 */}
       <div>
         <Label text="数据库类型" />
-        <DbTypeSelect value={dbType} onChange={handleTypeChange} />
+        <DbTypeSelect value={dbType} onChange={handleTypeChange} dbTypes={dbTypes} />
       </div>
 
       {/* 主机 + 端口 */}
@@ -475,9 +503,11 @@ function DatabaseFields({ meta, setField }: FieldProps): JSX.Element {
 function DbTypeSelect({
   value,
   onChange,
+  dbTypes,
 }: {
   value: string;
   onChange: (v: string) => void;
+  dbTypes: DbTypeInfo[];
 }): JSX.Element {
   return (
     <select
@@ -491,21 +521,21 @@ function DbTypeSelect({
       }}
     >
       <optgroup label="主流数据库">
-        {DB_TYPE_OPTIONS.filter((d) => d.category === "mainstream").map((d) => (
+        {dbTypes.filter((d) => d.category === "mainstream").map((d) => (
           <option key={d.value} value={d.value}>
             {d.label}
           </option>
         ))}
       </optgroup>
       <optgroup label="国产 / 信创">
-        {DB_TYPE_OPTIONS.filter((d) => d.category === "xinchuang").map((d) => (
+        {dbTypes.filter((d) => d.category === "xinchuang").map((d) => (
           <option key={d.value} value={d.value}>
             {d.label}
           </option>
         ))}
       </optgroup>
       <optgroup label="文件数据源">
-        {DB_TYPE_OPTIONS.filter((d) => d.category === "file").map((d) => (
+        {dbTypes.filter((d) => d.category === "file").map((d) => (
           <option key={d.value} value={d.value}>
             {d.label}
           </option>

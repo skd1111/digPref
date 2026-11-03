@@ -297,6 +297,28 @@ BUILTIN_TOOL_SCHEMAS: dict[str, dict] = {
         },
         "required": ["text"],
     },
+    # ---- 天气查询（Open-Meteo，免费无 API Key，2026-09-11）----
+    "weather": {
+        "type": "object",
+        "properties": {
+            "city": {
+                "type": "string",
+                "description": "城市名（中文 / 英文均可，如「北京」「Tokyo」「New York」）",
+            },
+            "units": {
+                "type": "string",
+                "enum": ["celsius", "fahrenheit"],
+                "description": "温度单位",
+                "default": "celsius",
+            },
+            "forecast_days": {
+                "type": "integer",
+                "description": "预报天数（1~7）",
+                "default": 3,
+            },
+        },
+        "required": ["city"],
+    },
     # ---- V4 扩展工具（CODE/WORK 模式能力补齐，2026-08-04）----
     "http_post": {
         "type": "object",

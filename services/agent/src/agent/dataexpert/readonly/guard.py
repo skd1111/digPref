@@ -64,7 +64,7 @@ class WriteBlockedError(Exception):
         self.token = token
         super().__init__(
             f"只读铁律：检测到写操作 '{token.upper()}'，已拦截。"
-            f"数据专家模式禁止任何写操作（纵深防御，与 mcp-server-database 独立封禁）。"
+            f"数据模式禁止任何写操作（纵深防御，与 mcp-server-database 独立封禁）。"
         )
 
 

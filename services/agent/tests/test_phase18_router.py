@@ -27,7 +27,20 @@ def test_mixed_keywords():
 
 def test_no_keyword_hit_returns_none():
     r = ModeRouter(llm=None)
-    assert r.keyword_route("今天天气怎么样") is None
+    assert r.keyword_route("帮我看看这个方案行不行") is None
+
+
+def test_weather_keywords_hit_work():
+    """天气/闲聊/时间类查询应命中 work 路由，避免降级云端 LLM（2026-09-11）。"""
+    r = ModeRouter(llm=None)
+    assert r.keyword_route("今天天气怎么样") == "work"
+    assert r.keyword_route("未来7天天气") == "work"
+    assert r.keyword_route("明天下雨吗") == "work"
+    assert r.keyword_route("昨天下雨了吗") == "work"
+    assert r.keyword_route("现在气温多少度") == "work"
+    assert r.keyword_route("你好") == "work"
+    assert r.keyword_route("今天星期几") == "work"
+    assert r.keyword_route("现在几点了") == "work"
 
 
 def test_mode_prior_fallback():

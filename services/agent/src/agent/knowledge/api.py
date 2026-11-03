@@ -302,6 +302,37 @@ class V1SyncResponse(BaseModel):
     synced_docs: int
 
 
+class V1EntityItem(BaseModel):
+    entity_name: str
+    entity_type: str = ""
+    parent_seq: int = 0
+
+
+class V1EntitiesResponse(BaseModel):
+    doc_id: str
+    entities: list[V1EntityItem]
+    total: int
+
+
+class V1EntitySearchRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=200)
+    top_k: int = Field(default=10, ge=1, le=50)
+
+
+class V1EntitySearchResult(BaseModel):
+    entity_name: str
+    entity_type: str = ""
+    doc_id: str = ""
+    parent_seq: int = 0
+    doc_title: str = ""
+
+
+class V1EntitySearchResponse(BaseModel):
+    query: str
+    results: list[V1EntitySearchResult]
+    total: int
+
+
 # ---- 端点 ---------------------------------------------------------------
 
 
@@ -342,12 +373,23 @@ async def v1_status() -> V1StatusResponse:
 @router.get("/v1/docs", response_model=V1ListDocsResponse)
 async def v1_list_docs(
     source_type: str | None = None,
+    q: str | None = None,
+    category: str | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> V1ListDocsResponse:
     storage = _get_storage()
-    docs = storage.list_docs(source_type=source_type, limit=limit, offset=offset)
-    total = storage.count_docs(source_type=source_type)
+    # 空串规约为 None（前端可能传 "" 表示不过滤）
+    search_q = q.strip() if q else None
+    cat = category.strip() if category else None
+    docs = storage.list_docs(
+        source_type=source_type,
+        limit=limit,
+        offset=offset,
+        q=search_q,
+        category=cat,
+    )
+    total = storage.count_docs(source_type=source_type, q=search_q, category=cat)
     return V1ListDocsResponse(
         total=total,
         docs=[
@@ -538,6 +580,55 @@ async def v1_set_category(doc_id: str, body: V1SetCategoryRequest) -> V1SetCateg
         raise HTTPException(409, f"set category failed: {doc_id}")
     group_id = str(doc.get("group_id") or doc["doc_id"])
     return V1SetCategoryResponse(ok=True, group_id=group_id, category=cat)
+
+
+@router.get("/v1/docs/{doc_id}/entities", response_model=V1EntitiesResponse)
+async def v1_doc_entities(doc_id: str) -> V1EntitiesResponse:
+    """获取文档抽取的全部实体（按类型分组排序）。"""
+    storage = _get_storage()
+    doc = storage.get_doc(doc_id)
+    if doc is None:
+        raise HTTPException(404, f"doc not found: {doc_id}")
+    ents = storage.get_entities_by_doc(doc_id)
+    return V1EntitiesResponse(
+        doc_id=doc_id,
+        entities=[
+            V1EntityItem(
+                entity_name=e["entity_name"],
+                entity_type=e["entity_type"],
+                parent_seq=e["parent_seq"],
+            )
+            for e in ents
+        ],
+        total=len(ents),
+    )
+
+
+@router.post("/v1/entities/search", response_model=V1EntitySearchResponse)
+async def v1_entity_search(body: V1EntitySearchRequest) -> V1EntitySearchResponse:
+    """按实体名搜索，返回命中实体及其关联文档信息。"""
+    storage = _get_storage()
+    hits = storage.search_entities(body.query, limit=body.top_k)
+    # 补充 doc_title
+    doc_cache: dict[str, str] = {}
+    results: list[V1EntitySearchResult] = []
+    for h in hits:
+        did = h["doc_id"]
+        if did not in doc_cache:
+            doc = storage.get_doc(did)
+            doc_cache[did] = str((doc or {}).get("title", ""))
+        results.append(
+            V1EntitySearchResult(
+                entity_name=h["entity_name"],
+                entity_type=h["entity_type"],
+                doc_id=did,
+                parent_seq=h["parent_seq"],
+                doc_title=doc_cache[did],
+            )
+        )
+    return V1EntitySearchResponse(
+        query=body.query, results=results, total=len(results)
+    )
 
 
 @router.post("/v1/search", response_model=V1SearchResponse)

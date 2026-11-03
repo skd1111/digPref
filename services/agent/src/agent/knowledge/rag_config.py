@@ -53,6 +53,11 @@ _RAG_FIELDS: dict[str, tuple[str, float | None, float | None]] = {
     "rag_llm_contextual_enabled": ("bool", None, None),
     "rag_hyde_enabled": ("bool", None, None),
     "rag_query_expansion_enabled": ("bool", None, None),
+    # 入库期增强
+    "rag_auto_classify_enabled": ("bool", None, None),
+    "rag_entity_extract_enabled": ("bool", None, None),
+    # 检索期实体通道
+    "rag_entity_enabled": ("bool", None, None),
 }
 
 # 索引期参数：改了影响分块/向量化的产物，已入库数据需重建才一致（新入库立即生效）。
@@ -64,6 +69,8 @@ _INDEX_TIME_FIELDS: frozenset[str] = frozenset(
         "rag_parent_size",
         "rag_contextual_prefix_enabled",
         "rag_llm_contextual_enabled",
+        "rag_auto_classify_enabled",
+        "rag_entity_extract_enabled",
     }
 )
 

@@ -47,6 +47,7 @@ BUILTIN_TOOL_NAMES: tuple[str, ...] = (
     "http_get",
     "csv_parse",
     "text_split",
+    "weather",
     # V4 扩展工具（2026-08-04：CODE/WORK 模式能力补齐）
     "http_post",
     "git_status",

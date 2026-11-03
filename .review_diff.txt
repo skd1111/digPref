@@ -1,0 +1,223 @@
+commit c05a26bc7e19fcad6d2239eb3333ecedce1f05b0
+Author: skd1111 <798349160@qq.com>
+Date:   Tue Nov 3 17:27:03 2026 +0800
+
+    feat(update-cli): manifest model and gen-manifest
+
+diff --git a/infra/scripts/eaide_update.py b/infra/scripts/eaide_update.py
+new file mode 100644
+index 0000000..eb9e32d
+--- /dev/null
++++ b/infra/scripts/eaide_update.py
+@@ -0,0 +1,142 @@
++"""EAIDE 澧為噺鏇存柊搴旂敤鍣紙spec: docs/superpowers/specs/2026-11-03-agent-web-incremental-update-design.md 搂3/搂4锛夈€?+
++浠呮爣鍑嗗簱锛涘瓙鍛戒护锛歡en-manifest / apply / verify / rollback / status / list銆?+鏇存柊妯″瀷锛氬畨瑁呯洰褰曟梺 versions/<pkg>/<ver>/ 鑷寘鍚増鏈洰褰?+ 鍗曡鎸囬拡 <pkg>-active.txt锛?+婵€娲?= 鎸囬拡鍘熷瓙鏇挎崲锛堟墜鍔ㄥ厹搴曞崗璁細鎷风洰褰?+ 鏀规寚閽?+ 閲嶅惎锛岃 spec 搂2锛夈€?+"""
++from __future__ import annotations
++
++import hashlib
++import json
++import re
++import sys
++from dataclasses import dataclass, field
++from pathlib import Path, PurePosixPath
++
++SCHEMA_VERSION = 1
++VERSION_RE = re.compile(r"^[0-9A-Za-z._-]+$")
++
++
++class ManifestError(ValueError):
++    pass
++
++
++def _safe_relpath(p: str) -> str:
++    """manifest 鏂囦欢璺緞蹇呴』鏄浉瀵圭増鏈洰褰曟牴鐨?POSIX 椋庢牸璺緞锛屾嫆缁濈┛瓒娿€?""
++    pp = PurePosixPath(p)
++    if (
++        not p
++        or pp.is_absolute()
++        or re.match(r"^[A-Za-z]:", p)
++        or ".." in pp.parts
++    ):
++        raise ManifestError(f"unsafe manifest path: {p!r}")
++    return pp.as_posix()
++
++
++def gen_manifest(root: Path) -> list[dict]:
++    """閬嶅巻鐩綍浜у嚭 files 鍒楄〃锛坧ath 涓?POSIX 鐩稿璺緞锛涜烦杩囩洰褰曚笌搴旂敤鍣ㄨ嚜韬紦瀛橈級銆?""
++    root = Path(root)
++    out = []
++    for p in sorted(root.rglob("*")):
++        if p.is_dir() or p.name == ".filehash.json":
++            continue
++        data = p.read_bytes()
++        out.append(
++            {
++                "path": p.relative_to(root).as_posix(),
++                "sha256": hashlib.sha256(data).hexdigest(),
++                "size": len(data),
++            }
++        )
++    return out
++
++
++@dataclass
++class Manifest:
++    package: str
++    version: str
++    base_url: str
++    files: list[dict]
++    min_shell: str | None = None
++    raw: dict = field(default_factory=dict)
++
++    @classmethod
++    def from_dict(cls, doc: dict) -> Manifest:
++        if doc.get("schema") != SCHEMA_VERSION:
++            raise ManifestError(f"unsupported schema: {doc.get('schema')!r}")
++        if doc.get("package") not in ("agent", "web"):
++            raise ManifestError(f"bad package: {doc.get('package')!r}")
++        version = doc.get("version", "")
++        if not VERSION_RE.match(version):
++            raise ManifestError(f"bad version: {version!r}")
++        files = doc.get("files") or []
++        seen: set[str] = set()
++        for f in files:
++            f["path"] = _safe_relpath(f["path"])
++            if f["path"] in seen:
++                raise ManifestError(f"duplicate path: {f['path']}")
++            seen.add(f["path"])
++            if not re.match(r"^[0-9a-f]{64}$", f.get("sha256", "")):
++                raise ManifestError(f"bad sha256 for {f['path']}")
++            if not isinstance(f.get("size"), int) or f["size"] < 0:
++                raise ManifestError(f"bad size for {f['path']}")
++        return cls(
++            package=doc["package"],
++            version=version,
++            base_url=doc.get("baseUrl", ""),
++            files=files,
++            min_shell=doc.get("minShell"),
++            raw=doc,
++        )
++
++    @classmethod
++    def load(cls, src) -> Manifest:
++        """src 鍙负鏈湴璺緞 / file:/// URI / http(s) URL銆?""
++        s = str(src)
++        if s.startswith(("http://", "https://")):
++            from urllib.request import urlopen
++
++            return cls.from_dict(json.loads(urlopen(s).read().decode("utf-8")))
++        p = Path(s.replace("file:///", "/").replace("file://", ""))
++        if p.exists():
++            return cls.from_dict(json.loads(p.read_text(encoding="utf-8")))
++        raise ManifestError(f"manifest not found: {src}")
++
++
++def _cmd_gen_manifest(args):
++    files = gen_manifest(Path(args.dir))
++    doc = {
++        "schema": SCHEMA_VERSION,
++        "package": args.package,
++        "version": args.version,
++        "baseUrl": args.base_url,
++        "files": files,
++    }
++    if args.min_shell:
++        doc["minShell"] = args.min_shell
++    Path(args.out).write_text(
++        json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8"
++    )
++    print(f"[gen-manifest] {len(files)} files -> {args.out}")
++
++
++def main(argv=None):
++    import argparse
++
++    ap = argparse.ArgumentParser(prog="eaide_update")
++    sub = ap.add_subparsers(dest="cmd", required=True)
++    g = sub.add_parser("gen-manifest", help="浠?one-dir 浜х墿/dist 鐩綍鐢熸垚 manifest")
++    g.add_argument("--dir", required=True)
++    g.add_argument("--package", required=True, choices=["agent", "web"])
++    g.add_argument("--version", required=True)
++    g.add_argument("--base-url", required=True, dest="base_url")
++    g.add_argument("--min-shell", dest="min_shell", default=None)
++    g.add_argument("--out", required=True)
++    g.set_defaults(fn=_cmd_gen_manifest)
++    args = ap.parse_args(argv)
++    return args.fn(args)
++
++
++if __name__ == "__main__":
++    sys.exit(main() or 0)
+diff --git a/infra/scripts/tests/conftest.py b/infra/scripts/tests/conftest.py
+new file mode 100644
+index 0000000..ec04efb
+--- /dev/null
++++ b/infra/scripts/tests/conftest.py
+@@ -0,0 +1,5 @@
++"""infra/scripts 宸ュ叿鑴氭湰鐨勬祴璇曞紩瀵硷細鎶婅剼鏈洰褰曞姞鍏?sys.path銆?""
++import sys
++from pathlib import Path
++
++sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+diff --git a/infra/scripts/tests/test_eaide_update.py b/infra/scripts/tests/test_eaide_update.py
+new file mode 100644
+index 0000000..4bab7f5
+--- /dev/null
++++ b/infra/scripts/tests/test_eaide_update.py
+@@ -0,0 +1,56 @@
++"""eaide_update.py 搴旂敤鍣ㄦ祴璇曪紙spec: docs/superpowers/specs/2026-11-03-agent-web-incremental-update-design.md 搂3/搂4锛夈€?""
++import hashlib
++import json
++
++import pytest
++from eaide_update import Manifest, ManifestError, gen_manifest
++
++
++def _sha(b: bytes) -> str:
++    return hashlib.sha256(b).hexdigest()
++
++
++@pytest.fixture
++def fake_dir(tmp_path):
++    (tmp_path / "_internal" / "agent").mkdir(parents=True)
++    (tmp_path / "eaide-agent.exe").write_bytes(b"BOOT")
++    (tmp_path / "_internal" / "agent" / "a.py").write_bytes(b"CODE")
++    return tmp_path
++
++
++def test_gen_manifest_walk_and_hash(fake_dir):
++    files = gen_manifest(fake_dir)
++    paths = {f["path"] for f in files}
++    assert paths == {"eaide-agent.exe", "_internal/agent/a.py"}  # POSIX 椋庢牸鐩稿璺緞
++    entry = next(f for f in files if f["path"] == "eaide-agent.exe")
++    assert entry["sha256"] == _sha(b"BOOT") and entry["size"] == 4
++
++
++def test_manifest_parse_ok_and_schema_gate(tmp_path, fake_dir):
++    doc = {
++        "schema": 1,
++        "package": "agent",
++        "version": "0.1.8",
++        "baseUrl": "file:///" + str(fake_dir).replace("\\", "/"),
++        "files": gen_manifest(fake_dir),
++    }
++    (tmp_path / "manifest.json").write_text(json.dumps(doc), encoding="utf-8")
++    m = Manifest.load(tmp_path / "manifest.json")
++    assert m.package == "agent" and len(m.files) == 2
++    bad = dict(doc, schema=99)
++    (tmp_path / "bad.json").write_text(json.dumps(bad), encoding="utf-8")
++    with pytest.raises(ManifestError, match="schema"):
++        Manifest.load(tmp_path / "bad.json")
++
++
++@pytest.mark.parametrize("evil", ["../x", "/abs", "C:\\win", "_internal/../../etc/passwd"])
++def test_manifest_rejects_path_traversal(fake_dir, evil):
++    doc = {
++        "schema": 1,
++        "package": "agent",
++        "version": "0.1.8",
++        "baseUrl": "x",
++        "files": [{"path": evil, "sha256": "0" * 64, "size": 1}],
++    }
++    with pytest.raises(ManifestError, match="path"):
++        Manifest.from_dict(doc)

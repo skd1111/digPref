@@ -640,7 +640,12 @@ export const ipc = {
       category: category ?? "",
       base_doc_id: baseDocId ?? "",
     }),
-  kbList: () => invoke<{ total: number; docs: KbDocSummary[] }>("knowledge", { _op: "kb_list" }),
+  kbList: (params?: { q?: string; category?: string }) =>
+    invoke<{ total: number; docs: KbDocSummary[] }>("knowledge", {
+      _op: "kb_list",
+      q: params?.q ?? "",
+      category: params?.category ?? "",
+    }),
   /** 列出某资料所属逻辑组的全部版本（version 倒序）+ 当前生效版本 */
   kbVersions: (doc_id: string) =>
     invoke<KbListVersionsResponse>("knowledge", { _op: "kb_versions", doc_id }),
@@ -687,6 +692,26 @@ export const ipc = {
       needs_reindex?: string[];
       config: Record<string, number | boolean>;
     }>("knowledge", { _op: "kb_config_set", config }),
+  /** 获取文档抽取的全部实体（知识图谱阶段一） */
+  kbEntities: (doc_id: string) =>
+    invoke<{
+      doc_id: string;
+      entities: Array<{ entity_name: string; entity_type: string; parent_seq: number }>;
+      total: number;
+    }>("knowledge", { _op: "kb_entities", doc_id }),
+  /** 按实体名搜索，返回命中实体及其关联文档信息 */
+  kbEntitySearch: (query: string, top_k?: number) =>
+    invoke<{
+      query: string;
+      results: Array<{
+        entity_name: string;
+        entity_type: string;
+        doc_id: string;
+        parent_seq: number;
+        doc_title: string;
+      }>;
+      total: number;
+    }>("knowledge", { _op: "kb_entity_search", query, top_k: top_k ?? 10 }),
 
   // Phase 2F V0: 代码导航
   codeNavJump: (body: {
@@ -2415,4 +2440,29 @@ export const ipc = {
   /** POST /mcp-config/reload —— 重读 mcp.yaml 并重建运行中连接 */
   mcpConfigReload: () =>
     invoke<{ ok: boolean; servers: string[] }>("mcp_config_reload"),
+
+  // ---- Terminal shell/spawn（2026-09-11）----
+
+  /** 启动 shell 进程，返回 [terminal_id, exe, args] */
+  terminalSpawn: (shell: string, cwd?: string) =>
+    invoke<[string, string, string[]]>("terminal_spawn", {
+      shell,
+      cwd: cwd ?? null,
+    }),
+
+  /** 向 shell stdin 写入文本（用户按键 / 粘贴） */
+  terminalWrite: (terminalId: string, data: string) =>
+    invoke<boolean>("terminal_write", { terminalId, data }),
+
+  /** 向 shell 发送特殊键（Enter / Tab / Ctrl+C / 方向键等） */
+  terminalWriteKey: (terminalId: string, key: string) =>
+    invoke<boolean>("terminal_write_key", { terminalId, key }),
+
+  /** 终止 shell 进程并清理会话 */
+  terminalKill: (terminalId: string) =>
+    invoke<boolean>("terminal_kill", { terminalId }),
+
+  /** 查询终端是否存活 */
+  terminalAlive: (terminalId: string) =>
+    invoke<boolean>("terminal_alive", { terminalId }),
 } as const;

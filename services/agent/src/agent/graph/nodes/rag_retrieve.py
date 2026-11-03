@@ -60,10 +60,28 @@ _RAG_TRIGGER_KEYWORDS: tuple[str, ...] = (
 )
 
 
+# ---- 排除关键词（2026-09-11）------------------------------------------
+# 命中这些词 → 明确不是知识库查询，跳过 RAG 检索，省掉 2s+ 无意义检索。
+# 覆盖：天气/时间/日期、问候/闲聊、计算/翻译、系统状态等。
+_RAG_EXCLUDED_KEYWORDS: tuple[str, ...] = (
+    # 天气
+    "天气", "气温", "下雨", "下雨吗", "晴天", "阴天", "风力", "湿度",
+    # 问候 / 闲聊
+    "你好", "您好", "hello", "hi", "hey", "再见", "拜拜", "谢谢", "感谢",
+    # 计算 / 翻译（纯工具型，无知识依赖）
+    "翻译", "translate", "计算", "等于多少",
+    # 系统状态 / 自身能力
+    "你是谁", "你能做什么", "你是什么",
+)
+
+
 def _should_retrieve(prompt: str) -> bool:
     """简单判断是否值得走 RAG 检索。"""
     p = (prompt or "").strip().lower()
     if not p:
+        return False
+    # 排除优先：天气/闲聊/计算等明确非知识型查询，零检索
+    if any(kw in p for kw in _RAG_EXCLUDED_KEYWORDS):
         return False
     if any(kw in p for kw in _RAG_TRIGGER_KEYWORDS):
         return True

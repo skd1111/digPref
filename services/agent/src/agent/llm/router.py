@@ -1159,6 +1159,19 @@ class LMRouter:
         if kind in ("kb_hyde", "kb_expand", "kb_contextual"):
             # RAG LLM 增强阶段：mock 返空串 → 上层 seam 优雅 no-op（不伪造改写/前缀）
             return _async_text("")
+        if kind == "kb_classify":
+            # 知识库自动分类：mock 返回第一个可用分类 key（数据字典 → 兜底 finance）
+            try:
+                from agent.knowledge.category import get_kb_categories
+                cats = get_kb_categories()
+                if cats:
+                    return _async_text(cats[0]["key"])
+            except Exception:
+                pass
+            return _async_text("finance")
+        if kind == "kb_entity_extract":
+            # 知识库实体抽取：mock 返回固定 JSON（含两种实体类型）
+            return _async_text('{"person": ["测试用户"], "organization": ["测试机构"]}')
         raise ValueError(f"unknown kind: {kind}")
 
     # ---- "Raise" 包装：把客户端内部静默降级转换成异常 -----------------------

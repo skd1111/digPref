@@ -11,17 +11,18 @@ import { useNavigate } from 'react-router-dom';
 import { ipc } from '@/ipc/invoke';
 import type { KbDocSummary, KbStatus, KbVersionItem } from '@/ipc/invoke';
 import { previewLocalFile } from '@/store/officePreviewStore';
+import { useDictOptions, type DictOption } from '@/hooks/useDictOptions';
 
 const SUPPORTED_EXTENSIONS = [
   'pdf', 'docx', 'doc', 'txt', 'md', 'csv', 'html', 'htm', 'xlsx', 'pptx',
 ];
 
-const CATEGORIES: { value: string; label: string }[] = [
-  { value: '', label: '未分类' },
-  { value: 'finance', label: '财务/财税' },
-  { value: 'legal', label: '法务/合同' },
-  { value: 'compliance', label: '合规/制度' },
-  { value: 'data_security', label: '数据安全' },
+// 内置兜底（数据字典不可用时降级）
+const FALLBACK_CATEGORIES: DictOption[] = [
+  { key: 'finance', label: '财务/财税', value: 'finance', description: '' },
+  { key: 'legal', label: '法务/合同', value: 'legal', description: '' },
+  { key: 'compliance', label: '合规/制度', value: 'compliance', description: '' },
+  { key: 'data_security', label: '数据安全', value: 'data_security', description: '' },
 ];
 
 const STATUS_META: Record<string, { label: string; color: string }> = {
@@ -56,26 +57,42 @@ export function KbPanel(): JSX.Element {
   const navigate = useNavigate();
   const [docs, setDocs] = useState<KbDocSummary[]>([]);
   const [status, setStatus] = useState<KbStatus | null>(null);
-  const [category, setCategory] = useState('');
+  const [category, setCategory] = useState('__auto__');
   const [busy, setBusy] = useState(false);
   const [reindexing, setReindexing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<number | null>(null);
+  // 搜索：输入框实时绑定 + debounce 300ms 后触发后端 FTS 检索
+  const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   // 版本历史：当前展开的逻辑资料 group + 其全部版本（检索仅命中「生效」版本）
   const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
   const [versions, setVersions] = useState<KbVersionItem[]>([]);
   const [versionsBusy, setVersionsBusy] = useState(false);
 
+  // 从数据字典动态读取知识库分类（实时生效）；不可用时降级到内置兜底
+  const { options: dictCats } = useDictOptions('知识库分类');
+  const categories = dictCats.length > 0 ? dictCats : FALLBACK_CATEGORIES;
+
+  // debounce：输入停顿 300ms 后更新 debouncedQuery 触发 refresh
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedQuery(searchQuery), 300);
+    return () => window.clearTimeout(t);
+  }, [searchQuery]);
+
   const refresh = useCallback(async (): Promise<void> => {
     try {
-      const [list, st] = await Promise.all([ipc.kbList(), ipc.kbStatus()]);
+      const [list, st] = await Promise.all([
+        ipc.kbList(debouncedQuery ? { q: debouncedQuery } : undefined),
+        ipc.kbStatus(),
+      ]);
       setDocs(list.docs ?? []);
       setStatus(st);
       setReindexing(st.reindexing);
     } catch (e) {
       setError(`读取知识库失败 · ${String(e)}`);
     }
-  }, []);
+  }, [debouncedQuery]);
 
   // 有文档在索引中或正在重建 → 轮询，直到落定
   useEffect(() => {
@@ -160,7 +177,7 @@ export function KbPanel(): JSX.Element {
     const failed: string[] = [];
     for (const p of supported) {
       try {
-        await ipc.kbUpload(p, category);
+        await ipc.kbUpload(p, category === '__auto__' ? '' : category);
       } catch (e) {
         failed.push(`${p.split(/[\\/]/).pop()}: ${String(e)}`);
       }
@@ -367,12 +384,42 @@ export function KbPanel(): JSX.Element {
           style={{ borderColor: '#d4d4d4', backgroundColor: '#ffffff', color: '#1f1f1f' }}
           title="上传时打的分类标签（检索可按类过滤）"
         >
-          {CATEGORIES.map((c) => (
-            <option key={c.value} value={c.value}>
+          <option value="__auto__">自动识别</option>
+          <option value="">未分类</option>
+          {categories.map((c) => (
+            <option key={c.key} value={c.value}>
               {c.label}
             </option>
           ))}
         </select>
+        {/* 搜索框 */}
+        <div className="relative">
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="搜索文档名称…"
+            className="rounded border py-1 pl-2 pr-6 text-2xs outline-none"
+            style={{
+              borderColor: debouncedQuery ? '#0e639c' : '#d4d4d4',
+              backgroundColor: '#ffffff',
+              color: '#1f1f1f',
+              width: '180px',
+            }}
+            title="按文档标题 / 文件名搜索（支持中文分词）"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="absolute right-1 top-1/2 -translate-y-1/2 rounded px-1 text-2xs"
+              style={{ color: '#616161' }}
+              title="清除搜索"
+            >
+              ✕
+            </button>
+          )}
+        </div>
         <button
           type="button"
           onClick={() => void onUpload()}
@@ -404,6 +451,26 @@ export function KbPanel(): JSX.Element {
         </div>
       )}
 
+      {/* 搜索结果提示条 */}
+      {debouncedQuery && (
+        <div
+          className="flex flex-shrink-0 items-center gap-1 border-b px-4 py-1.5 text-2xs"
+          style={{ borderColor: '#e0e0e0', backgroundColor: '#f8f9fa', color: '#333' }}
+        >
+          <span>
+            搜索 “{debouncedQuery}” — 找到 {docs.length} 个文档
+          </span>
+          <button
+            type="button"
+            onClick={() => setSearchQuery('')}
+            className="rounded px-1.5 py-0.5"
+            style={{ color: '#0e639c' }}
+          >
+            清除搜索
+          </button>
+        </div>
+      )}
+
       {/* 文件列表 */}
       <div className="flex-1 overflow-auto px-4 py-3">
         {docs.length === 0 ? (
@@ -411,9 +478,28 @@ export function KbPanel(): JSX.Element {
             className="flex h-full items-center justify-center text-center text-ui"
             style={{ color: '#616161' }}
           >
-            暂无参考资料。点击「＋ 上传参考资料」导入法规/制度/案例等文件，
-            <br />
-            之后文档审核与聊天会自动混合检索并引用其中内容。
+            {debouncedQuery ? (
+              <>
+                未找到匹配“{debouncedQuery}”的文档。
+                <br />
+                试试其他关键词，或
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="mx-1 underline"
+                  style={{ color: '#0e639c' }}
+                >
+                  清除搜索
+                </button>
+                查看全部文档。
+              </>
+            ) : (
+              <>
+                暂无参考资料。点击「＋ 上传参考资料」导入法规/制度/案例等文件，
+                <br />
+                之后文档审核与聊天会自动混合检索并引用其中内容。
+              </>
+            )}
           </div>
         ) : (
           <table className="w-full border-collapse text-2xs">
@@ -480,11 +566,12 @@ export function KbPanel(): JSX.Element {
                           }}
                           title="修改该资料的分类（作用于全部版本，并同步用于按类检索）"
                         >
-                          {CATEGORIES.some((c) => c.value === (d.category ?? '')) ? null : (
+                          {categories.some((c) => c.value === (d.category ?? '')) ? null : (
                             <option value={d.category ?? ''}>{d.category || '未分类'}</option>
                           )}
-                          {CATEGORIES.map((c) => (
-                            <option key={c.value} value={c.value}>
+                          <option value="">未分类</option>
+                          {categories.map((c) => (
+                            <option key={c.key} value={c.value}>
                               {c.label}
                             </option>
                           ))}

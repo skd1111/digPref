@@ -104,6 +104,7 @@ FINAL_ANSWER_STYLE = """\
    每个选项必须写明选择理由，恰好一个选项标 recommended:true（推荐项），
    多个待确认问题就输出多个对象；选项措辞面向业务用户，通俗易懂。
    不需要确认时绝不输出该块；除该块外回复不得包含其它 JSON。
+   【重要】每个选项必须是独立的 JSON 对象，严禁把多个选项塞进同一个 text 字段。
 ```clarify
 [
   {
@@ -111,6 +112,14 @@ FINAL_ANSWER_STYLE = """\
     "options": [
       {"text": "<选项简述>", "reason": "<为什么选它>", "recommended": true},
       {"text": "<选项简述>", "reason": "<为什么选它>", "recommended": false}
+    ]
+  },
+  {
+    "question": "<第二个待确认问题（如有）>",
+    "options": [
+      {"text": "<选项A>", "reason": "<理由>", "recommended": true},
+      {"text": "<选项B>", "reason": "<理由>", "recommended": false},
+      {"text": "<选项C>", "reason": "<理由>", "recommended": false}
     ]
   }
 ]
