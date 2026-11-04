@@ -11,12 +11,18 @@
 
 use std::path::{Path, PathBuf};
 
-/// 归一化请求路径：去前导 `/`、空路径视为 `index.html`。含 `..` 一律拒绝（None）。
+/// 归一化请求路径：去首尾 `/`、空路径视为 `index.html`。
+/// 拒绝含 `..` 分段 / 反斜杠 / 盘符戒号 / NUL 的路径（Windows 下 `\` 也是分隔符、
+/// `:` 可拼出 `C:/…`戒 UNC 经 `join` 整串替换 base → 任意本地文件读取）。
+/// 不做百分号解码（`uri().path()` 为未解码原文）：若将来补解码，必须在解码后
+/// 重新跑本函数的 `..`/`\`/`:` 校验，否则编码型穿越（`%2e%2e%2f`）会回来。
 fn normalize_rel(path: &str) -> Option<String> {
-    let rel = path.trim_start_matches('/');
+    let rel = path.trim_start_matches('/').trim_end_matches('/');
     let rel = if rel.is_empty() { "index.html" } else { rel };
-    // query/fragment 不会出现在 uri().path()，但防御性去尾斜杠
-    if rel.split('/').any(|seg| seg == "..") || rel.contains('\0') {
+    if rel.contains('\0') || rel.contains('\\') || rel.contains(':') {
+        return None;
+    }
+    if rel.split('/').any(|seg| seg == "..") {
         return None;
     }
     Some(rel.to_string())
@@ -31,13 +37,18 @@ pub fn resolve_asset(exe_dir: &Path, vroot: &Path, uri_path: &str) -> Option<Pat
 
     let pick_in = |base: &Path| -> Option<PathBuf> {
         let cand = base.join(&rel);
+        // 纵深防御：join 碰到绝对路径会整串替换 base（.. 已由 normalize_rel 拦掉，
+        // 此处兜住剩余“跳出 base”情形）
+        if !cand.starts_with(base) {
+            return None;
+        }
         if cand.is_file() {
             return Some(cand);
         }
         // SPA history 路由深链：无扩展名且未命中 → index.html
         if looks_spa {
             let idx = base.join("index.html");
-            if idx.is_file() {
+            if idx.starts_with(base) && idx.is_file() {
                 return Some(idx);
             }
         }
@@ -167,6 +178,26 @@ mod tests {
         let vroot = exe_dir.join("versions");
         assert!(resolve_asset(exe_dir, &vroot, "/../../windows/x").is_none());
         assert!(resolve_asset(exe_dir, &vroot, "/a/./../b").is_none());
+        // Windows 绕过面（Review 439e0a1 Critical#1）：反斜杠、盘符/UNC 绝对路径、NUL
+        assert!(resolve_asset(exe_dir, &vroot, "\\..\\..\\windows\\win.ini").is_none());
+        assert!(resolve_asset(exe_dir, &vroot, "/C:/windows/win.ini").is_none());
+        assert!(resolve_asset(exe_dir, &vroot, "/a/b\0c").is_none());
+    }
+
+    #[test]
+    fn spa_no_index_returns_none_and_active_spa_fallback() {
+        let t = Tmp::new("spano");
+        let exe_dir = t.path();
+        let vroot = exe_dir.join("versions");
+        // 出厂 web 完全不存在 → 无扩展名深链应 None
+        assert!(resolve_asset(exe_dir, &vroot, "/some/route").is_none());
+        // active 层自己的 SPA 回落
+        write(&vroot.join("web/0.3.0"), "index.html");
+        std::fs::write(vroot.join("web-active.txt"), "0.3.0\n").unwrap();
+        assert_eq!(
+            resolve_asset(exe_dir, &vroot, "/deep/link").unwrap(),
+            vroot.join("web/0.3.0/index.html")
+        );
     }
 
     #[test]
