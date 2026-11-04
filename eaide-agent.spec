@@ -123,9 +123,8 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,  # one-dir：binaries/datas 移交 COLLECT，不再内联进单文件
     name='eaide-agent',
     debug=False,
     bootloader_ignore_signals=False,
@@ -142,4 +141,19 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+# one-dir 布局（增量更新前置，spec §5）：产物为 <dist>/eaide-agent/
+#   ├─ eaide-agent.exe   （小 bootloader，~15MB）
+#   └─ _internal/        （Python 运行时 + 依赖 + datas；one-dir 下 sys._MEIPASS 即此目录，
+#                        spec 内 datas 相对布局与 one-file 完全一致）
+# 更新时只有变化的文件需重下，配合 infra/scripts/eaide_update.py 清单比对 + 硬链复用。
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='eaide-agent',
 )

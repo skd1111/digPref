@@ -49,13 +49,22 @@ jobs:
           pwsh -File model/download_bge_reranker_onnx.ps1 || echo "[release] bge-reranker fetch failed; agent exe will no-op rerank"
       - name: PyInstaller build
         run: uv run pyinstaller eaide-agent.spec --noconfirm --distpath agent-dist --workpath agent-build
-      - name: chmod +x
+      - name: chmod +x (macOS)
         if: runner.os == 'macOS'
-        run: chmod +x agent-dist/eaide-agent
+        run: chmod +x agent-dist/eaide-agent/eaide-agent
+      # one-dir 产物目录 agent-dist/eaide-agent/{exe,_internal} 打成一个归档（两平台解压后均带
+      # eaide-agent/ 外层）：Windows 用 zip、macOS 用 tar.gz（保留 +x 位）
+      - name: Pack one-dir (Windows)
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path agent-dist/eaide-agent -DestinationPath agent-dist/eaide-agent.zip
+        shell: pwsh
+      - name: Pack one-dir (macOS)
+        if: runner.os == 'macOS'
+        run: tar -czf agent-dist/eaide-agent.tar.gz -C agent-dist eaide-agent
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
-          path: agent-dist/${{ matrix.binary }}
+          path: agent-dist/eaide-agent.${{ runner.os == 'macOS' && 'tar.gz' || 'zip' }}
           if-no-files-found: error
 
   build-tauri:
@@ -90,15 +99,26 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with: { targets: "${{ matrix.target }}" }
 
-      # 端侧 Agent 二进制放入 Tauri resources（随 .app / NSIS 打包）
-      - name: Fetch agent binary
+      # 端侧 Agent one-dir 解压平铺进 resources 根（exe + _internal 与主程序同级，
+      # 随 tauri bundle.resources "resources/*": "./" 进 .app / NSIS；与本地 build-all 布局一致）
+      - name: Fetch agent archive
         uses: actions/download-artifact@v8
         with:
           name: ${{ matrix.agent_artifact }}
-          path: apps/desktop/src-tauri/resources
-      - name: Make agent executable
-        if: runner.os == 'macOS'
-        run: chmod +x apps/desktop/src-tauri/resources/${{ matrix.agent_file }}
+          path: agent-in
+      - name: Unpack agent one-dir into resources
+        shell: bash
+        run: |
+          mkdir -p apps/desktop/src-tauri/resources
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            powershell -Command "Expand-Archive -Path agent-in/eaide-agent.zip -DestinationPath agent-in/x -Force"
+          else
+            tar -xzf agent-in/eaide-agent.tar.gz -C agent-in
+          fi
+          cp -r agent-in/x/eaide-agent/. apps/desktop/src-tauri/resources/ 2>/dev/null \
+            || cp -r agent-in/eaide-agent/. apps/desktop/src-tauri/resources/
+          chmod +x apps/desktop/src-tauri/resources/eaide-agent 2>/dev/null || true
+          ls apps/desktop/src-tauri/resources/
 
       # tauri bundle.resources 通配（resources/* 与 config/driver/* 与 vendor/officecli/*）检出里可能无文件
       # 导致打包失败；Agent 已就位时 resources 不再需要占位，config/driver 仍补占位
