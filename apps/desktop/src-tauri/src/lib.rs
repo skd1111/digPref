@@ -434,6 +434,8 @@ pub fn run() {
             commands::terminal::terminal_write_key,
             commands::terminal::terminal_kill,
             commands::terminal::terminal_alive,
+            // 增量更新状态只读命令（versions 目录/激活指针探测）
+            commands::update::app_update_status,
         ])
         .run(tauri::generate_context!());
 

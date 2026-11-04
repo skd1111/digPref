@@ -30,3 +30,4 @@ pub mod compile;       // 文件树右键编译（2026-08-19）
 pub mod office;        // V9 Office 预览（OfficeCLI 渲染，2026-08-25）
 pub mod logs;          // BUGFIX #193：设置页「一键导出全部日志」（2026-09-04）
 pub mod terminal;      // Terminal shell/spawn（2026-09-11）
+pub mod update;        // 增量更新状态只读命令（versions 目录/激活指针探测）

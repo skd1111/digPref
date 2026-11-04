@@ -172,7 +172,7 @@ pub async fn agent_read_log(lines: Option<usize>) -> CmdResult<serde_json::Value
         "path": path_str,
         "tail": last.join("\n"),
         "line_count": last.len(),
-        "hint": "若 tail 含 '[agent_manager] 未找到 Agent ...' 则打包 EXE 没把 eaide-agent.exe 放进去，EAIDE 退到了 dev 模式（需要源码目录 D:\\ditPref\\services\\agent 在）",
+        "hint": "若 tail 含 '[agent_manager] 未解析到 Agent' 则出厂 one-dir 布局缺失（需 resources 里有 eaide-agent.exe + _internal），EAIDE 退到了 dev 模式；versions 根与当前激活指针见 app_update_status 命令输出",
     }))
 }
 
