@@ -34,27 +34,101 @@ use windows_sys::Win32::System::JobObjects::{
 
 use crate::config::AppConfig;
 
-/// bundled Agent 候选路径（start / restart 共用）。
+/// versions 根：`EAIDE_VERSIONS_DIR` ?? `exe_dir/versions`（相对值以 exe_dir 为基准）。
+/// 与 Python 应用器 `eaide_update.py` 的 `--root`/安装目录旁 `versions/` 布局对齐。
+pub(crate) fn resolve_versions_root(exe_dir: &Path) -> PathBuf {
+    if let Ok(p) = std::env::var("EAIDE_VERSIONS_DIR") {
+        let pb = PathBuf::from(p);
+        return if pb.is_absolute() { pb } else { exe_dir.join(pb) };
+    }
+    exe_dir.join("versions")
+}
+
+/// 读 `<pkg>-active.txt` 激活指针。缺省 / `factory` / 非法字符（含 `..`、路径分隔、
+/// 空）一律 → `None`（= 出厂布局），防指针被写坏导致路径穿越（spec §2/§6）。
+pub(crate) fn read_active_version(root: &Path, package: &str) -> Option<String> {
+    let raw = std::fs::read_to_string(root.join(format!("{package}-active.txt"))).ok()?;
+    let v = raw.trim().to_string();
+    if v.is_empty() || v == "factory" || v == "." || v == ".." {
+        return None;
+    }
+    let ok = v
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+    ok.then_some(v)
+}
+
+/// spec §6 优先级解析 Agent 可执行文件：
+///   `EAIDE_AGENT_EXE`（显式覆盖）> `versions/<active>/eaide-agent(.exe)` > 出厂候选。
+/// 每层命中都打日志（env-override / versions/<v> / factory），沿用既有候选探测日志风格。
+pub fn resolve_agent_exe(exe_dir: &Path) -> Option<PathBuf> {
+    let from_env = std::env::var("EAIDE_AGENT_EXE").ok().map(|p| {
+        let pb = PathBuf::from(&p);
+        if pb.is_absolute() {
+            pb
+        } else {
+            exe_dir.join(pb)
+        }
+    });
+    resolve_agent_exe_with(exe_dir, from_env.as_deref())
+}
+
+/// 测试友好拆层：显式传入 env 覆盖路径，单测不碰全局 `std::env`（避免并行用例竞态）。
+fn resolve_agent_exe_with(exe_dir: &Path, env_override: Option<&Path>) -> Option<PathBuf> {
+    if let Some(abs) = env_override {
+        if abs.exists() {
+            app_log(&format!(
+                "[agent_manager] agent 来源=env-override: {}",
+                abs.display()
+            ));
+            return Some(abs.to_path_buf());
+        }
+    }
+    let vroot = resolve_versions_root(exe_dir);
+    if let Some(v) = read_active_version(&vroot, "agent") {
+        let dir = vroot.join("agent").join(&v);
+        let exe_name = if cfg!(target_os = "windows") {
+            "eaide-agent.exe"
+        } else {
+            "eaide-agent"
+        };
+        let cand = dir.join(exe_name);
+        let cand = if cand.exists() { cand } else { dir.join("eaide-agent") };
+        if cand.exists() {
+            app_log(&format!(
+                "[agent_manager] agent 来源=versions/{v}: {}",
+                cand.display()
+            ));
+            return Some(cand);
+        }
+        app_log(&format!(
+            "[agent_manager] active 指针 {v} 指向的目录缺失，回退出厂布局"
+        ));
+    }
+    let hit = bundled_agent_candidates(exe_dir)
+        .into_iter()
+        .find(|p| p.exists());
+    if let Some(h) = &hit {
+        app_log(&format!("[agent_manager] agent 来源=factory: {}", h.display()));
+    }
+    hit
+}
+
+/// 出厂（bundled）Agent 候选路径（`resolve_agent_exe` 的兜底层）。
 ///
-/// 覆盖三种布局：
-///   1) NSIS currentUser / Linux AppImage → 安装根目录扁平布局
+/// 覆盖三种布局（`EAIDE_AGENT_EXE` / versions 激活版已在 `resolve_agent_exe` 前置处理）：
+///   1) NSIS currentUser / Linux AppImage → 安装根目录扁平布局（one-dir：exe + _internal 同级）
 ///   2) Tauri "resources/" 约定 → NSIS perMachine / dev hot-reload
-///   3) macOS .app → Contents/MacOS/<exe> + Contents/Resources/<资源>
-///   4) EAIDE_AGENT_EXE 环境变量（绝对路径或相对 exe_dir）
+///   3) macOS .app → current_exe 在 Contents/MacOS/，资源在 Contents/Resources/
 fn bundled_agent_candidates(exe_dir: &Path) -> Vec<PathBuf> {
-    let mut v = vec![
+    vec![
         exe_dir.join("eaide-agent.exe"),
         exe_dir.join("eaide-agent"),
         exe_dir.join("resources").join("eaide-agent.exe"),
         exe_dir.join("resources").join("eaide-agent"),
         // macOS .app：current_exe 在 Contents/MacOS/，资源在 Contents/Resources/
         exe_dir.join("..").join("Resources").join("eaide-agent"),
-    ];
-    if let Ok(p) = std::env::var("EAIDE_AGENT_EXE") {
-        let pb = PathBuf::from(&p);
-        v.push(if pb.is_absolute() { pb } else { exe_dir.join(pb) });
-    }
-    v
+    ]
 }
 
 /// Agent 运行时目录（cwd + EAIDE_CONFIG_DIR 的基准）。
@@ -268,17 +342,22 @@ impl AgentManager {
             .and_then(|p| p.parent().map(|d| d.to_path_buf()))
             .unwrap_or_default();
 
-        // bundled Agent 候选路径（含 macOS .app Contents/Resources 布局与 EAIDE_AGENT_EXE）
-        let candidates = bundled_agent_candidates(&exe_dir);
-        // 列一下所有候选路径的探测结果，便于排错
-        {
+        // Agent 解析：EAIDE_AGENT_EXE > versions/<active> > 出厂候选（spec §6）
+        let vroot = resolve_versions_root(&exe_dir);
+        app_log(&format!(
+            "[agent_manager] versions 根={}，激活指针={:?}（None=出厂）",
+            vroot.display(),
+            read_active_version(&vroot, "agent")
+        ));
+        let bundled_exe: Option<PathBuf> = resolve_agent_exe(&exe_dir);
+        if bundled_exe.is_none() {
+            // 排错：三级都没命中时，列出出厂候选探测结果
             let mut probe = String::new();
-            for p in &candidates {
+            for p in bundled_agent_candidates(&exe_dir) {
                 probe.push_str(&format!("    {} → {}\n", p.display(), if p.exists() { "EXISTS" } else { "missing" }));
             }
-            app_log(&format!("[agent_manager] bundled exe 候选探测:\n{}", probe));
+            app_log(&format!("[agent_manager] 未解析到 Agent，出厂候选探测:\n{}", probe));
         }
-        let bundled_exe: Option<PathBuf> = candidates.into_iter().find(|p| p.exists());
 
         let (cmd_owned, args, cwd, env_vars): (String, Vec<String>, PathBuf, Vec<(&'static str, String)>) =
             if let Some(bundled) = bundled_exe {
@@ -628,14 +707,13 @@ pub fn restart_agent_process() {
         redacted
     ));
 
-    // 3. 找到 bundled exe（含 macOS .app Contents/Resources 布局）
+    // 3. 解析 Agent（EAIDE_AGENT_EXE > versions/<active> > 出厂候选）
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
         .unwrap_or_default();
-    let candidates = bundled_agent_candidates(&exe_dir);
-    let Some(exe) = candidates.into_iter().find(|p| p.exists()) else {
-        app_log("[agent_manager] restart: 找不到 bundled eaide-agent");
+    let Some(exe) = resolve_agent_exe(&exe_dir) else {
+        app_log("[agent_manager] restart: 找不到 eaide-agent（env/versions/出厂均未命中）");
         return;
     };
     app_log(&format!("[agent_manager] restart: spawn 新 Agent: {}", exe.display()));
@@ -934,4 +1012,100 @@ pub(crate) fn get_log_dir() -> PathBuf {
     let dir = get_app_data_dir().join("logs");
     let _ = std::fs::create_dir_all(&dir);
     dir
+}
+
+#[cfg(test)]
+mod resolve_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// 零依赖临时目录（避开 tempfile 新增 crate → crates.io 索引/网络依赖）。
+    struct TmpDir(PathBuf);
+    impl TmpDir {
+        fn new(tag: &str) -> Self {
+            static SEQ: AtomicU64 = AtomicU64::new(0);
+            let n = SEQ.fetch_add(1, Ordering::Relaxed);
+            let p = std::env::temp_dir()
+                .join(format!("eaide-resolve-{}-{}-{}", std::process::id(), n, tag));
+            let _ = std::fs::remove_dir_all(&p);
+            std::fs::create_dir_all(&p).unwrap();
+            Self(p)
+        }
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+    impl Drop for TmpDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// 在版本目录同时铺两个镜像名，使用例不依赖运行平台。
+    fn touch_exe(dir: &Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("eaide-agent.exe"), b"x").unwrap();
+        std::fs::write(dir.join("eaide-agent"), b"x").unwrap();
+    }
+
+    #[test]
+    fn active_pointer_wins_over_factory() {
+        let dir = TmpDir::new("active");
+        let root = dir.path();
+        touch_exe(&root.join("versions/agent/0.9.9"));
+        std::fs::write(root.join("versions/agent-active.txt"), "0.9.9\n").unwrap();
+        std::fs::write(root.join("eaide-agent.exe"), b"factory").unwrap();
+        let resolved = resolve_agent_exe_with(root, None).unwrap();
+        assert!(resolved.starts_with(&root.join("versions/agent/0.9.9")));
+    }
+
+    #[test]
+    fn bad_pointer_falls_back_to_factory() {
+        let dir = TmpDir::new("badptr");
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("versions")).unwrap();
+        std::fs::write(root.join("versions/agent-active.txt"), "../evil").unwrap();
+        std::fs::write(root.join("eaide-agent.exe"), b"factory").unwrap();
+        let resolved = resolve_agent_exe_with(root, None).unwrap();
+        assert_eq!(resolved, root.join("eaide-agent.exe"));
+    }
+
+    #[test]
+    fn env_override_wins_all() {
+        // 显式传参避开 std::env 并行竞态
+        let dir = TmpDir::new("env");
+        let root = dir.path();
+        std::fs::write(root.join("eaide-agent.exe"), b"factory").unwrap();
+        let custom = root.join("custom-agent.exe");
+        std::fs::write(&custom, b"c").unwrap();
+        assert_eq!(resolve_agent_exe_with(root, Some(&custom)).unwrap(), custom);
+    }
+
+    #[test]
+    fn factory_pointer_and_missing_versions_skipped() {
+        let dir = TmpDir::new("factoryptr");
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("versions/agent")).unwrap();
+        std::fs::write(root.join("versions/agent-active.txt"), "factory\n").unwrap();
+        std::fs::create_dir_all(root.join("resources")).unwrap();
+        std::fs::write(root.join("resources/eaide-agent.exe"), b"r").unwrap();
+        assert_eq!(
+            resolve_agent_exe_with(root, None).unwrap(),
+            root.join("resources/eaide-agent.exe")
+        );
+    }
+
+    #[test]
+    fn dangling_active_pointer_falls_back_to_factory() {
+        // 指针指向不存在的版本目录 → 回退出厂
+        let dir = TmpDir::new("dangling");
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("versions")).unwrap();
+        std::fs::write(root.join("versions/agent-active.txt"), "9.9.9").unwrap();
+        std::fs::write(root.join("eaide-agent.exe"), b"factory").unwrap();
+        assert_eq!(
+            resolve_agent_exe_with(root, None).unwrap(),
+            root.join("eaide-agent.exe")
+        );
+    }
 }
