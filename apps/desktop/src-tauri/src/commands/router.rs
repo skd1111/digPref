@@ -172,7 +172,7 @@ pub async fn agent_read_log(lines: Option<usize>) -> CmdResult<serde_json::Value
         "path": path_str,
         "tail": last.join("\n"),
         "line_count": last.len(),
-        "hint": "若 tail 含 '[agent_manager] 未解析到 Agent' 则出厂 one-dir 布局缺失（需 resources 里有 eaide-agent.exe + _internal），EAIDE 退到了 dev 模式；versions 根与当前激活指针见 app_update_status 命令输出",
+        "hint": "若 tail 含 '[agent_manager] 未解析到 Agent' 则出厂 one-dir 布局缺失（安装根需有 eaide-agent.exe + 同级 _internal；打包期为 src-tauri/resources 经 'resources/*' 平铺），EAIDE 退到了 dev 模式；versions 根与当前激活指针见 app_update_status 命令输出",
     }))
 }
 

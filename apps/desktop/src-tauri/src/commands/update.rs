@@ -25,23 +25,35 @@ fn pkg_status(vroot: &Path, name: &str) -> Value {
         available.push("factory".into());
     }
     available.sort();
-    let resolved = if active == "factory" {
-        "factory(安装根 one-dir)".to_string()
+    let exe_name = if cfg!(target_os = "windows") {
+        "eaide-agent.exe"
     } else {
-        pkgdir.join(&active).display().to_string()
+        "eaide-agent"
+    };
+    // 对齐 spec §8：非 factory 给到可执行/资源目录路径；web 出厂态为内嵌 dist → "embedded"
+    let resolved = match (active.as_str(), name) {
+        ("factory", "web") => "embedded".to_string(),
+        ("factory", _) => "factory(安装根 one-dir)".to_string(),
+        (_, "agent") => pkgdir.join(&active).join(exe_name).display().to_string(),
+        _ => pkgdir.join(&active).display().to_string(),
     };
     json!({ "active": active, "available": available, "resolved": resolved })
 }
 
-/// 基于 exe_dir 计算更新状态（纯函数，便于单测注入临时目录）。
-pub fn update_status_at(exe_dir: &Path) -> Value {
-    let vroot = resolve_versions_root(exe_dir);
+/// 纯函数：给定 versions 根聚合状态（env 覆盖单列，便于单测注入、不受全局 env 干扰）。
+fn status_from_vroot(vroot: &Path) -> Value {
     json!({
         "shellVersion": env!("CARGO_PKG_VERSION"),
         "versionsRoot": vroot.display().to_string(),
-        "agent": pkg_status(&vroot, "agent"),
-        "web": pkg_status(&vroot, "web"),
+        "agentExeOverride": std::env::var("EAIDE_AGENT_EXE").unwrap_or_default(),
+        "agent": pkg_status(vroot, "agent"),
+        "web": pkg_status(vroot, "web"),
     })
+}
+
+/// 基于 exe_dir 计算更新状态（读 EAIDE_VERSIONS_DIR 决定 versions 根）。
+pub fn update_status_at(exe_dir: &Path) -> Value {
+    status_from_vroot(&resolve_versions_root(exe_dir))
 }
 
 #[tauri::command]
@@ -56,39 +68,62 @@ pub fn app_update_status() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    fn fresh_tmp(tag: &str) -> std::path::PathBuf {
-        static SEQ: AtomicU64 = AtomicU64::new(0);
-        let n = SEQ.fetch_add(1, Ordering::Relaxed);
-        let p = std::env::temp_dir().join(format!("eaide-update-{}-{}-{}", std::process::id(), n, tag));
-        let _ = std::fs::remove_dir_all(&p);
-        std::fs::create_dir_all(&p).unwrap();
-        p
+    /// RAII 临时目录：Drop 即清理，断言 panic 也不残留（Review 9a9a2e9 #M-3）。
+    struct Tmp(PathBuf);
+    impl Tmp {
+        fn new(tag: &str) -> Self {
+            static SEQ: AtomicU64 = AtomicU64::new(0);
+            let n = SEQ.fetch_add(1, Ordering::Relaxed);
+            let p = std::env::temp_dir().join(format!(
+                "eaide-update-{}-{}-{}",
+                std::process::id(),
+                n,
+                tag
+            ));
+            let _ = std::fs::remove_dir_all(&p);
+            std::fs::create_dir_all(&p).unwrap();
+            Self(p)
+        }
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+    impl Drop for Tmp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 
     #[test]
     fn reports_active_and_available() {
-        let root = fresh_tmp("active");
-        std::fs::create_dir_all(root.join("versions/agent/0.1.8")).unwrap();
-        std::fs::write(root.join("versions/agent-active.txt"), "0.1.8\n").unwrap();
-        let st = update_status_at(&root);
+        let t = Tmp::new("active");
+        let vroot = t.path().join("versions");
+        std::fs::create_dir_all(vroot.join("agent/0.1.8")).unwrap();
+        std::fs::write(vroot.join("agent-active.txt"), "0.1.8\n").unwrap();
+        let st = status_from_vroot(&vroot);
         assert_eq!(st["agent"]["active"].as_str(), Some("0.1.8"));
         assert!(st["agent"]["available"]
             .as_array()
             .unwrap()
             .iter()
             .any(|v| v.as_str() == Some("0.1.8")));
+        assert!(st["agent"]["resolved"]
+            .as_str()
+            .unwrap()
+            .ends_with(if cfg!(target_os = "windows") { "eaide-agent.exe" } else { "eaide-agent" }));
         assert_eq!(st["web"]["active"].as_str(), Some("factory"));
-        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(st["web"]["resolved"].as_str(), Some("embedded"));
     }
 
     #[test]
     fn missing_versions_defaults_factory() {
-        let root = fresh_tmp("empty");
-        let st = update_status_at(&root);
+        let t = Tmp::new("empty");
+        let vroot = t.path().join("versions");
+        let st = status_from_vroot(&vroot);
         assert_eq!(st["agent"]["active"].as_str(), Some("factory"));
         assert_eq!(st["web"]["active"].as_str(), Some("factory"));
-        let _ = std::fs::remove_dir_all(&root);
     }
 }
