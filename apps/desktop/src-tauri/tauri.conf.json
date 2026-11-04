@@ -45,7 +45,7 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "resources/eaide-agent/**": "./",
+      "resources/eaide-agent": "./",
       "../../../config/driver/*": "./config/driver/",
       "../../../vendor/officecli/*": "./vendor/officecli/",
       "../../../vendor/executor/*": "./vendor/executor/"

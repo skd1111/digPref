@@ -100,7 +100,7 @@ jobs:
         with: { targets: "${{ matrix.target }}" }
 
       # 端侧 Agent one-dir 解压保留 resources/eaide-agent/{exe,_internal} 嵌套结构
-      # （不平铺：Tauri resources 单星 glob 不递归目录；靠 tauri.conf 的 _internal/** 显式映射）
+      # （不平铺：tauri.conf 直接映射整目录 resources/eaide-agent → ./，走 WalkDir 保留 _internal 子树）
       - name: Fetch agent archive
         uses: actions/download-artifact@v8
         with:
