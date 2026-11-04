@@ -13,6 +13,8 @@ mod stream;
 mod audit;
 mod mcp_client;
 mod agent_manager;
+// 前端 dist 热替换 loader 纯逻辑（版本目录解析/mime）；协议接线为 spike 门控项（见模块文档）。
+mod web_loader;
 mod error;
 mod state;
 mod config;
