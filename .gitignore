@@ -89,6 +89,9 @@ release/
 dist/
 build-all.bat
 build-with-msvc.bat
+# 本机专用 cargo 网络镜像配置（不入库，避免影响 CI / 他人环境）
+.cargo/config.toml
+.cargo/config
 
 # =========================
 # Local DB / Audit logs

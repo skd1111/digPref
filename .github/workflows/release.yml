@@ -99,8 +99,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with: { targets: "${{ matrix.target }}" }
 
-      # 端侧 Agent one-dir 解压平铺进 resources 根（exe + _internal 与主程序同级，
-      # 随 tauri bundle.resources "resources/*": "./" 进 .app / NSIS；与本地 build-all 布局一致）
+      # 端侧 Agent one-dir 解压保留 resources/eaide-agent/{exe,_internal} 嵌套结构
+      # （不平铺：Tauri resources 单星 glob 不递归目录；靠 tauri.conf 的 _internal/** 显式映射）
       - name: Fetch agent archive
         uses: actions/download-artifact@v8
         with:
@@ -109,16 +109,18 @@ jobs:
       - name: Unpack agent one-dir into resources
         shell: bash
         run: |
-          mkdir -p apps/desktop/src-tauri/resources
+          mkdir -p apps/desktop/src-tauri/resources/eaide-agent
           if [ "${{ runner.os }}" = "Windows" ]; then
             powershell -Command "Expand-Archive -Path agent-in/eaide-agent.zip -DestinationPath agent-in/x -Force"
+            cp -r agent-in/x/eaide-agent/. apps/desktop/src-tauri/resources/eaide-agent/
           else
             tar -xzf agent-in/eaide-agent.tar.gz -C agent-in
+            cp -r agent-in/eaide-agent/. apps/desktop/src-tauri/resources/eaide-agent/
+            chmod +x apps/desktop/src-tauri/resources/eaide-agent/eaide-agent
           fi
-          cp -r agent-in/x/eaide-agent/. apps/desktop/src-tauri/resources/ 2>/dev/null \
-            || cp -r agent-in/eaide-agent/. apps/desktop/src-tauri/resources/
-          chmod +x apps/desktop/src-tauri/resources/eaide-agent 2>/dev/null || true
-          ls apps/desktop/src-tauri/resources/
+          test -d apps/desktop/src-tauri/resources/eaide-agent/_internal \
+            || { echo "::error::解包后缺 _internal"; exit 1; }
+          ls apps/desktop/src-tauri/resources/eaide-agent
 
       # tauri bundle.resources 通配（resources/* 与 config/driver/* 与 vendor/officecli/*）检出里可能无文件
       # 导致打包失败；Agent 已就位时 resources 不再需要占位，config/driver 仍补占位
