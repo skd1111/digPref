@@ -7,6 +7,7 @@
  *   - 资金影响（金额 + 等级提示）
  */
 import { useAuditStore, formatAmount } from '@/store/auditStore';
+import { LinkIcon, ShieldIcon, WalletIcon } from '@/components/ui/Icons';
 
 interface CompliancePanelProps {
   taskId: string;
@@ -36,8 +37,9 @@ export function CompliancePanel({ taskId }: CompliancePanelProps): JSX.Element {
       {/* 合规检查 */}
       <div className="flex-shrink-0 px-3 py-2">
         <div className="mb-2 flex items-center justify-between">
-          <h3 className="text-ui font-semibold uppercase tracking-wider" style={{ color: '#333333' }}>
-            🛡 合规检查
+          <h3 className="flex items-center gap-1 text-ui font-semibold uppercase tracking-wider" style={{ color: '#333333' }}>
+            <ShieldIcon size={13} />
+            合规检查
           </h3>
           <span
             className="rounded px-2 py-0.5 text-2xs font-bold"
@@ -72,8 +74,9 @@ export function CompliancePanel({ taskId }: CompliancePanelProps): JSX.Element {
           className="flex-shrink-0 border-t px-3 py-2"
           style={{ borderColor: '#d4d4d4' }}
         >
-          <h3 className="mb-2 text-ui font-semibold uppercase tracking-wider" style={{ color: '#333333' }}>
-            💰 资金影响
+          <h3 className="mb-2 flex items-center gap-1 text-ui font-semibold uppercase tracking-wider" style={{ color: '#333333' }}>
+            <WalletIcon size={13} />
+            资金影响
           </h3>
           <div className="flex items-baseline gap-2">
             <span
@@ -102,8 +105,9 @@ export function CompliancePanel({ taskId }: CompliancePanelProps): JSX.Element {
         className="flex-shrink-0 border-t px-3 py-2"
         style={{ borderColor: '#d4d4d4' }}
       >
-        <h3 className="mb-1 text-ui font-semibold uppercase tracking-wider" style={{ color: '#333333' }}>
-          🔗 联动
+        <h3 className="mb-1 flex items-center gap-1 text-ui font-semibold uppercase tracking-wider" style={{ color: '#333333' }}>
+          <LinkIcon size={13} />
+          联动
         </h3>
         <div className="space-y-0.5 text-2xs" style={{ color: '#616161' }}>
           {task.task_type === 'hotswap' && (

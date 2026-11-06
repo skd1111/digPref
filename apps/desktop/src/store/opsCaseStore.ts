@@ -20,6 +20,18 @@ import { ipc } from "@/ipc/invoke";
 /** 单个专家维度上的进行中动作（驱动卡片内的思考动效） */
 export type MemberBusyKind = "uploading" | "reviewing" | "asking";
 
+/** 上传文件 OCR 自动填入结果（后端 /ops/case/drafts/{id}/ocr-fill） */
+export interface DraftOcrFillResult {
+  values: Record<string, string>;
+  filled: string[];
+  /** rapidocr（图片）/ document（文档解析，PDF 无文本层自动 OCR）/ vision（本地视觉兑底） */
+  engine: string;
+  /** llm（模型抽取）/ regex（正则 + 标签键值兑底） */
+  source: string;
+  text_chars: number;
+  text_preview: string;
+}
+
 function toFile(raw: Record<string, unknown>): OpsCaseFile {
   return raw as unknown as OpsCaseFile;
 }
@@ -39,6 +51,11 @@ function toDraft(raw: Record<string, unknown>): OpsCaseDraft {
         ? (raw.values as Record<string, string>)
         : {},
   };
+}
+
+/** 系统合规审核是否发现风险点（有 → 前端弹审核报告；无 → 不弹窗） */
+function hasAuditRisk(file: OpsCaseFile): boolean {
+  return (file.risk_report?.findings?.length ?? 0) > 0;
 }
 
 /** FileReader 读文件为纯 base64（去掉 dataURL 前缀） */
@@ -63,6 +80,11 @@ interface OpsCaseStore extends OpsCaseState {
   exporting: boolean;
   /** 各专家团未读审核结果数（上传后出结果 → 页签红点提示；切到该页签时清零） */
   unreadByTeam: Record<string, number>;
+  /** 当前要弹的系统合规审核报告对应材料 id（空 = 不弹；审核出风险才自动置位） */
+  riskAuditFileId: string;
+  /** 手动回看某份材料的合规审核报告（材料行「合规风险 N」入口） */
+  showRiskAudit: (fileId: string) => void;
+  dismissRiskAudit: () => void;
 
   loadCase: (projectName: string, featureId: string) => Promise<void>;
   reset: () => void;
@@ -93,6 +115,8 @@ interface OpsCaseStore extends OpsCaseState {
   /** 交付草稿（BUGFIX #78）：保存填写值 / 提交审核 */
   saveDraft: (draftId: string, values: Record<string, string>) => Promise<void>;
   submitDraft: (draftId: string) => Promise<boolean>;
+  /** 上传文件 → OCR/解析 → 模型抽取字段值（不落库；调用方合并后 saveDraft） */
+  ocrFillDraft: (draftId: string, file: File) => Promise<DraftOcrFillResult>;
   exportCase: (
     targetPath: string,
     meta: { featureName?: string; teamName?: string; teamId?: string; checklist?: string[] },
@@ -145,6 +169,7 @@ export const useOpsCaseStore = create<OpsCaseStore>((set, get) => ({
   busyMembers: {},
   exporting: false,
   unreadByTeam: {},
+  riskAuditFileId: "",
   lastDirectDraftId: "",
   lastNewDraftId: "",
 
@@ -170,6 +195,8 @@ export const useOpsCaseStore = create<OpsCaseStore>((set, get) => ({
           loading: false,
           // 初次加载的历史结果不算未读（避免一进页面满屏红点）
           unreadByTeam: {},
+          // 历史材料的风险报告也不自动弹窗（用户可点行内「合规风险 N」回看）
+          riskAuditFileId: "",
           // 历史草稿不触发自动展开；也清掉上个业务残留的直开标记（BUGFIX #134）
           lastDirectDraftId: "",
           lastNewDraftId: "",
@@ -197,9 +224,14 @@ export const useOpsCaseStore = create<OpsCaseStore>((set, get) => ({
       busyMembers: {},
       error: null,
       unreadByTeam: {},
+      riskAuditFileId: "",
       lastDirectDraftId: "",
       lastNewDraftId: "",
     }),
+
+  showRiskAudit: (fileId) => set({ riskAuditFileId: fileId }),
+
+  dismissRiskAudit: () => set({ riskAuditFileId: "" }),
 
   clearCase: async (projectName, featureId) => {
     try {
@@ -270,6 +302,8 @@ export const useOpsCaseStore = create<OpsCaseStore>((set, get) => ({
               [updated.team_id]: (s.unreadByTeam[updated.team_id] ?? 0) + 1,
             }
           : s.unreadByTeam,
+        // 系统合规审核发现风险点 → 自动弹审核报告（无风险保持不弹）
+        riskAuditFileId: hasAuditRisk(updated) ? updated.id : s.riskAuditFileId,
       }));
     } catch (e) {
       // 审核失败 → 回退 pending 并提示（后端已写 review_note）
@@ -304,7 +338,10 @@ export const useOpsCaseStore = create<OpsCaseStore>((set, get) => ({
   deleteFile: async (fileId) => {
     try {
       await ipc.opsCaseFileDelete(fileId);
-      set((s) => ({ files: s.files.filter((f) => f.id !== fileId) }));
+      set((s) => ({
+        files: s.files.filter((f) => f.id !== fileId),
+        riskAuditFileId: s.riskAuditFileId === fileId ? "" : s.riskAuditFileId,
+      }));
     } catch (e) {
       set({ error: errMsg(e) });
     }
@@ -378,12 +415,17 @@ export const useOpsCaseStore = create<OpsCaseStore>((set, get) => ({
     set(setBusy(target.member_key, "reviewing"));
     try {
       const r = await ipc.opsCaseDraftSubmit(draftId);
+      const submittedFile = toFile(r.file);
       set((s) => ({
         drafts: s.drafts.map((d) => (d.id === draftId ? toDraft(r.draft) : d)),
         // 草稿提交后成为材料：同步/追加文件行，审核意见在专家卡里看
-        files: s.files.some((f) => f.id === toFile(r.file).id)
-          ? s.files.map((f) => (f.id === toFile(r.file).id ? toFile(r.file) : f))
-          : [...s.files, toFile(r.file)],
+        files: s.files.some((f) => f.id === submittedFile.id)
+          ? s.files.map((f) => (f.id === submittedFile.id ? submittedFile : f))
+          : [...s.files, submittedFile],
+        // 填写资料提交同样先过系统合规审核：有风险点 → 弹审核报告
+        riskAuditFileId: hasAuditRisk(submittedFile)
+          ? submittedFile.id
+          : s.riskAuditFileId,
       }));
       return true;
     } catch (e) {
@@ -391,6 +433,19 @@ export const useOpsCaseStore = create<OpsCaseStore>((set, get) => ({
       return false;
     } finally {
       set(setBusy(target.member_key, undefined));
+    }
+  },
+
+  ocrFillDraft: async (draftId, file) => {
+    const content = await readFileAsBase64(file);
+    try {
+      return await ipc.opsCaseDraftOcrFill(draftId, {
+        file_name: file.name,
+        content_base64: content,
+      });
+    } catch (e) {
+      set({ error: errMsg(e) });
+      throw e;
     }
   },
 

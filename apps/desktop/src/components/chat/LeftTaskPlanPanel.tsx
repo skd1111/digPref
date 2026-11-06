@@ -9,6 +9,7 @@
  */
 import { useChatStore } from '@/store/chatStore';
 import { TodoCard } from '@/components/chat/TodoCard';
+import { ClipboardIcon } from '@/components/ui/Icons';
 
 export function LeftTaskPlanPanel(): JSX.Element {
   // selector 返回字符串（稳定引用），避免每次渲染产生新对象触发重渲染
@@ -28,8 +29,8 @@ export function LeftTaskPlanPanel(): JSX.Element {
         className="flex h-full flex-col items-center justify-center p-6 text-center"
         style={{ color: '#6e6e6e' }}
       >
-        <div className="mb-2 text-2xl" aria-hidden="true">
-          📋
+        <div className="mb-2 flex items-center text-2xl" aria-hidden="true">
+          <ClipboardIcon size={26} />
         </div>
         <div className="mb-1 text-ui font-semibold" style={{ color: '#333333' }}>
           暂无任务计划

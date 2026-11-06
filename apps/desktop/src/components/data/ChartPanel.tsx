@@ -20,6 +20,7 @@ import {
 import { CanvasRenderer } from 'echarts/renderers';
 import { useDataStore, cellFor, type ChartType, type QueryResult } from '@/store/dataStore';
 import { PanelHeader } from './DataGrid';
+import { LineChartIcon, MaximizeIcon } from '@/components/ui/Icons';
 
 // 注册 ECharts 组件（按需引入，减小 bundle）
 echarts.use([
@@ -67,7 +68,13 @@ export function ChartPanel({
   return (
     <div className="flex h-full flex-col overflow-hidden" style={{ backgroundColor: '#ffffff' }}>
       <PanelHeader
-        title="📈 可视化图表"
+        title={
+          <span className="flex items-center gap-1">
+            <LineChartIcon size={12} />
+            可视化图表
+          </span>
+        }
+        testId="panel-chart"
         right={
           <div className="flex items-center gap-1">
             {CHART_TABS.map((c) => {
@@ -77,10 +84,8 @@ export function ChartPanel({
                   key={c.id}
                   type="button"
                   onClick={() => setChartType(c.id)}
-                  className="rounded px-2 py-0.5 text-2xs transition-all"
+                  className={`btn btn-xs ${active ? 'btn-success' : 'btn-ghost'}`}
                   style={{
-                    color: active ? '#1e1e1e' : '#6e6e6e',
-                    backgroundColor: active ? '#059669' : 'transparent',
                     border: c.id === recommended && !active ? '1px solid #4ec9b0' : '1px solid transparent',
                   }}
                   title={c.id === recommended ? 'AI 推荐' : undefined}
@@ -94,11 +99,11 @@ export function ChartPanel({
               <button
                 type="button"
                 onClick={onZoom}
-                className="rounded px-1.5 text-2xs transition-all hover:brightness-95"
-                style={{ backgroundColor: '#ececec', color: '#333333' }}
+                className="btn btn-ghost btn-icon"
                 title={zoomed ? '退出放大' : '放大查看'}
+                aria-label={zoomed ? '退出放大' : '放大查看'}
               >
-                ⛶
+                <MaximizeIcon size={13} />
               </button>
             ) : null}
           </div>

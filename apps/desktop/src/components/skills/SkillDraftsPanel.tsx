@@ -10,6 +10,7 @@ import { listen } from '@tauri-apps/api/event';
 import { ipc } from '@/ipc/invoke';
 import { EVT } from '@/ipc/events';
 import { useSkillsStore } from '@/store/skillsStore';
+import { SproutIcon } from '@/components/ui/Icons';
 
 type SkillDraft = {
   id: number;
@@ -106,8 +107,9 @@ export function SkillDraftsPanel(): JSX.Element {
             >
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0 flex-1">
-                  <div className="text-ui font-semibold" style={{ color: '#1f1f1f' }}>
-                    🌱 {d.name}
+                  <div className="flex items-center gap-1 text-ui font-semibold" style={{ color: '#1f1f1f' }}>
+                    <SproutIcon size={13} />
+                    {d.name}
                     <span className="ml-2 font-mono text-2xs" style={{ color: '#9ca3af' }}>
                       {d.slug}
                     </span>
@@ -120,8 +122,7 @@ export function SkillDraftsPanel(): JSX.Element {
                   <button
                     type="button"
                     onClick={() => setExpandedId(expandedId === d.id ? null : d.id)}
-                    className="rounded border px-2 py-0.5 text-[11px] transition-colors hover:bg-[#f5f5f4]"
-                    style={{ borderColor: '#d4d4d4', color: '#1f1f1f', backgroundColor: '#ffffff' }}
+                    className="btn btn-secondary btn-xs"
                   >
                     {expandedId === d.id ? '收起' : '查看'}
                   </button>
@@ -132,16 +133,14 @@ export function SkillDraftsPanel(): JSX.Element {
                         void approve(d.id);
                       }
                     }}
-                    className="rounded px-2 py-0.5 text-[11px] font-semibold"
-                    style={{ backgroundColor: '#0e639c', color: '#ffffff' }}
+                    className="btn btn-primary btn-xs"
                   >
                     采纳
                   </button>
                   <button
                     type="button"
                     onClick={() => void reject(d.id)}
-                    className="rounded border px-2 py-0.5 text-[11px] transition-colors hover:bg-[#fef2f2]"
-                    style={{ borderColor: '#fca5a5', color: '#dc2626', backgroundColor: '#ffffff' }}
+                    className="btn btn-danger btn-xs"
                   >
                     拒绝
                   </button>

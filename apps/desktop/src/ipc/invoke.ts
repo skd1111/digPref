@@ -646,6 +646,21 @@ export const ipc = {
       q: params?.q ?? "",
       category: params?.category ?? "",
     }),
+  /** 导入前分类预判（只读，不写库）：对每个待导入文件用 LLM 判定分类；
+   *  enabled=false 时 reason 说明未开启原因（需开「大模型知识库验证」+「LLM 自动分类」） */
+  kbClassifyPreview: (paths: string[]) =>
+    invoke<{
+      enabled: boolean;
+      reason?: string;
+      items: Array<{
+        path: string;
+        category: string;
+        label: string;
+        error?: string;
+        /** llm=模型判定；heuristic=文件名启发式兜底 */
+        source?: string;
+      }>;
+    }>("knowledge", { _op: "kb_classify_preview", paths }),
   /** 列出某资料所属逻辑组的全部版本（version 倒序）+ 当前生效版本 */
   kbVersions: (doc_id: string) =>
     invoke<KbListVersionsResponse>("knowledge", { _op: "kb_versions", doc_id }),
@@ -1089,6 +1104,10 @@ export const ipc = {
   expertTeamsExportAll: () =>
     invoke<{ teams: Record<string, string> }>("expert_teams_export_all"),
 
+  /** 专家团：一键导入内置种子（已存在同名团跳过；设置页兜底）。 */
+  expertTeamsImportSeeds: () =>
+    invoke<{ ok: boolean; imported: string[]; count: number }>("expert_teams_import_seeds"),
+
   /** 专家团：业务 → 专家团推荐（预设→LLM 三级降级→关键词，永不报错）。 */
   expertTeamsRecommend: (body: Record<string, unknown>) =>
     invoke<{
@@ -1144,9 +1163,16 @@ export const ipc = {
       error?: string;
     }>("agent_get_version"),
 
-  /** 手动重启 Agent：杀掉 :8765 占用者 + 等下次 spawn。 */
+  /** 手动重启 Agent：杀掉旧进程 + 立即 spawn 新进程 + 等 /health 就绪。 */
   agentRestartNow: () =>
-    invoke<{ ok: boolean; port_freed?: boolean }>("agent_restart_now"),
+    invoke<{
+      ok: boolean;
+      restarted?: boolean;
+      port_freed?: boolean;
+      port_up?: boolean;
+      ready?: boolean;
+      health?: { ready?: boolean; error?: string; elapsed_ms?: number };
+    }>("agent_restart_now"),
 
   /** 读 eaide.log 末尾 60 行（最后一次诊断）。 */
   agentReadLog: (lines?: number) =>
@@ -1579,6 +1605,20 @@ export const ipc = {
       "ops_case_draft_submit",
       { draftId },
     ),
+
+  /** 交付草稿：上传文件 → 本地 OCR/解析 → 模型抽取字段值（自动填入表单）。 */
+  opsCaseDraftOcrFill: (
+    draftId: string,
+    body: { file_name: string; content_base64: string },
+  ) =>
+    invoke<{
+      values: Record<string, string>;
+      filled: string[];
+      engine: string;
+      source: string;
+      text_chars: number;
+      text_preview: string;
+    }>("ops_case_draft_ocr_fill", { draftId, body }),
 
   opsCaseExport: (body: {
     case_id: string;

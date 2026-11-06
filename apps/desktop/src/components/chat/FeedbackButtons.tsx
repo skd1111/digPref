@@ -10,6 +10,7 @@
  */
 import { useState } from 'react';
 import { ipc } from '@/ipc/invoke';
+import { ThumbsDownIcon, ThumbsUpIcon } from '@/components/ui/Icons';
 
 interface Props {
   /** 消息 id（归因到具体回复） */
@@ -62,10 +63,9 @@ export function FeedbackButtons({ messageId, sessionId }: Props): JSX.Element {
         aria-label="回答有帮助"
         disabled={sending}
         onClick={() => void submit('up', '')}
-        className="rounded border px-1.5 py-0.5 text-[11px] transition-colors hover:bg-[#f5f5f4] disabled:opacity-40"
-        style={{ borderColor: '#e7e5e4', backgroundColor: '#ffffff' }}
+        className="btn btn-secondary btn-xs"
       >
-        👍
+        <ThumbsUpIcon size={13} />
       </button>
       <button
         type="button"
@@ -73,13 +73,10 @@ export function FeedbackButtons({ messageId, sessionId }: Props): JSX.Element {
         aria-label="回答有问题"
         disabled={sending}
         onClick={() => setShowCorrection((v) => !v)}
-        className="rounded border px-1.5 py-0.5 text-[11px] transition-colors hover:bg-[#f5f5f4] disabled:opacity-40"
-        style={{
-          borderColor: showCorrection ? '#f59e0b' : '#e7e5e4',
-          backgroundColor: '#ffffff',
-        }}
+        className="btn btn-secondary btn-xs"
+        style={{ borderColor: showCorrection ? '#f59e0b' : undefined }}
       >
-        👎
+        <ThumbsDownIcon size={13} />
       </button>
       {showCorrection && (
         <span className="flex items-center gap-1">
@@ -97,8 +94,7 @@ export function FeedbackButtons({ messageId, sessionId }: Props): JSX.Element {
             type="button"
             disabled={sending}
             onClick={() => void submit('down', correction)}
-            className="rounded border px-1.5 py-0.5 text-[11px] transition-colors hover:bg-[#f5f5f4] disabled:opacity-40"
-            style={{ borderColor: '#e7e5e4', backgroundColor: '#ffffff' }}
+            className="btn btn-primary btn-xs"
           >
             提交
           </button>

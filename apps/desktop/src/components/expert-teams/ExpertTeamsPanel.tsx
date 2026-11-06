@@ -10,6 +10,14 @@ import { useEffect, useMemo, useState } from 'react';
 import { useExpertTeamStore } from '@/store/expertTeamStore';
 import { ipc } from '@/ipc/invoke';
 import type { ExpertMember, ExpertTeam } from '@/types/expertTeam';
+import {
+  CloseIcon,
+  DownloadIcon,
+  PackageIcon,
+  PencilIcon,
+  PlusIcon,
+  UsersIcon,
+} from '@/components/ui/Icons';
 
 function blankMember(): ExpertMember {
   return { name: '', role: '', responsibilities: [], focus_points: [], outputs: [], prompt: '' };
@@ -36,7 +44,9 @@ export function ExpertTeamsPanel(): JSX.Element {
   const toggleEnabled = useExpertTeamStore((s) => s.toggleEnabled);
   const openEditor = useExpertTeamStore((s) => s.openEditor);
   const openImportDialog = useExpertTeamStore((s) => s.openImportDialog);
+  const importBuiltinSeeds = useExpertTeamStore((s) => s.importBuiltinSeeds);
   const [search, setSearch] = useState('');
+  const [seeding, setSeeding] = useState(false);
 
   useEffect(() => {
     void loadTeams();
@@ -78,11 +88,27 @@ export function ExpertTeamsPanel(): JSX.Element {
     }
   };
 
+  const handleImportSeeds = async (): Promise<void> => {
+    setSeeding(true);
+    const res = await importBuiltinSeeds();
+    setSeeding(false);
+    if (!res.ok) {
+      window.alert(`内置专家团导入失败：${res.error ?? '未知错误'}`);
+      return;
+    }
+    window.alert(
+      res.imported > 0
+        ? `已导入 ${res.imported} 个内置专家团，可在运营工作台按业务直接使用。`
+        : '内置专家团均已存在（或已删除），无需重复导入。',
+    );
+  };
+
   return (
     <div className="flex h-full flex-col" style={{ backgroundColor: '#ffffff' }}>
       <div className="flex-shrink-0 border-b px-4 py-3" style={{ borderColor: '#d4d4d4' }}>
-        <h2 className="mb-2 text-ui font-semibold" style={{ color: '#1f1f1f' }}>
-          👥 专家团（系统重要资产）
+        <h2 className="mb-2 flex items-center gap-1 text-ui font-semibold" style={{ color: '#1f1f1f' }}>
+          <UsersIcon size={14} />
+          专家团（系统重要资产）
         </h2>
         <div className="flex items-center gap-2">
           <input
@@ -96,31 +122,49 @@ export function ExpertTeamsPanel(): JSX.Element {
           <button
             type="button"
             onClick={handleNew}
-            className="rounded px-2 py-1 text-2xs"
-            style={{ backgroundColor: '#0e639c', color: '#ffffff' }}
+            className="btn btn-primary btn-sm"
           >
-            + 新建
+            <span className="flex items-center gap-1">
+              <PlusIcon size={12} />
+              新建
+            </span>
           </button>
           <button
             type="button"
             onClick={openImportDialog}
-            className="rounded px-2 py-1 text-2xs"
-            style={{ backgroundColor: '#ececec', color: '#1f1f1f' }}
+            className="btn btn-secondary btn-sm"
           >
-            📥 导入资产包
+            <span className="flex items-center gap-1">
+              <DownloadIcon size={12} />
+              导入资产包
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleImportSeeds()}
+            disabled={seeding}
+            className="btn btn-secondary btn-sm"
+            title="导入随包分发的运营各业务模块专家团（已存在同名团跳过）"
+          >
+            <span className="flex items-center gap-1">
+              <UsersIcon size={12} />
+              {seeding ? '导入中…' : '导入内置专家团'}
+            </span>
           </button>
         </div>
         <div className="mt-1.5 text-[10px]" style={{ color: '#9ca3af' }}>
           专家团是系统重要资产，以资产包（zip = 提示词 team.yaml + 交付物文档模板 templates/）形式导入/导出；
           运营工作台点击业务时按 Skill 预设 / AI 分析自动选择并注入上下文。
+          首批内置专家团随包分发（首次启动自动播种，不覆盖同名团；删除后可用「导入内置专家团」恢复）。
         </div>
       </div>
 
       <div className="flex-1 overflow-auto p-3">
         {filtered.length === 0 ? (
           <div className="py-10 text-center text-2xs" style={{ color: '#616161' }}>
-            暂无专家团。点「+ 新建」创建，或「📥 导入资产包」导入种子包
-            （docs/expert-team-seeds/due-diligence-team.zip）。
+            暂无专家团。点「新建」创建，或「导入内置专家团」恢复随包种子
+            （覆盖业务办理、资料预审、智能填单、授权复核、风险预警、反洗钱、
+            对公账户、贷后、营销、客服、差错整改、知识培训等业务）。
           </div>
         ) : (
           <div className="space-y-2">
@@ -151,27 +195,30 @@ export function ExpertTeamsPanel(): JSX.Element {
                   <button
                     type="button"
                     onClick={() => openEditor(t.id)}
-                    className="rounded border px-2 py-0.5 text-2xs"
-                    style={{ borderColor: '#007acc', color: '#0451a5', backgroundColor: '#ffffff' }}
+                    className="btn btn-secondary btn-xs"
                   >
-                    ✏️ 编辑
+                    <span className="flex items-center gap-1">
+                      <PencilIcon size={12} />
+                      编辑
+                    </span>
                   </button>
                   <button
                     type="button"
                     onClick={() => void handleExportPackage(t.id)}
-                    className="rounded border px-2 py-0.5 text-2xs"
-                    style={{ borderColor: '#d4d4d4', color: '#616161', backgroundColor: '#ffffff' }}
+                    className="btn btn-secondary btn-xs"
                     title="导出资产包 zip（提示词 + 交付物模板）"
                   >
-                    📦 资产包
+                    <span className="flex items-center gap-1">
+                      <PackageIcon size={12} />
+                      资产包
+                    </span>
                   </button>
                   <button
                     type="button"
                     onClick={() => {
                       if (window.confirm(`确认删除专家团「${t.name}」？`)) deleteTeam(t.id);
                     }}
-                    className="rounded border px-2 py-0.5 text-2xs"
-                    style={{ borderColor: '#f48771', color: '#cd3131', backgroundColor: '#ffffff' }}
+                    className="btn btn-danger btn-xs"
                   >
                     删除
                   </button>
@@ -311,16 +358,17 @@ function ExpertTeamEditorModal(): JSX.Element | null {
           className="flex items-center justify-between border-b px-4 py-2"
           style={{ borderColor: '#d4d4d4', backgroundColor: '#f3f3f3' }}
         >
-          <span className="text-ui font-semibold" style={{ color: '#1f1f1f' }}>
-            👥 编辑专家团{dirty ? ' · 有未保存修改' : ''}
+          <span className="flex items-center gap-1 text-ui font-semibold" style={{ color: '#1f1f1f' }}>
+            <UsersIcon size={14} />
+            编辑专家团{dirty ? ' · 有未保存修改' : ''}
           </span>
           <button
             type="button"
             onClick={closeEditor}
-            className="rounded px-2 py-0.5 text-2xs hover:bg-vscode-border"
-            style={{ color: '#616161' }}
+            className="btn btn-ghost btn-icon"
+            aria-label="关闭"
           >
-            ✕
+            <CloseIcon size={13} />
           </button>
         </div>
 
@@ -387,8 +435,7 @@ function ExpertTeamEditorModal(): JSX.Element | null {
             <button
               type="button"
               onClick={() => setField('members', [...draft.members, blankMember()])}
-              className="ml-auto rounded px-2 py-0.5 text-2xs"
-              style={{ backgroundColor: '#0e639c20', color: '#0451a5', border: '1px dashed #0e639c' }}
+              className="ml-auto btn btn-secondary btn-xs"
             >
               + 增加专家
             </button>
@@ -414,11 +461,10 @@ function ExpertTeamEditorModal(): JSX.Element | null {
                   <button
                     type="button"
                     onClick={() => setField('members', draft.members.filter((_, idx) => idx !== i))}
-                    className="rounded px-1.5 text-2xs"
-                    style={{ color: '#cd3131' }}
+                    className="btn btn-danger btn-xs"
                     title="移除该专家"
                   >
-                    ✕
+                    <CloseIcon size={12} />
                   </button>
                 </div>
                 <div className="grid grid-cols-3 gap-1.5">
@@ -455,8 +501,7 @@ function ExpertTeamEditorModal(): JSX.Element | null {
           <button
             type="button"
             onClick={closeEditor}
-            className="rounded px-3 py-1 text-2xs"
-            style={{ backgroundColor: '#e0e0e0', color: '#1f1f1f' }}
+            className="btn btn-secondary btn-md"
           >
             取消
           </button>
@@ -464,8 +509,7 @@ function ExpertTeamEditorModal(): JSX.Element | null {
             type="button"
             onClick={handleSave}
             disabled={!dirty && !isNew}
-            className="rounded px-3 py-1 text-2xs font-semibold"
-            style={{ backgroundColor: '#0e639c', color: '#ffffff', opacity: dirty || isNew ? 1 : 0.5 }}
+            className="btn btn-primary btn-md"
           >
             保存
           </button>
@@ -537,8 +581,9 @@ function ExpertTeamImportDialog(): JSX.Element | null {
         style={{ backgroundColor: '#ffffff', minWidth: 520, maxWidth: 760 }}
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 className="mb-2 text-ui font-semibold" style={{ color: '#1f1f1f' }}>
-          📥 导入专家团资产包
+        <h3 className="mb-2 flex items-center gap-1 text-ui font-semibold" style={{ color: '#1f1f1f' }}>
+          <DownloadIcon size={14} />
+          导入专家团资产包
         </h3>
         <p className="mb-2 text-2xs" style={{ color: '#616161' }}>
           资产包为 zip：根目录 team.yaml（提示词）+ templates/（交付物文档模板）。
@@ -571,8 +616,7 @@ function ExpertTeamImportDialog(): JSX.Element | null {
           <button
             type="button"
             onClick={close}
-            className="rounded px-3 py-1 text-2xs"
-            style={{ backgroundColor: '#e0e0e0', color: '#1f1f1f' }}
+            className="btn btn-secondary btn-md"
           >
             取消
           </button>
@@ -580,8 +624,7 @@ function ExpertTeamImportDialog(): JSX.Element | null {
             type="button"
             onClick={() => void handleConfirm()}
             disabled={busy || !content.trim()}
-            className="rounded px-3 py-1 text-2xs font-semibold"
-            style={{ backgroundColor: '#0e639c', color: '#ffffff', opacity: busy || !content.trim() ? 0.5 : 1 }}
+            className="btn btn-primary btn-md"
           >
             {busy ? '导入中…' : '导入 YAML 文本'}
           </button>

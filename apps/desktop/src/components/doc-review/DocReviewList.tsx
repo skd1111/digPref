@@ -4,6 +4,7 @@ import {
   useDocReviewStore,
   DOC_REVIEW_RISK_COLORS,
 } from "@/store/docReviewStore";
+import { CloseIcon, PlayIcon, RefreshIcon } from "@/components/ui/Icons";
 
 /** 后端运行状态 → 中文展示 */
 const STATUS_LABELS: Record<string, string> = {
@@ -105,10 +106,10 @@ export function DocReviewList(): JSX.Element {
                     className="rounded px-1 leading-none opacity-0 transition-opacity group-hover:opacity-100"
                     style={{
                       color: selected ? "#ffb3b3" : "#cd3131",
-                      fontSize: 13,
                     }}
+                    aria-label="删除该文档及分析记录"
                   >
-                    ✕
+                    <CloseIcon size={13} />
                   </button>
                 </span>
               </div>
@@ -150,7 +151,17 @@ export function DocReviewList(): JSX.Element {
                       cursor: "pointer",
                     }}
                   >
-                    {d.status === "done" ? "↻ 重新分析" : "▶ 分析"}
+                    {d.status === "done" ? (
+                      <span className="flex items-center gap-1">
+                        <RefreshIcon size={12} />
+                        重新分析
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1">
+                        <PlayIcon size={12} />
+                        分析
+                      </span>
+                    )}
                   </button>
                 )}
               </div>

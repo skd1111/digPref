@@ -12,6 +12,7 @@ import { ipc } from '@/ipc/invoke';
 import { baseName } from './fileRef';
 import { FileDiffTooltip } from './FileDiffTooltip';
 import { FullDiffModal } from './FullDiffModal';
+import { FileIcon } from '@/components/ui/Icons';
 
 /** hover 防抖延迟（架构师忠告 4：200ms） */
 const HOVER_DEBOUNCE_MS = 200;
@@ -117,7 +118,9 @@ export function FileReferenceBadge({
         }}
         title={op.path}
       >
-        <span style={{ color }}>📄</span>
+        <span className="flex items-center" style={{ color }} aria-hidden="true">
+          <FileIcon size={12} />
+        </span>
         <span className="font-semibold" style={{ color }}>
           {OP_LABEL[op.type] ?? op.type}
         </span>

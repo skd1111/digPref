@@ -8,6 +8,7 @@ import { useEffect } from 'react';
 import Editor from '@monaco-editor/react';
 import type { FileOperation } from '@eaide/shared-protocol';
 import { baseName } from './fileRef';
+import { CloseIcon, FileIcon } from '@/components/ui/Icons';
 
 const OP_LABEL: Record<string, string> = {
   read: '读取',
@@ -54,7 +55,10 @@ export function FullDiffModal({
           style={{ borderColor: '#e0e0e0', backgroundColor: '#f3f3f3' }}
         >
           <div className="flex items-center gap-2 text-ui font-semibold" style={{ color: '#1f1f1f' }}>
-            <span>📄 {baseName(op.path)}</span>
+            <span className="flex items-center gap-1">
+              <FileIcon size={14} />
+              {baseName(op.path)}
+            </span>
             <span
               className="rounded px-1.5 py-0.5 text-2xs"
               style={{ backgroundColor: '#e0e0e0', color: '#333333' }}
@@ -73,8 +77,9 @@ export function FullDiffModal({
             className="rounded px-2 py-0.5 text-ui"
             style={{ color: '#616161', cursor: 'pointer' }}
             title="关闭（Esc）"
+            aria-label="关闭"
           >
-            ✕
+            <CloseIcon size={13} />
           </button>
         </header>
 

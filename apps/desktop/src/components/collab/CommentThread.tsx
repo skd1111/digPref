@@ -13,6 +13,7 @@ import { MarkdownRenderer } from './MarkdownRenderer';
 import { ReactionPicker } from './ReactionPicker';
 import { CommentEditor } from './CommentEditor';
 import { CURRENT_USER, USER_BY_ID, type CollabComment, type ReactionEmoji } from '@/types/collab';
+import { PencilIcon, MessageIcon, ReplyIcon } from '@/components/ui/Icons';
 
 const MAX_DEPTH = 3;
 const ENCRYPTED_PLACEHOLDER_RE = /^\[encrypted:[^\]]+\]$/;
@@ -95,10 +96,11 @@ function CommentBlock({
                         setEditing(true);
                         setMenuOpen(false);
                       }}
-                      className="block w-full px-3 py-1.5 text-left transition-colors hover:bg-gray-100"
+                      className="flex w-full items-center gap-1 px-3 py-1.5 text-left transition-colors hover:bg-gray-100"
                       style={{ color: '#1f1f1f' }}
                     >
-                      ✏ 编辑
+                      <PencilIcon size={12} />
+                      编辑
                     </button>
                   )}
                   {comment.can_withdraw && (
@@ -110,10 +112,11 @@ function CommentBlock({
                         }
                         setMenuOpen(false);
                       }}
-                      className="block w-full px-3 py-1.5 text-left transition-colors hover:bg-gray-100"
+                      className="flex w-full items-center gap-1 px-3 py-1.5 text-left transition-colors hover:bg-gray-100"
                       style={{ color: '#cd3131' }}
                     >
-                      ↩ 撤回
+                      <ReplyIcon size={12} />
+                      撤回
                     </button>
                   )}
                   {(!comment.can_edit && !comment.can_withdraw) && (
@@ -165,7 +168,14 @@ function CommentBlock({
               className="text-2xs transition-colors"
               style={{ color: '#616161' }}
             >
-              {replying ? '取消回复' : '↩ 回复'}
+              {replying ? (
+                '取消回复'
+              ) : (
+                <span className="flex items-center gap-1">
+                  <ReplyIcon size={12} />
+                  回复
+                </span>
+              )}
             </button>
           </div>
         )}
@@ -223,10 +233,13 @@ export function CommentThread({ contextId }: CommentThreadProps): JSX.Element {
   if (mainComments.length === 0) {
     return (
       <div
-        className="flex items-center justify-center p-6 text-2xs"
+        className="flex flex-col items-center justify-center gap-1 p-6 text-2xs"
         style={{ color: '#616161' }}
       >
-        还没有评论，发表第一条吧 👇
+        <span className="flex items-center" aria-hidden="true">
+          <MessageIcon size={26} />
+        </span>
+        还没有评论，发表第一条吧
       </div>
     );
   }

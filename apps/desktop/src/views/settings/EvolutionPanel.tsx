@@ -195,16 +195,14 @@ export function EvolutionPanel(): JSX.Element {
                   <button
                     type="button"
                     onClick={() => void toggle(exp.id)}
-                    className="rounded border px-2 py-0.5 text-[11px] transition-colors hover:bg-[#f5f5f4]"
-                    style={{ borderColor: '#d4d4d4', color: '#1f1f1f', backgroundColor: '#ffffff' }}
+                    className="btn btn-secondary btn-sm"
                   >
                     {exp.status === 'active' ? '停用' : '启用'}
                   </button>
                   <button
                     type="button"
                     onClick={() => void remove(exp.id)}
-                    className="rounded border px-2 py-0.5 text-[11px] transition-colors hover:bg-[#fef2f2]"
-                    style={{ borderColor: '#fca5a5', color: '#dc2626', backgroundColor: '#ffffff' }}
+                    className="btn btn-danger btn-sm"
                   >
                     删除
                   </button>

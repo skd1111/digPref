@@ -21,6 +21,13 @@ import { useChatStore } from '@/store/chatStore';
 import { useReqcardStore } from '@/store/reqcardStore';
 import type { FeatureContextPayload } from '@/types/biznav';
 import {
+  ComponentIcon,
+  FolderIcon,
+  PencilIcon,
+  RefreshIcon,
+  WarningIcon,
+} from '@/components/ui/Icons';
+import {
   useBiznavStore,
   selectFeaturesByCategory,
   selectStats,
@@ -163,22 +170,29 @@ export function BusinessFeatureTree(): JSX.Element {
         className="flex h-full flex-col items-center justify-center p-6 text-center text-2xs"
         style={{ color: '#616161', backgroundColor: '#f3f3f3' }}
       >
-        <div className="mb-2 text-3xl">🧩</div>
+        <div className="mb-2 flex items-center justify-center text-3xl" aria-hidden="true">
+          <ComponentIcon size={40} />
+        </div>
         <div>暂无业务功能点</div>
         <div className="mt-1">导入工程后由 AI 自动提炼，或导入 YAML</div>
         {extractError && (
-          <div className="mt-2 max-w-[220px] break-all" style={{ color: '#cd3131' }}>
-            ⚠ {extractError}
+          <div className="mt-2 flex max-w-[220px] items-start gap-1 break-all" style={{ color: '#cd3131' }}>
+            <span className="mt-0.5 flex-shrink-0" aria-hidden="true">
+              <WarningIcon size={12} />
+            </span>
+            <span>{extractError}</span>
           </div>
         )}
         <button
           type="button"
           onClick={() => void handleImportProject()}
-          className="mt-4 rounded px-3 py-1.5 text-ui font-semibold transition-colors hover:brightness-110"
-          style={{ backgroundColor: '#0e639c', color: '#ffffff' }}
+          className="mt-4 btn btn-primary btn-sm"
           title="选择工程文件夹，AI 自动提炼业务功能点"
         >
-          📁 导入工程提炼功能点
+          <span className="flex items-center gap-1">
+            <FolderIcon size={13} />
+            导入工程提炼功能点
+          </span>
         </button>
       </div>
     );
@@ -221,10 +235,11 @@ export function BusinessFeatureTree(): JSX.Element {
       >
         <div className="mb-2 flex items-center justify-between">
           <h3
-            className="text-ui font-semibold uppercase tracking-wider"
+            className="flex items-center gap-1 text-ui font-semibold uppercase tracking-wider"
             style={{ color: '#333333' }}
           >
-            🧩 业务功能点
+            <ComponentIcon size={13} />
+            业务功能点
           </h3>
           <div className="flex items-center gap-1">
             {activeEnv && (
@@ -246,7 +261,7 @@ export function BusinessFeatureTree(): JSX.Element {
               }}
               title="导入工程，AI 提炼业务功能点"
             >
-              📁
+              <FolderIcon size={13} />
             </button>
             {/* reqflow V1：勾选功能点后发起改造需求 */}
             <button
@@ -261,10 +276,13 @@ export function BusinessFeatureTree(): JSX.Element {
               title={
                 selectedForReq.size > 0
                   ? `对已勾选的 ${selectedForReq.size} 个功能点发起改造需求`
-                  : '先勾选功能点（列表左侧 ☐），再发起改造需求'
+                  : '先勾选功能点（列表左侧方框），再发起改造需求'
               }
             >
-              📝{selectedForReq.size > 0 ? ` ${selectedForReq.size}` : ''}
+              <span className="flex items-center gap-1">
+                <PencilIcon size={13} />
+                {selectedForReq.size > 0 ? selectedForReq.size : ''}
+              </span>
             </button>
             <button
               type="button"
@@ -273,7 +291,7 @@ export function BusinessFeatureTree(): JSX.Element {
               style={{ color: '#0451a5' }}
               title="重建索引"
             >
-              ↻
+              <RefreshIcon size={13} />
             </button>
             <button
               type="button"
@@ -286,7 +304,7 @@ export function BusinessFeatureTree(): JSX.Element {
               }}
               title={selectedFeatureId ? '编辑当前选中功能点' : '请先选中一个功能点'}
             >
-              ✏️
+              <PencilIcon size={13} />
             </button>
           </div>
         </div>

@@ -5,8 +5,13 @@ from __future__ import annotations
 import sqlite3
 import time
 from pathlib import Path
+from typing import Any
 
 from .models import DictItem
+
+# 类内定义了 `list` 方法，类作用域里的 `list[...]` 注解会解析到该方法；
+# 用模块级别名引用内置 list，兼顾 mypy 与 ruff UP006。
+_List = list
 
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
@@ -20,7 +25,7 @@ def _read_schema_sql() -> str:
 
 
 # 首次建库时的种子公共参数（银行运营高频公共参数示例，可被 Skill 通过 key 引用）
-SEED_ITEMS: list[dict] = [
+SEED_ITEMS: list[dict[str, Any]] = [
     {
         "key": "authorization_valid_days",
         "category": "授权",
@@ -99,6 +104,41 @@ SEED_ITEMS: list[dict] = [
         "label": "数据安全",
         "value": "data_security",
         "description": "涉及数据分类分级、隐私保护、信息安全、备份策略等内容的文档",
+    },
+    {
+        "key": "hr",
+        "category": "知识库分类",
+        "label": "人力/组织",
+        "value": "hr",
+        "description": "涉及劳动人事、薪酬绩效、考勤招聘、员工培训与福利等人力组织类文档",
+    },
+    {
+        "key": "operations",
+        "category": "知识库分类",
+        "label": "运营/业务",
+        "value": "operations",
+        "description": "涉及业务流程、操作手册、网点柜面、渠道受理与客户服务等运营类文档",
+    },
+    {
+        "key": "risk",
+        "category": "知识库分类",
+        "label": "风险/信贷",
+        "value": "risk",
+        "description": "涉及风险评估、授信审查、贷后管理、反洗钱、案件预警等风险与信贷类文档",
+    },
+    {
+        "key": "marketing",
+        "category": "知识库分类",
+        "label": "营销/品牌",
+        "value": "marketing",
+        "description": "涉及营销推广、品牌宣传、客户活动、产品客群等市场营销类文档",
+    },
+    {
+        "key": "engineering",
+        "category": "知识库分类",
+        "label": "技术/研发",
+        "value": "engineering",
+        "description": "涉及技术架构、研发规范、接口对接、运维部署与算法等技术类文档",
     },
     # 资产类型（AssetConfigDialog.tsx 资产类型下拉）
     {
@@ -361,6 +401,10 @@ SEED_ITEMS: list[dict] = [
 ]
 
 
+# 随产品定义持续补齐的内置分组（已有库也补缺失项；其余分组仍仅空库播种，删除不复活）
+_ALWAYS_SEED_CATEGORIES = {"知识库分类"}
+
+
 class DictStorage:
     """数据字典存储（单文件 sqlite）。"""
 
@@ -377,12 +421,19 @@ class DictStorage:
         return conn
 
     def _seed_if_empty(self) -> None:
+        """播种内置条目。
+
+        - 空库：全量播种；
+        - 非空库：仅补齐「知识库分类」等随产品定义的内置分组（INSERT OR IGNORE，
+          不覆盖用户已改过的条目，也不复活其它分组里被删掉的种子）。
+        """
         ts = now()
         with self._connect() as conn:
             row = conn.execute("SELECT COUNT(*) AS n FROM dict_items").fetchone()
-            if int(row["n"]) > 0:
-                return
+            empty = int(row["n"]) == 0
             for item in SEED_ITEMS:
+                if not empty and item["category"] not in _ALWAYS_SEED_CATEGORIES:
+                    continue
                 conn.execute(
                     """
                     INSERT OR IGNORE INTO dict_items(
@@ -466,7 +517,7 @@ class DictStorage:
 
     def list(self, category: str | None = None) -> list[DictItem]:
         sql = "SELECT * FROM dict_items WHERE 1=1"
-        params: list = []
+        params: list[Any] = []
         if category:
             sql += " AND category = ?"
             params.append(category)
@@ -475,7 +526,7 @@ class DictStorage:
             rows = conn.execute(sql, params).fetchall()
         return [DictItem.from_dict(dict(r)) for r in rows]
 
-    def search(self, query: str, limit: int = 50) -> list[DictItem]:
+    def search(self, query: str, limit: int = 50) -> _List[DictItem]:
         """LIKE 模糊搜索：key / label / value / description / category。"""
         q = f"%{query}%"
         with self._connect() as conn:
@@ -490,7 +541,7 @@ class DictStorage:
             ).fetchall()
         return [DictItem.from_dict(dict(r)) for r in rows]
 
-    def categories(self) -> list[str]:
+    def categories(self) -> _List[str]:
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT DISTINCT category FROM dict_items ORDER BY category"

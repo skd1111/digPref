@@ -12,6 +12,7 @@ import { useState } from 'react';
 import { SystemAssetTree } from '@/components/asset-tree/SystemAssetTree';
 import { ProjectFileTree } from '@/components/codenav/ProjectFileTree';
 import { useCodeNavStore } from '@/store/codeNavStore';
+import { ChevronDownIcon, ChevronRightIcon } from '@/components/ui/Icons';
 
 export function LeftAssetTree(): JSX.Element {
   const hasProjects = useCodeNavStore((s) => (s.openedProjects ?? []).length > 0);
@@ -45,7 +46,9 @@ export function LeftAssetTree(): JSX.Element {
           style={{ color: '#bbbbbb' }}
           title={assetCollapsed ? '展开系统资产' : '折叠系统资产'}
         >
-          <span className="text-[10px] text-[#c5c5c5]">{assetCollapsed ? '▶' : '▼'}</span>
+          <span className="flex items-center text-[#c5c5c5]" aria-hidden="true">
+            {assetCollapsed ? <ChevronRightIcon size={11} /> : <ChevronDownIcon size={11} />}
+          </span>
           <span>系统资产</span>
         </button>
         {!assetCollapsed && (

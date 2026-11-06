@@ -152,3 +152,18 @@ def test_recommend_keyword_fallback(client):
         assert body["source"] == "keyword"
     finally:
         rec_mod._llm_recommend = saved
+
+
+def test_import_seeds(client):
+    """一键导入内置种子：首次写入多个团，二次幂等（count=0）。"""
+    r = client.post("/expert-teams/import-seeds")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["count"] >= 10
+
+    ids = {t["id"] for t in client.get("/expert-teams/list").json()["teams"]}
+    assert "aml_team" in ids
+    assert "doc_precheck_team" in ids
+
+    assert client.post("/expert-teams/import-seeds").json()["count"] == 0

@@ -10,6 +10,7 @@ import { useChatStore } from '@/store/chatStore';
 import { useBiznavStore } from '@/store/biznavStore';
 import { useReqcardStore } from '@/store/reqcardStore';
 import { useUIStore } from '@/store/uiStore';
+import { CloseIcon, PencilIcon, WarningIcon } from '@/components/ui/Icons';
 
 /** 从当前会话消息提取对话摘要（user + assistant 正文，截断 4000 字符） */
 function buildConversationSummary(): string {
@@ -71,22 +72,22 @@ export function ReqAlignmentBanner(): JSX.Element | null {
         color: '#0451a5',
       }}
     >
-      <span className="flex-1 truncate">
-        📝 需求对齐中 · {alignment.featureIds.length} 个功能点：{names}
+      <span className="flex flex-1 items-center gap-1 truncate">
+        <PencilIcon size={12} />
+        需求对齐中 · {alignment.featureIds.length} 个功能点：{names}
         {error && (
-          <span style={{ color: '#cd3131' }}> · ⚠ {error}</span>
+          <span className="flex items-center gap-1" style={{ color: '#cd3131' }}>
+            · <WarningIcon size={11} />
+            {error}
+          </span>
         )}
       </span>
       <button
         type="button"
         onClick={() => void handleGenerate()}
         disabled={generating}
-        className="rounded px-2 py-0.5 font-semibold transition-colors hover:brightness-110"
-        style={{
-          backgroundColor: '#0e639c',
-          color: '#ffffff',
-          cursor: generating ? 'wait' : 'pointer',
-        }}
+        className="btn btn-primary btn-sm"
+        style={{ cursor: generating ? 'wait' : 'pointer' }}
       >
         {generating ? '生成中…' : '生成需求卡片'}
       </button>
@@ -94,11 +95,11 @@ export function ReqAlignmentBanner(): JSX.Element | null {
         type="button"
         onClick={handleCancel}
         disabled={generating}
-        className="rounded px-1.5 py-0.5 transition-colors hover:bg-vscode-border"
-        style={{ color: '#616161' }}
+        className="btn btn-ghost btn-icon"
         title="退出需求对齐"
+        aria-label="退出需求对齐"
       >
-        ✕
+        <CloseIcon size={13} />
       </button>
     </div>
   );

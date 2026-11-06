@@ -1,0 +1,7 @@
+# 支付网关（ds_pay）源级业务术语字典
+消费: "txn_code='1001'"
+退款: "txn_code='1002'"
+撤销: "txn_code='1003'"
+微信: "channel='WECHAT'"
+支付宝: "channel='ALIPAY'"
+银联: "channel='UNIONPAY'"

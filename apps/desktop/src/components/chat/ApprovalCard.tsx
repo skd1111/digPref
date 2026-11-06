@@ -205,7 +205,7 @@ export function ApprovalCard({ approval, onDecided }: Props): JSX.Element {
         <button
           onClick={() => submit('approve')}
           disabled={busy}
-          className="flex-1 rounded bg-accent-approval px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+          className="btn btn-success btn-md flex-1"
         >
           {busy ? '提交中…' : 'Approve'}
         </button>
@@ -216,7 +216,7 @@ export function ApprovalCard({ approval, onDecided }: Props): JSX.Element {
             onClick={() => submit('approve_always')}
             disabled={busy}
             title="批准，且本会话内同一工具（同服务·同名）的后续操作自动放行；DROP/TRUNCATE 等硬阻断不受影响"
-            className="flex-1 rounded border border-accent-approval bg-transparent px-3 py-2 text-sm font-semibold text-accent-approval hover:opacity-80 disabled:opacity-50"
+            className="btn btn-secondary btn-md flex-1"
           >
             {busy ? '提交中…' : '此后都按此执行'}
           </button>
@@ -224,7 +224,7 @@ export function ApprovalCard({ approval, onDecided }: Props): JSX.Element {
         <button
           onClick={() => submit('reject')}
           disabled={busy}
-          className="flex-1 rounded bg-bg-code px-3 py-2 text-sm font-semibold text-fg-muted hover:bg-accent-danger hover:text-white disabled:opacity-50"
+          className="btn btn-danger btn-md flex-1"
         >
           Reject
         </button>

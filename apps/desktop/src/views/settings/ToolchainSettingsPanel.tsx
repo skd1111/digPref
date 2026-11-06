@@ -190,8 +190,7 @@ export function ToolchainSettingsPanel(): JSX.Element {
               type="button"
               onClick={() => void saveTools()}
               disabled={toolSaving || loading}
-              className="rounded px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
-              style={{ backgroundColor: '#059669' }}
+              className="btn btn-primary btn-md"
             >
               {toolSaving ? '保存中…' : '保存'}
             </button>
@@ -236,8 +235,7 @@ export function ToolchainSettingsPanel(): JSX.Element {
                   <button
                     type="button"
                     onClick={() => void browse(f.key)}
-                    className="rounded border px-2 py-1 text-2xs"
-                    style={{ borderColor: '#d4d4d4', backgroundColor: '#ffffff', color: '#1f1f1f' }}
+                    className="btn btn-secondary btn-sm"
                   >
                     浏览…
                   </button>
@@ -251,8 +249,7 @@ export function ToolchainSettingsPanel(): JSX.Element {
               type="button"
               onClick={() => void saveCompile()}
               disabled={compileSaving || loading}
-              className="rounded px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
-              style={{ backgroundColor: '#059669' }}
+              className="btn btn-primary btn-md"
             >
               {compileSaving ? '保存中…' : '保存'}
             </button>

@@ -6,6 +6,7 @@
  *   🚀 性能 —— 全部走云端（跳过端侧，内网/云端模型直出）
  */
 import { useChatStore } from '@/store/chatStore';
+import { ZapIcon } from '@/components/ui/Icons';
 
 export function InferenceModeToggle(): JSX.Element {
   const mode = useChatStore((s) => s.inferenceMode);
@@ -29,7 +30,9 @@ export function InferenceModeToggle(): JSX.Element {
         border: `1px solid ${isNormal ? '#2a5a3a' : '#5a3a2a'}`,
       }}
     >
-      <span>{isNormal ? '⚡' : '🚀'}</span>
+      <span className="flex items-center" aria-hidden="true">
+        <ZapIcon size={13} />
+      </span>
       <span className="hidden sm:inline">{isNormal ? '正常' : '性能'}</span>
     </button>
   );

@@ -8,6 +8,15 @@ import { useCollabStore, formatRelativeTime } from '@/store/collabStore';
 import { CommentThread } from './CommentThread';
 import { CommentEditor } from './CommentEditor';
 import {
+  ArchiveIcon,
+  CheckIcon,
+  ChevronLeftIcon,
+  MessageIcon,
+  ReplyIcon,
+  ShareIcon,
+} from '@/components/ui/Icons';
+import { ANCHOR_TYPE_ICONS } from '@/components/collab/anchorTypeIcons';
+import {
   ANCHOR_LABELS,
   STATUS_LABELS,
   USER_BY_ID,
@@ -54,15 +63,19 @@ export function TaskDiscussionPanel({ contextId, compact }: TaskDiscussionPanelP
   if (!ctx) {
     return (
       <div
-        className="flex h-full items-center justify-center p-6 text-center text-2xs"
+        className="flex h-full items-center justify-center gap-1 p-6 text-center text-2xs"
         style={{ color: '#616161' }}
       >
-        ← 从左侧选择上下文查看讨论
+        <span className="flex items-center" aria-hidden="true">
+          <ChevronLeftIcon size={13} />
+        </span>
+        从左侧选择上下文查看讨论
       </div>
     );
   }
 
   const meta = ANCHOR_LABELS[ctx.anchor_type];
+  const AnchorIcon = ANCHOR_TYPE_ICONS[ctx.anchor_type];
 
   return (
     <div className="flex h-full flex-col">
@@ -76,7 +89,8 @@ export function TaskDiscussionPanel({ contextId, compact }: TaskDiscussionPanelP
             className="rounded px-1.5 py-0.5 text-2xs font-semibold"
             style={{ backgroundColor: meta.color, color: '#0e0e0e' }}
           >
-            {meta.icon} {meta.label}
+            <AnchorIcon size={11} />
+            {meta.label}
           </span>
           <span className="text-2xs" style={{ color: '#616161' }}>
             {ctx.target_env ? `[${ctx.target_env}]` : ''}
@@ -114,8 +128,15 @@ export function TaskDiscussionPanel({ contextId, compact }: TaskDiscussionPanelP
               );
             })}
           </div>
-          <span className="text-2xs" style={{ color: '#616161' }}>
-            {ctx.participant_names.length} 参与者 · 💬 {ctx.comment_count} · {formatRelativeTime(ctx.updated_at)}
+          <span className="flex items-center gap-1 text-2xs" style={{ color: '#616161' }}>
+            {ctx.participant_names.length} 参与者
+            <span aria-hidden="true">·</span>
+            <span className="flex items-center gap-1">
+              <MessageIcon size={11} />
+              {ctx.comment_count}
+            </span>
+            <span aria-hidden="true">·</span>
+            {formatRelativeTime(ctx.updated_at)}
           </span>
           <div className="ml-auto flex gap-1">
             <button
@@ -129,7 +150,10 @@ export function TaskDiscussionPanel({ contextId, compact }: TaskDiscussionPanelP
               }}
               title="分享到企微 / 钉钉 / 飞书"
             >
-              📤 分享
+              <span className="flex items-center gap-1">
+                <ShareIcon size={12} />
+                分享
+              </span>
             </button>
             {ctx.status === 'active' && (
               <button
@@ -142,7 +166,10 @@ export function TaskDiscussionPanel({ contextId, compact }: TaskDiscussionPanelP
                   border: '1px solid #4ec9b0',
                 }}
               >
-                ✓ 标记已解决
+                <span className="flex items-center gap-1">
+                  <CheckIcon size={12} />
+                  标记已解决
+                </span>
               </button>
             )}
             {ctx.status === 'resolved' && (
@@ -156,7 +183,10 @@ export function TaskDiscussionPanel({ contextId, compact }: TaskDiscussionPanelP
                   border: '1px solid #d4d4d4',
                 }}
               >
-                ↩ 重新打开
+                <span className="flex items-center gap-1">
+                  <ReplyIcon size={12} />
+                  重新打开
+                </span>
               </button>
             )}
             {ctx.status !== 'archived' && (
@@ -175,7 +205,7 @@ export function TaskDiscussionPanel({ contextId, compact }: TaskDiscussionPanelP
                 }}
                 title="归档"
               >
-                🗄
+                <ArchiveIcon size={12} />
               </button>
             )}
           </div>

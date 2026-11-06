@@ -10,6 +10,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useUIStore } from '@/store/uiStore';
 import { getAllCommands, runCommand, type Command } from '@/commands/commandRegistry';
+import { SearchIcon } from '@/components/ui/Icons';
 
 export function CommandPalette(): JSX.Element | null {
   const open = useUIStore((s) => s.commandPaletteOpen);
@@ -80,7 +81,9 @@ export function CommandPalette(): JSX.Element | null {
           className="flex items-center border-b px-3"
           style={{ borderColor: '#e0e0e0' }}
         >
-          <span className="text-fg-muted">⌕</span>
+          <span className="flex items-center text-fg-muted" aria-hidden="true">
+            <SearchIcon size={15} />
+          </span>
           <input
             ref={inputRef}
             value={query}

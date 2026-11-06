@@ -9,6 +9,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { useEnvStore, envColor, ENV_COLORS } from '@/store/envStore';
+import { ChevronDownIcon, WarningIcon } from '@/components/ui/Icons';
 
 export function EnvironmentIndicator({ large = false }: { large?: boolean }): JSX.Element {
   const activeEnv = useEnvStore((s) => s.activeEnv);
@@ -95,7 +96,9 @@ export function EnvironmentIndicator({ large = false }: { large?: boolean }): JS
         <span style={{ fontFamily: 'monospace' }}>
           {activeEnv ? color.label : 'NO ENV'}
         </span>
-        <span style={{ opacity: 0.7, fontSize: large ? 12 : 10 }}>▾</span>
+        <span className="flex items-center" style={{ opacity: 0.7 }} aria-hidden="true">
+          <ChevronDownIcon size={large ? 13 : 11} />
+        </span>
       </button>
 
       {open && (
@@ -130,7 +133,10 @@ export function EnvironmentIndicator({ large = false }: { large?: boolean }): JS
                   style={{ backgroundColor: '#fbeaea', color: '#ff8888', fontSize: 10 }}
                   title="点击重试"
                 >
-                  ⚠ 重试
+                  <span className="flex items-center gap-1">
+                    <WarningIcon size={11} />
+                    重试
+                  </span>
                 </button>
               )}
             </div>

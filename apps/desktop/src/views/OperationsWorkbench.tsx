@@ -31,6 +31,7 @@ import {
   type OpsModule,
 } from "@/components/ops/opsModules";
 import type { Feature, FeatureContextPayload } from "@/types/biznav";
+import { ChevronRightIcon, BuildingIcon, CloseIcon } from "@/components/ui/Icons";
 
 export function OperationsWorkbench(): JSX.Element {
   // ---- hooks（全部无条件，遵守 BUGFIX #15 教训）----
@@ -38,6 +39,7 @@ export function OperationsWorkbench(): JSX.Element {
   const projectName = useBiznavStore((s) => s.projectName);
   const loadFeatures = useBiznavStore((s) => s.loadFeatures);
   const skills = useSkillsStore((s) => s.skills);
+  const teams = useExpertTeamStore((s) => s.teams);
   const selectedItemId = useOpsNavStore((s) => s.selectedItemId);
   
   const [expandedModules, setExpandedModules] = useState<Set<string>>(
@@ -99,10 +101,32 @@ export function OperationsWorkbench(): JSX.Element {
     if (st.selectionMode === "manual") return;
     // 同一业务已有选择结果（切模式再切回 / skills 重载触发 effect 重跑）→ 直接复用，
     // 不再重走预设判断与 LLM 推荐，避免重复加载刚打开的专家团
-    if (st.selectedForItemId === selectedItemId && st.selectionSource !== "") return;
+    // 例外：上轮 LLM/关键词无结果（none）且当前模块有默认专家团 → 补选
+    //（teams 加载晚于首次推荐时常见，否则静态预设永远不生效）
+    if (st.selectedForItemId === selectedItemId && st.selectionSource !== "") {
+      if (st.selectionSource === "none") {
+        const retryPreset = (selection.staticHit?.module.expertTeamIds ?? []).filter(
+          (id) => teams.some((t) => t.id === id && t.enabled),
+        );
+        if (retryPreset.length > 0) {
+          st.applyAutoSelection(retryPreset, "preset", selectedItemId);
+        }
+      }
+      return;
+    }
     const featurePreset = selection.featureHit?.expert_team_ids ?? [];
     if (featurePreset.length > 0) {
       st.applyAutoSelection(featurePreset, "preset", selectedItemId);
+      return;
+    }
+    // 静态导航项：模块默认专家团（内置种子）→ 零 LLM 直接命中；
+    // 团已删除/停用时过滤为空，继续走 Skill 预设 / AI 推荐（删除即降级，不报错）
+    const modulePreset = selection.staticHit?.module.expertTeamIds ?? [];
+    const availableModulePreset = modulePreset.filter((id) =>
+      teams.some((t) => t.id === id && t.enabled),
+    );
+    if (availableModulePreset.length > 0) {
+      st.applyAutoSelection(availableModulePreset, "preset", selectedItemId);
       return;
     }
     const skillId =
@@ -159,7 +183,7 @@ export function OperationsWorkbench(): JSX.Element {
           recommendInFlightRef.current = null;
         }
       });
-  }, [selection, selectedItemId, skills]);
+  }, [selection, selectedItemId, skills, teams]);
 
   const handleSelect = (itemId: string): void => {
     useOpsNavStore.getState().selectItem(itemId);
@@ -204,14 +228,14 @@ export function OperationsWorkbench(): JSX.Element {
           className="flex items-center justify-between border-b px-3 py-2"
           style={{ borderColor: "#d4d4d4" }}
         >
-          <span className="text-ui font-semibold" style={{ color: "#333333" }}>
-            🏦 业务列表
+          <span className="flex items-center gap-1 text-ui font-semibold" style={{ color: "#333333" }}>
+            <BuildingIcon size={13} />
+            业务列表
           </span>
           <button
             type="button"
             onClick={() => useOpsNavStore.getState().openCreateDialog()}
-            className="rounded px-1.5 py-0.5 text-2xs"
-            style={{ color: "#0451a5" }}
+            className="btn btn-primary btn-xs"
             title="创建功能点"
           >
             ＋ 新建
@@ -222,7 +246,7 @@ export function OperationsWorkbench(): JSX.Element {
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="🔍 搜索功能点…"
+            placeholder="搜索功能点…"
             className="w-full rounded border px-2 py-1 text-2xs outline-none focus:border-[#007acc]"
             style={{
               backgroundColor: "#ffffff",
@@ -308,6 +332,7 @@ function OpsModuleGroup({
   onToggle: () => void;
   onSelect: (itemId: string) => void;
 }): JSX.Element {
+  const ModuleIcon = module.icon;
   // 工程提炼的功能点：category 命中模块名（含「对公账户管理」这类长名子串匹配）
   const engFeatures = features.filter(
     (f) =>
@@ -338,12 +363,15 @@ function OpsModuleGroup({
         style={{ color: "#333333" }}
       >
         <span
-          className="text-[10px] transition-transform duration-150"
+          className="flex items-center transition-transform duration-150"
           style={{ transform: expanded ? "rotate(90deg)" : "none" }}
+          aria-hidden="true"
         >
-          ▶
+          <ChevronRightIcon size={11} />
         </span>
-        <span>{module.icon}</span>
+        <span className="flex items-center" aria-hidden="true">
+          <ModuleIcon size={14} />
+        </span>
         <span className="flex-1 text-left">{module.label}</span>
         <span
           className="rounded px-1.5 text-2xs"
@@ -564,10 +592,10 @@ function CreateFeatureDialog({
           <button
             type="button"
             onClick={close}
-            className="rounded px-2 py-0.5 text-2xs hover:bg-vscode-border"
-            style={{ color: "#616161" }}
+            className="btn btn-ghost btn-icon"
+            aria-label="关闭"
           >
-            ✕
+            <CloseIcon size={13} />
           </button>
         </div>
         <div className="space-y-2 p-4">
@@ -609,7 +637,7 @@ function CreateFeatureDialog({
             >
               {modules.map((m) => (
                 <option key={m.id} value={m.id}>
-                  {m.icon} {m.label}
+                  {m.label}
                 </option>
               ))}
             </select>
@@ -642,8 +670,7 @@ function CreateFeatureDialog({
           <button
             type="button"
             onClick={close}
-            className="rounded px-3 py-1 text-2xs"
-            style={{ backgroundColor: "#e0e0e0", color: "#1f1f1f" }}
+            className="btn btn-secondary btn-md"
           >
             取消
           </button>
@@ -651,12 +678,7 @@ function CreateFeatureDialog({
             type="button"
             onClick={() => void handleCreate()}
             disabled={saving}
-            className="rounded px-3 py-1 text-2xs font-semibold"
-            style={{
-              backgroundColor: "#0e639c",
-              color: "#ffffff",
-              opacity: saving ? 0.6 : 1,
-            }}
+            className="btn btn-primary btn-md"
           >
             {saving ? "创建中…" : "创建"}
           </button>

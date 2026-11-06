@@ -32,16 +32,7 @@ export function DocImportButton(): JSX.Element {
   };
 
   return (
-    <button
-      type="button"
-      onClick={onImport}
-      style={{
-        padding: "4px 12px",
-        background: "#007acc",
-        color: "#fff",
-        borderRadius: 4,
-      }}
-    >
+    <button type="button" onClick={onImport} className="btn btn-primary btn-sm">
       导入文档
     </button>
   );

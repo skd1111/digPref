@@ -20,6 +20,7 @@ import { useOpsStore } from "@/store/opsStore";
 import { ipc } from "@/ipc/invoke";
 import { ExpertTeamSelector } from "@/components/chat/ExpertTeamSelector";
 import { AiThinkingIndicator } from "@/components/chat/AiStatus";
+import { RiskAuditReportModal } from "@/components/ops/RiskAuditReportModal";
 import {
   CASE_FILE_STATUS_META,
   type OpsCaseDraft,
@@ -30,6 +31,7 @@ import {
 import type { ExpertMember, ExpertTeam } from "@/types/expertTeam";
 import type { Feature } from "@/types/biznav";
 import type { findOpsItem } from "@/components/ops/opsModules";
+import { PackageIcon, RotateCcwIcon, SettingsIcon, UsersIcon } from "@/components/ui/Icons";
 
 interface ExpertWorkflowPanelProps {
   selection: {
@@ -61,6 +63,96 @@ function avatarGradient(name: string): string {
   let hash = 0;
   for (const ch of name) hash = (hash + ch.charCodeAt(0)) % 997;
   return AVATAR_GRADIENTS[hash % AVATAR_GRADIENTS.length];
+}
+
+/** 「下一步」待办色调：按紧急度区分（打回补正 / 待传材料 / 待确认 / 审核中） */
+const ACTION_TONE: Record<
+  "fix" | "upload" | "confirm" | "wait",
+  { icon: string; color: string; border: string; bg: string }
+> = {
+  fix: { icon: "✗", color: "#b91c1c", border: "#f3c8c8", bg: "#fdf3f3" },
+  upload: { icon: "⬆", color: "#0451a5", border: "#d6e4f7", bg: "#f3f7fd" },
+  confirm: { icon: "☑", color: "#047857", border: "#c6e8db", bg: "#eef9f4" },
+  wait: { icon: "⟳", color: "#6b7280", border: "#e7e5e4", bg: "#f5f5f4" },
+};
+
+/**
+ * 专家卡状态句（2026-11 交互优化）：替掉「你好，我负责X，把材料传给我」的静态问候语。
+ * 卡片头部是最贵的位置，静态招呼语 6 张卡重复 6 遍零信息量；
+ * 改为一眼看出这位专家此刻缺什么 / 卡在哪一步。
+ */
+function expertStatusLine(args: {
+  accepted: boolean;
+  busy: "uploading" | "reviewing" | "asking" | undefined;
+  files: OpsCaseFile[];
+  outputs: string[];
+}): { text: string; color: string; bg: string; border: string } {
+  const { accepted, busy, files, outputs } = args;
+  const reviewing = files.filter((f) => f.status === "reviewing").length;
+  const pending = files.filter((f) => f.status === "pending").length;
+  const passed = files.filter((f) => f.status === "passed").length;
+  const rejected = files.filter((f) => f.status === "rejected").length;
+
+  if (accepted) {
+    return {
+      text: "✓ 已验收，交付标准全部确认，产物已入交付物柜。",
+      color: "#047857",
+      bg: "#eef9f4",
+      border: "#c6e8db",
+    };
+  }
+  if (busy === "uploading") {
+    return { text: "⟳ 正在接收你的材料…", color: "#0451a5", bg: "#f3f7fd", border: "#d6e4f7" };
+  }
+  if (busy === "reviewing" || reviewing > 0) {
+    return {
+      text: `⟳ 正在审阅 ${reviewing || files.length} 份材料（先过系统合规审核）…`,
+      color: "#0451a5",
+      bg: "#f3f7fd",
+      border: "#d6e4f7",
+    };
+  }
+  if (files.length === 0) {
+    return {
+      text:
+        outputs.length === 0
+          ? "我还没有配置交付物，暂不能验收 —— 请到「专家团预设」补充。"
+          : `等你上传材料。我要验收的是「${outputs[0]}」${outputs.length > 1 ? ` 等 ${outputs.length} 项` : ""}。`,
+      color: "#0451a5",
+      bg: "#f3f7fd",
+      border: "#d6e4f7",
+    };
+  }
+  if (rejected > 0) {
+    return {
+      text: `${rejected} 份材料被打回，展开材料看原因后补正重传（${passed} 份已通过）。`,
+      color: "#b91c1c",
+      bg: "#fdf3f3",
+      border: "#f3c8c8",
+    };
+  }
+  if (pending > 0) {
+    return {
+      text: `${pending} 份材料排队待审，${passed} 份已通过。`,
+      color: "#b25c1a",
+      bg: "#fdf6ee",
+      border: "#f0dcc4",
+    };
+  }
+  if (passed === files.length) {
+    return {
+      text: `${passed} 份材料全部通过 —— 请逐项确认下方交付标准完成验收。`,
+      color: "#047857",
+      bg: "#eef9f4",
+      border: "#c6e8db",
+    };
+  }
+  return {
+    text: `${passed}/${files.length} 份通过，其余待处理。`,
+    color: "#4b5563",
+    bg: "#f5f5f4",
+    border: "#e7e5e4",
+  };
 }
 
 /** 剪贴板粘贴的文件命名美化：截图类通用名加时间戳，避免多张同名互盖 */
@@ -121,7 +213,9 @@ export function ExpertWorkflowPanel({
         className="flex h-full flex-col items-center justify-center text-2xs"
         style={{ color: "#616161", backgroundColor: "#ffffff" }}
       >
-        <div className="mb-2 text-3xl">👥</div>
+        <div className="mb-2 flex items-center justify-center text-3xl" aria-hidden="true">
+          <UsersIcon size={40} />
+        </div>
         <div>从左侧业务列表选择一个功能点开始办理</div>
         <div className="mt-1">选中后按专家上传材料、逐项验收，无需对话框</div>
       </div>
@@ -162,9 +256,18 @@ function WorkflowBody({
   const exporting = useOpsCaseStore((s) => s.exporting);
   const caseError = useOpsCaseStore((s) => s.error);
   const unreadByTeam = useOpsCaseStore((s) => s.unreadByTeam);
+  /** 系统合规审核发现风险点 → 自动弹出的报告（材料 id） */
+  const riskAuditFileId = useOpsCaseStore((s) => s.riskAuditFileId);
+  const dismissRiskAudit = useOpsCaseStore((s) => s.dismissRiskAudit);
   const [checkedOutputs, setCheckedOutputs] = useState<Set<string>>(() => new Set());
   const [presetOpen, setPresetOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [activeTeamId, setActiveTeamId] = useState<string>("");
+  /** 当前要弹合规审核报告的材料（审核出风险才置位） */
+  const auditFile = useMemo(
+    () => (riskAuditFileId ? files.find((f) => f.id === riskAuditFileId) : undefined),
+    [riskAuditFileId, files],
+  );
 
   const featureName =
     selection.featureHit?.name ?? selection.staticHit?.item.label ?? "";
@@ -224,9 +327,26 @@ function WorkflowBody({
   useEffect(() => {
     if (lastNewDraftId) {
       setDraftsOpen(true);
+      // 草稿抽屉与交付物柜都是右侧浮层，同时开会叠在一起
+      setCabinetOpen(false);
       setActiveDraftId(lastNewDraftId);
     }
   }, [lastNewDraftId]);
+  // 全屏填写状态挂在面板层按草稿 id 记（2026-11-05 修复）：
+  // 之前存在草稿卡内部，页签切换导致重挂载 → 直开草稿回回都弹全屏；
+  // 且 lastDirectDraftId 在同一次会话里一直保留，切回该页签又全屏。
+  // 现在直开草稿只自动全屏一次（消费即清标），其余切换保持各自状态。
+  const [expandedDraftId, setExpandedDraftId] = useState("");
+  const autoExpandedDraftRef = useRef("");
+  useEffect(() => {
+    if (!lastDirectDraftId) {
+      autoExpandedDraftRef.current = "";
+      return;
+    }
+    if (autoExpandedDraftRef.current === lastDirectDraftId) return;
+    autoExpandedDraftRef.current = lastDirectDraftId;
+    setExpandedDraftId(lastDirectDraftId);
+  }, [lastDirectDraftId]);
   // 草稿关联的材料行：审核意见收进草稿卡展示，材料行不再重复气泡（BUGFIX #86）
   const draftFileIds = useMemo(
     () => new Set(drafts.map((d) => d.file_id).filter(Boolean)),
@@ -281,6 +401,51 @@ function WorkflowBody({
     isMemberAccepted(r.team.id, r.member),
   ).length;
   const allAccepted = allMembers.length > 0 && acceptedCount === allMembers.length;
+
+  /**
+   * 「下一步」待办（2026-11 交互优化）：
+   * 原界面只给一个「已验收 0/6」的静态计数，用户看到 6 张空卡不知道从哪开始。
+   * 这里把每个未验收专家的实际阻塞点算出来，按紧急度排序（打回 > 传材料 > 待确认 > 审核中）。
+   */
+  const nextActions = useMemo(() => {
+    type Tone = "fix" | "upload" | "confirm" | "wait";
+    const rank: Record<Tone, number> = { fix: 0, upload: 1, confirm: 2, wait: 3 };
+    const acts: Array<{
+      key: string;
+      teamId: string;
+      memberName: string;
+      label: string;
+      tone: Tone;
+    }> = [];
+    for (const r of allMembers) {
+      if (isMemberAccepted(r.team.id, r.member)) continue;
+      const mine = files.filter((f) => f.member_key === r.member.name);
+      const rejected = mine.filter((f) => f.status === "rejected").length;
+      const running = mine.filter((f) => f.status === "reviewing" || f.status === "pending").length;
+      const base = { key: `${r.team.id}::${r.member.name}`, teamId: r.team.id, memberName: r.member.name };
+      if (rejected > 0) {
+        acts.push({ ...base, tone: "fix", label: `${r.member.name} · ${rejected} 份待补正` });
+      } else if (running > 0) {
+        acts.push({ ...base, tone: "wait", label: `${r.member.name} · ${running} 份审核中` });
+      } else if (mine.length === 0) {
+        acts.push({ ...base, tone: "upload", label: `${r.member.name} · 待上传材料` });
+      } else {
+        acts.push({ ...base, tone: "confirm", label: `${r.member.name} · 待确认交付标准` });
+      }
+    }
+    return acts.sort((a, b) => rank[a.tone] - rank[b.tone]);
+    // isMemberAccepted 依赖 checkedOutputs，已拆开列出避免闭包陈旧
+  }, [allMembers, files, checkedOutputs]);
+
+  /** 点待办 → 切到对应团并把该专家卡滚到可视区 */
+  const focusMember = (teamId: string, memberName: string): void => {
+    setActiveTeamId(teamId);
+    window.setTimeout(() => {
+      document
+        .getElementById(`expert-card-${teamId}-${memberName}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+    }, 60);
+  };
 
   const toggleOutput = (ref: MemberRef, output: string): void => {
     const key = `${ref.team.id}::${ref.member.name}::${output}`;
@@ -424,16 +589,10 @@ function WorkflowBody({
             }}
             title="已验收通过的材料（可预览/单独另存）"
           >
-            📦 交付物柜{passedFiles.length > 0 ? ` ${passedFiles.length}` : ""}
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleClearCase()}
-            className="rounded border px-2 py-0.5 text-2xs"
-            style={{ borderColor: "#e0e0e0", color: "#b25c1a", backgroundColor: "#ffffff" }}
-            title="清空当前业务的全部材料/问答/草稿，重新开始办理"
-          >
-            ↺ 重新开始办理
+            <span className="flex items-center gap-1">
+              <PackageIcon size={12} />
+              交付物柜{passedFiles.length > 0 ? ` ${passedFiles.length}` : ""}
+            </span>
           </button>
           <button
             type="button"
@@ -442,8 +601,52 @@ function WorkflowBody({
             style={{ borderColor: "#e0e0e0", color: "#616161", backgroundColor: "#ffffff" }}
             title="为该业务预设专家团（选中时自动选团）"
           >
-            ⚙ 专家团预设
+            <span className="flex items-center gap-1">
+              <SettingsIcon size={12} />
+              专家团预设
+            </span>
           </button>
+          {/* 危险/低频操作收进溢出菜单（2026-11 交互优化）：「重新开始办理」会清空全部材料，
+              不适合与常规按钮同权重并排，避免误点 */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setMoreOpen((v) => !v)}
+              className="rounded border px-2 py-0.5 text-2xs"
+              style={{ borderColor: "#e0e0e0", color: "#616161", backgroundColor: "#ffffff" }}
+              title="更多操作"
+              aria-expanded={moreOpen}
+            >
+              ⋯
+            </button>
+            {moreOpen && (
+              <>
+                <div
+                  className="fixed inset-0 z-20"
+                  onClick={() => setMoreOpen(false)}
+                  aria-hidden="true"
+                />
+                <div
+                  className="absolute right-0 top-full z-30 mt-1 w-36 rounded border py-1 shadow-lg"
+                  style={{ borderColor: "#e0e0e0", backgroundColor: "#ffffff" }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMoreOpen(false);
+                      void handleClearCase();
+                    }}
+                    className="flex w-full items-center gap-1.5 px-2 py-1 text-left text-2xs hover:bg-[#f5f5f4]"
+                    style={{ color: "#b25c1a" }}
+                    title="清空当前业务的全部材料/问答/草稿，重新开始办理"
+                  >
+                    <RotateCcwIcon size={12} />
+                    重新开始办理
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
         <div className="mt-1 flex items-center gap-2">
           <ExpertTeamSelector />
@@ -457,6 +660,52 @@ function WorkflowBody({
           </div>
         )}
       </div>
+
+      {/* ===== 下一步引导（2026-11 交互优化）：把「已验收 0/6」这张静态计分牌，
+          换成「现在该干什么」的可点清单 —— 否则用户面对 6 张空卡无从下手 ===== */}
+      {allMembers.length > 0 && (
+        <div
+          className="flex flex-shrink-0 items-center gap-2 border-b px-4 py-1.5"
+          style={{ borderColor: "#e8e8e6", backgroundColor: "#fbfbfa" }}
+        >
+          <span className="flex-shrink-0 text-[10px] font-semibold" style={{ color: "#6b7280" }}>
+            下一步
+          </span>
+          {nextActions.length === 0 ? (
+            <span className="text-[11px] font-semibold" style={{ color: "#047857" }}>
+              ✓ 全部专家已验收 —— 可生成交付物
+            </span>
+          ) : (
+            <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
+              {nextActions.slice(0, 4).map((a) => {
+                const tone = ACTION_TONE[a.tone];
+                return (
+                  <button
+                    key={a.key}
+                    type="button"
+                    onClick={() => focusMember(a.teamId, a.memberName)}
+                    className="flex flex-shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] transition-colors hover:brightness-95"
+                    style={{
+                      color: tone.color,
+                      borderColor: tone.border,
+                      backgroundColor: tone.bg,
+                    }}
+                    title="点击定位到该专家卡"
+                  >
+                    <span aria-hidden="true">{tone.icon}</span>
+                    {a.label}
+                  </button>
+                );
+              })}
+              {nextActions.length > 4 && (
+                <span className="flex-shrink-0 text-[10px]" style={{ color: "#9ca3af" }}>
+                  共 {nextActions.length} 项待办
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ===== 专家团页签：每团一个页签，有新审核结果时红点提示 ===== */}
       {selectedTeams.length > 0 && (
@@ -516,45 +765,145 @@ function WorkflowBody({
       )}
 
       {/* ===== 主体：当前团的专家横向排列（像一排真人在帮你审核） ===== */}
-      <div className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
-        {allMembers.length === 0 ? (
-          recommending ? (
-            // AI 推荐进行中（LLM 数秒）：展示思考动效，避免界面像卡住
-            <div className="flex h-full flex-col items-center justify-center gap-2 p-3">
-              <AiThinkingIndicator compact label={`专家团准备中 · 正在为「${featureName}」匹配专家`} />
-              <div className="text-2xs" style={{ color: "#9ca3af" }}>
-                本地 → 内网 → 云端三级匹配，通常需要几秒…
-              </div>
-            </div>
-          ) : (
-            <div className="flex h-full items-center justify-center p-3">
-              <div
-                className="rounded-lg border px-4 py-6 text-center text-2xs"
-                style={{ borderColor: "#e0e0e0", backgroundColor: "#ffffff", color: "#9ca3af" }}
-              >
-                当前未选择专家团
-                <div className="mt-1">
-                  在上方专家团选择器中手动指定，或为业务预设专家团（AI 也会自动推荐）
+      <div className="relative min-h-0 flex-1">
+        <div className="h-full overflow-x-auto overflow-y-hidden">
+          {allMembers.length === 0 ? (
+            recommending ? (
+              // AI 推荐进行中（LLM 数秒）：展示思考动效，避免界面像卡住
+              <div className="flex h-full flex-col items-center justify-center gap-2 p-3">
+                <AiThinkingIndicator compact label={`专家团准备中 · 正在为「${featureName}」匹配专家`} />
+                <div className="text-2xs" style={{ color: "#9ca3af" }}>
+                  本地 → 内网 → 云端三级匹配，通常需要几秒…
                 </div>
               </div>
+            ) : (
+              <div className="flex h-full items-center justify-center p-3">
+                <div
+                  className="rounded-lg border px-4 py-6 text-center text-2xs"
+                  style={{ borderColor: "#e0e0e0", backgroundColor: "#ffffff", color: "#9ca3af" }}
+                >
+                  当前未选择专家团
+                  <div className="mt-1">
+                    在上方专家团选择器中手动指定，或为业务预设专家团（AI 也会自动推荐）
+                  </div>
+                </div>
+              </div>
+            )
+          ) : (
+            // 自适应铺满（2026-11 交互优化）：原 w-[360px] 固定宽使 6 位专家必然横向滚动，
+            // 改为 flex-1 + basis 280 均分屏宽，一屏看全全员；不够宽才降级为滚动
+            <div className="flex h-full items-stretch gap-2.5 p-2.5">
+              {activeMembers.map((ref) => {
+                const cardId = `expert-card-${ref.team.id}-${ref.member.name}`;
+                return (
+                  <div
+                    key={cardId}
+                    id={cardId}
+                    className="flex min-w-0 flex-1 basis-[280px] flex-col"
+                    style={{ maxWidth: 460 }}
+                  >
+                    <ExpertCaseCard
+                      refData={ref}
+                      caseId={caseId}
+                      files={files.filter((f) => f.member_key === ref.member.name)}
+                      draftFileIds={draftFileIds}
+                      qa={qa.filter((q) => q.member_key === ref.member.name)}
+                      busy={busyMembers[ref.member.name]}
+                      accepted={isMemberAccepted(ref.team.id, ref.member)}
+                      checkedOutputs={checkedOutputs}
+                      onToggleOutput={(o) => toggleOutput(ref, o)}
+                    />
+                  </div>
+                );
+              })}
             </div>
-          )
-        ) : (
-          <div className="flex h-full items-stretch gap-3 p-3">
-            {activeMembers.map((ref) => (
-              <ExpertCaseCard
-                key={`${ref.team.id}::${ref.member.name}`}
-                refData={ref}
-                caseId={caseId}
-                files={files.filter((f) => f.member_key === ref.member.name)}
-                draftFileIds={draftFileIds}
-                qa={qa.filter((q) => q.member_key === ref.member.name)}
-                busy={busyMembers[ref.member.name]}
-                accepted={isMemberAccepted(ref.team.id, ref.member)}
-                checkedOutputs={checkedOutputs}
-                onToggleOutput={(o) => toggleOutput(ref, o)}
-              />
-            ))}
+          )}
+        </div>
+
+        {/* ===== 交付草稿抽屉（BUGFIX #78 直填 + 2026-11 抽屉化）：
+            原本内嵌在专家区下方占 55% 高度，上下两个区都太矮；
+            改为右侧抽屉后专家卡保持可见，可边看审核意见边填表 ===== */}
+        {drafts.length > 0 && draftsOpen && (
+          <div
+            className="absolute bottom-0 right-0 top-0 z-30 flex flex-col border-l"
+            style={{
+              width: "min(560px, 54%)",
+              borderColor: "#d4d4d4",
+              backgroundColor: "#fafaf9",
+              boxShadow: "-8px 0 24px rgba(0,0,0,0.10)",
+            }}
+          >
+            <div
+              className="flex flex-shrink-0 items-center gap-2 border-b px-3 py-2"
+              style={{ borderColor: "#e0e0e0", backgroundColor: "#ffffff" }}
+            >
+              <span className="flex-shrink-0 text-2xs font-semibold" style={{ color: "#1f1f1f" }}>
+                📝 交付草稿
+              </span>
+              <span className="min-w-0 truncate text-[10px]" style={{ color: "#9ca3af" }}>
+                填写 → 提交专家审核 → 通过后并入交付物
+              </span>
+              <button
+                type="button"
+                onClick={() => setDraftsOpen(false)}
+                className="ml-auto flex-shrink-0 rounded px-1.5 py-0.5 text-[10px] hover:bg-[#f5f5f4]"
+                style={{ color: "#616161" }}
+                title="收起抽屉（草稿不会丢失，下次点提醒栏展开）"
+              >
+                ▸ 收起
+              </button>
+            </div>
+            {/* 草稿页签：一份草稿一个页签，不再上下接龙（BUGFIX #87） */}
+            <div
+              className="flex flex-shrink-0 items-end gap-1 overflow-x-auto border-b px-2 pt-1.5"
+              style={{ borderColor: "#e0e0e0", backgroundColor: "#ffffff" }}
+            >
+              {drafts.map((d) => {
+                const active = d.id === activeDraftId;
+                const lf = files.find((f) => f.id === d.file_id);
+                const dotColor =
+                  d.status === "passed"
+                    ? "#10a37f"
+                    : lf?.status === "rejected"
+                      ? "#cd3131"
+                      : lf?.status === "reviewing"
+                        ? "#0451a5"
+                        : "#9ca3af";
+                return (
+                  <button
+                    key={d.id}
+                    type="button"
+                    onClick={() => setActiveDraftId(d.id)}
+                    className="flex flex-shrink-0 items-center gap-1 rounded-t border px-2 py-1 text-[10px]"
+                    style={{
+                      backgroundColor: active ? "#ffffff" : "#f3f3f2",
+                      borderColor: active ? "#d4d4d4" : "transparent",
+                      color: active ? "#1f1f1f" : "#6b7280",
+                      fontWeight: active ? 600 : 400,
+                    }}
+                    title={d.title}
+                  >
+                    <span
+                      className={lf?.status === "reviewing" ? "animate-pulse" : ""}
+                      style={{ color: dotColor }}
+                    >
+                      ●
+                    </span>
+                    <span className="max-w-[160px] truncate">{d.title}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-3">
+              {activeDraft && (
+                <DraftFormCard
+                  key={activeDraft.id}
+                  draft={activeDraft}
+                  expanded={activeDraft.id === expandedDraftId}
+                  onExpandedChange={(v) => setExpandedDraftId(v ? activeDraft.id : "")}
+                />
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -568,10 +917,13 @@ function WorkflowBody({
         >
           <button
             type="button"
-            onClick={() => setDraftsOpen(true)}
+            onClick={() => {
+              setDraftsOpen(true);
+              setCabinetOpen(false);
+            }}
             className="rounded px-1.5 py-0.5 text-2xs font-semibold transition-colors hover:text-[#10a37f]"
             style={{ color: "#1f1f1f" }}
-            title="展开交付草稿区（启动时不自动弹出，避免遮挡办理区）"
+            title="展开交付草稿抽屉（启动时不自动弹出，避免遮挡办理区）"
           >
             📝 交付草稿（{drafts.length}）▸ 展开填写
           </button>
@@ -580,77 +932,7 @@ function WorkflowBody({
           </span>
         </div>
       )}
-      {drafts.length > 0 && draftsOpen && (
-        <div
-          className="flex-shrink-0 overflow-y-auto border-t px-3 py-2"
-          style={{ maxHeight: "55%", borderColor: "#e0e0e0", backgroundColor: "#fafaf9" }}
-        >
-          <div className="mb-1.5 flex items-center gap-2">
-            <span className="text-2xs font-semibold" style={{ color: "#1f1f1f" }}>
-              📝 交付草稿
-            </span>
-            <span className="text-[10px]" style={{ color: "#9ca3af" }}>
-              直接填写 → 提交给专家审核 → 通过后自动并入交付物
-            </span>
-            <button
-              type="button"
-              onClick={() => setDraftsOpen(false)}
-              className="ml-auto rounded px-1.5 py-0.5 text-[10px]"
-              style={{ color: "#616161" }}
-              title="收起草稿区（草稿不会丢失，下次点提醒栏展开）"
-            >
-              ▾ 收起
-            </button>
-          </div>
-          {/* 草稿页签：一份草稿一个页签，不再上下接龙（BUGFIX #87） */}
-          <div className="mb-1.5 flex items-end gap-1 overflow-x-auto">
-            {drafts.map((d) => {
-              const active = d.id === activeDraftId;
-              const lf = files.find((f) => f.id === d.file_id);
-              const dotColor =
-                d.status === "passed"
-                  ? "#10a37f"
-                  : lf?.status === "rejected"
-                    ? "#cd3131"
-                    : lf?.status === "reviewing"
-                      ? "#0451a5"
-                      : "#9ca3af";
-              return (
-                <button
-                  key={d.id}
-                  type="button"
-                  onClick={() => setActiveDraftId(d.id)}
-                  className="flex flex-shrink-0 items-center gap-1 rounded-t border px-2 py-1 text-[10px]"
-                  style={{
-                    backgroundColor: active ? "#ffffff" : "#f3f3f2",
-                    borderColor: active ? "#d4d4d4" : "transparent",
-                    color: active ? "#1f1f1f" : "#6b7280",
-                    fontWeight: active ? 600 : 400,
-                  }}
-                  title={d.title}
-                >
-                  <span
-                    className={
-                      lf?.status === "reviewing" ? "animate-pulse" : ""
-                    }
-                    style={{ color: dotColor }}
-                  >
-                    ●
-                  </span>
-                  <span className="max-w-[160px] truncate">{d.title}</span>
-                </button>
-              );
-            })}
-          </div>
-          {activeDraft && (
-            <DraftFormCard
-              key={activeDraft.id}
-              draft={activeDraft}
-              initialExpanded={activeDraft.id === lastDirectDraftId}
-            />
-          )}
-        </div>
-      )}
+      {/* 草稿区改为右侧抽屉，已上提至主体容器内，此处不再内嵌铺屏 */}
 
       {/* ===== 底部完成条：交叉比对提醒 + 生成交付物并导出 ===== */}
       <div
@@ -660,7 +942,9 @@ function WorkflowBody({
         <span className="min-w-0 flex-1 truncate text-2xs" style={{ color: "#616161" }}>
           {allAccepted
             ? "所有专家已验收通过，业务办理完成"
-            : `还有 ${allMembers.length - acceptedCount} 位专家未验收（交付标准逐项确认后才算验收）`}
+            : nextActions.length > 0
+              ? `还有 ${allMembers.length - acceptedCount} 位专家未验收 · 下一步：${nextActions[0].label}`
+              : `还有 ${allMembers.length - acceptedCount} 位专家未验收`}
         </span>
         {inconsistencies.length > 0 && (
           <span
@@ -704,6 +988,9 @@ function WorkflowBody({
       {cabinetOpen && (
         <DeliverableCabinet files={passedFiles} onClose={() => setCabinetOpen(false)} />
       )}
+
+      {/* ===== 系统合规审核报告（2026-11-05）：先过审核模块，有风险点才弹 ===== */}
+      {auditFile && <RiskAuditReportModal file={auditFile} onClose={dismissRiskAudit} />}
     </div>
   );
 }
@@ -807,6 +1094,10 @@ function ExpertCaseCard({
   const outputs = member.outputs ?? [];
   const passedFiles = files.filter((f) => f.status === "passed").length;
   const rejectedFiles = files.filter((f) => f.status === "rejected").length;
+  /** 提问框默认收起（2026-11 交互优化）：6 张卡常驻 6 个输入框噪音过大，
+      且产品主张「无需对话」，提问应作为次要入口按需展开 */
+  const [askOpen, setAskOpen] = useState(false);
+  const statusLine = expertStatusLine({ accepted, busy, files, outputs });
 
   const handlePickFiles = async (list: FileList | null): Promise<void> => {
     if (!list || list.length === 0) return;
@@ -853,7 +1144,7 @@ function ExpertCaseCard({
 
   return (
     <div
-      className="flex w-[360px] flex-shrink-0 flex-col overflow-hidden rounded-xl border"
+      className="flex h-full w-full flex-col overflow-hidden rounded-xl border"
       style={{
         borderColor: dragOver ? "#10a37f" : accepted ? "#10a37f66" : "#e0e0e0",
         backgroundColor: "#ffffff",
@@ -897,12 +1188,16 @@ function ExpertCaseCard({
         </div>
       </div>
 
-      {/* 打招呼语（拟人化：真人在帮你审核的感觉） */}
+      {/* 状态句（替掉静态问候语）：一眼看出这位专家此刻缺什么 / 卡在哪 */}
       <div
-        className="mx-3 mt-2 rounded-lg rounded-tl-none px-2.5 py-1.5 text-[10px] leading-relaxed"
-        style={{ backgroundColor: "#f2f7f5", color: "#4b5563" }}
+        className="mx-3 mt-2 rounded-lg px-2.5 py-1.5 text-[11px] leading-snug"
+        style={{
+          backgroundColor: statusLine.bg,
+          color: statusLine.color,
+          border: `1px solid ${statusLine.border}`,
+        }}
       >
-        “你好，我负责{member.role.replace(/[。，；].*$/, "")}。把材料传给我，我来帮你审核把关。”
+        {statusLine.text}
       </div>
 
       {/* 卡身：三段式（BUGFIX #81）—— 上传/交付标准固定常驻不被问答遮挡，
@@ -938,7 +1233,9 @@ function ExpertCaseCard({
 
           {/* 上传/审核中的思考动效 */}
           {busy === "uploading" && <AiThinkingIndicator compact label="上传材料中" />}
-          {busy === "reviewing" && <AiThinkingIndicator compact label={`${member.name}正在审核`} />}
+          {busy === "reviewing" && (
+            <AiThinkingIndicator compact label={`${member.name}正在审核 · 先过系统合规审核`} />
+          )}
 
           {/* 材料文件列表（多份时区内自滚，入口与交付标准仍常驻） */}
           {files.length > 0 && (
@@ -1034,21 +1331,22 @@ function ExpertCaseCard({
           )}
         </div>
 
-        {/* ③ 常驻区：提问框固定底部 */}
-        <div className="flex-shrink-0 border-t px-3 py-2" style={{ borderColor: "#f0f0f0" }}>
+        {/* ③ 常驻区：提问入口（默认收起，按需展开 —— 避免 6 个输入框压过材料区） */}
+        <div className="flex-shrink-0 border-t px-3 py-1.5" style={{ borderColor: "#f0f0f0" }}>
           {busy === "asking" ? (
             <AiThinkingIndicator compact label={`${member.name}思考中`} />
-          ) : (
+          ) : askOpen ? (
             <div className="flex items-center gap-1.5">
               <input
                 type="text"
+                autoFocus
                 value={question}
                 onChange={(e) => setQuestion(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") void handleAsk();
                 }}
                 placeholder={`向${member.name}提问…（回车发送）`}
-                className="flex-1 rounded border px-2 py-1 text-2xs outline-none focus:border-[#10a37f]"
+                className="min-w-0 flex-1 rounded border px-2 py-1 text-2xs outline-none focus:border-[#10a37f]"
                 style={{
                   backgroundColor: "#ffffff",
                   borderColor: "#e0e0e0",
@@ -1059,12 +1357,35 @@ function ExpertCaseCard({
                 type="button"
                 onClick={() => void handleAsk()}
                 disabled={!question.trim()}
-                className="rounded px-2 py-1 text-2xs font-semibold disabled:opacity-40"
+                className="flex-shrink-0 rounded px-2 py-1 text-2xs font-semibold disabled:opacity-40"
                 style={{ backgroundColor: "#10a37f", color: "#ffffff" }}
               >
-                问专家
+                发送
+              </button>
+              <button
+                type="button"
+                onClick={() => setAskOpen(false)}
+                className="flex-shrink-0 rounded px-1 py-1 text-[10px]"
+                style={{ color: "#9ca3af" }}
+                title="收起提问框"
+              >
+                ✕
               </button>
             </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setAskOpen(true)}
+              className="flex w-full items-center gap-1 rounded px-1 py-0.5 text-[10px] transition-colors hover:text-[#10a37f]"
+              style={{ color: "#9ca3af" }}
+              title={`向${member.name}追问（可选，材料优先）`}
+            >
+              <span aria-hidden="true">💬</span>
+              向{member.name}追问
+              {qa.length > 0 && (
+                <span style={{ color: "#0451a5" }}>· 已有 {qa.length} 条问答</span>
+              )}
+            </button>
           )}
         </div>
       </div>
@@ -1419,20 +1740,29 @@ function splitReviewNotes(note: string): string[] {
 
 function DraftFormCard({
   draft,
-  initialExpanded = false,
+  expanded,
+  onExpandedChange,
 }: {
   draft: OpsCaseDraft;
-  /** 直开草稿（点交付物创建）默认全屏展开，强化「弹出表单」感知 */
-  initialExpanded?: boolean;
+  /** 全屏填写由面板持有：直开草稿只自动展开一次，页签切换不重复弹出 */
+  expanded: boolean;
+  onExpandedChange: (v: boolean) => void;
 }): JSX.Element {
   const [values, setValues] = useState<Record<string, string>>(draft.values ?? {});
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [snapshotOpen, setSnapshotOpen] = useState(false);
-  // 全屏填写（BUGFIX #85）：大表单铺开填，不受卡片宽度限制
-  const [expanded, setExpanded] = useState(initialExpanded);
   // file 类型字段选中的文件（提交时自动作为材料上传给出题专家）
   const [draftFiles, setDraftFiles] = useState<Record<string, File>>({});
+  // 上传文件 OCR 自动填入（2026-11-05）：识别结果直接落到字段，可一键撤销
+  const [ocrBusy, setOcrBusy] = useState(false);
+  const [ocrNote, setOcrNote] = useState("");
+  const [ocrError, setOcrError] = useState("");
+  const [ocrPreview, setOcrPreview] = useState("");
+  const [ocrPreviewOpen, setOcrPreviewOpen] = useState(false);
+  const [ocrFilled, setOcrFilled] = useState<Set<string>>(() => new Set());
+  const [ocrUndo, setOcrUndo] = useState<Record<string, string> | null>(null);
+  const ocrInputRef = useRef<HTMLInputElement>(null);
   const linkedFile = useOpsCaseStore((s) =>
     s.files.find((f) => f.id === draft.file_id),
   );
@@ -1483,6 +1813,57 @@ function DraftFormCard({
     setSubmitting(false);
   };
 
+  // 上传文件 → 本地 OCR/文档解析 → 模型抽字段 → 自动填入（覆盖已有值可撤销）
+  const handleOcrPick = async (file: File | undefined): Promise<void> => {
+    if (!file || ocrBusy) return;
+    setOcrBusy(true);
+    setOcrError("");
+    setOcrNote("");
+    setOcrPreview("");
+    setOcrPreviewOpen(false);
+    try {
+      const r = await useOpsCaseStore.getState().ocrFillDraft(draft.id, file);
+      const names = new Set(draft.template.map((f) => f.name));
+      const incoming = Object.entries(r.values).filter(([k, v]) => names.has(k) && v.trim());
+      setOcrPreview(r.text_preview);
+      if (incoming.length === 0) {
+        setOcrNote(
+          `已识别「${file.name}」（${r.text_chars} 字），但没找到能对应到表单的字段，请手动填写或换一份材料`,
+        );
+        return;
+      }
+      // 覆盖前留快照，支持一键撤销
+      const overwritten = incoming.filter(
+        ([k, v]) => (values[k] ?? "").trim() !== "" && values[k] !== v,
+      ).length;
+      setOcrUndo({ ...values });
+      const merged = { ...values };
+      for (const [k, v] of incoming) merged[k] = v;
+      setValues(merged);
+      setOcrFilled((s) => new Set([...s, ...incoming.map(([k]) => k)]));
+      setOcrNote(
+        `已从「${file.name}」自动填入 ${incoming.length} 项` +
+          (overwritten > 0 ? `（覆盖 ${overwritten} 项原有内容，可撤销）` : "") +
+          ` · ${r.source === "llm" ? "模型抽取" : "规则兑底"}，请核对后提交`,
+      );
+      void useOpsCaseStore.getState().saveDraft(draft.id, merged);
+    } catch (e) {
+      setOcrError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setOcrBusy(false);
+      if (ocrInputRef.current) ocrInputRef.current.value = "";
+    }
+  };
+
+  const handleOcrUndo = (): void => {
+    if (!ocrUndo) return;
+    setValues(ocrUndo);
+    setOcrFilled(new Set());
+    setOcrUndo(null);
+    setOcrNote("已撤销本次 OCR 自动填入");
+    void useOpsCaseStore.getState().saveDraft(draft.id, ocrUndo);
+  };
+
   // 必填进度（全屏页头进度条 + 页脚提示，BUGFIX #93 设计感）
   const requiredFields = draft.template.filter((f) => f.required);
   const filledRequired = requiredFields.filter((f) =>
@@ -1530,6 +1911,15 @@ function DraftFormCard({
                 {expanded ? "🔄 自动预填" : "自动预填"}
               </span>
             )}
+            {ocrFilled.has(f.name) && (
+              <span
+                className="rounded px-1 text-[9px]"
+                style={{ backgroundColor: "#e6f6f0", color: "#059669" }}
+                title="由上传文件 OCR 识别自动填入，请核对后提交"
+              >
+                {expanded ? "📄 OCR 填入" : "OCR 填入"}
+              </span>
+            )}
           </label>
           <DraftFieldInput
             field={f}
@@ -1537,7 +1927,16 @@ function DraftFormCard({
             fileName={draftFiles[f.name]?.name}
             disabled={passed || saving || submitting}
             expanded={expanded}
-            onChange={(v) => setValues((prev) => ({ ...prev, [f.name]: v }))}
+            onChange={(v) => {
+              setValues((prev) => ({ ...prev, [f.name]: v }));
+              // 用户手工改过的字段撤掉 OCR 徽标（表示已人工确认）
+              setOcrFilled((s) => {
+                if (!s.has(f.name)) return s;
+                const next = new Set(s);
+                next.delete(f.name);
+                return next;
+              });
+            }}
             onFilePick={(file) => {
               setDraftFiles((prev) => ({ ...prev, [f.name]: file }));
               setValues((prev) => ({ ...prev, [f.name]: file.name }));
@@ -1581,6 +1980,84 @@ function DraftFormCard({
           </div>
         ))}
       </div>
+    </div>
+  );
+
+  // 上传文件 OCR 自动填入条（所有专家表单通用，2026-11-05）：
+  // 点按钮选文件 → 本地 OCR/文档解析 → 模型抽字段 → 自动填，可撤销/看识别原文。
+  const ocrBar = !passed && (
+    <div
+      className={expanded ? "rounded-xl border p-4" : "mb-1.5 rounded border p-1.5"}
+      style={{
+        borderColor: ocrError ? "#f3c8c8" : "#e3efe9",
+        backgroundColor: ocrError ? "#fdf3f3" : "#f7fbf9",
+      }}
+    >
+      <input
+        ref={ocrInputRef}
+        type="file"
+        accept=".png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff,.pdf,.doc,.docx,.txt,.md,.csv,.html,.htm,.xlsx,.pptx"
+        className="hidden"
+        onChange={(e) => void handleOcrPick(e.target.files?.[0])}
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => ocrInputRef.current?.click()}
+          disabled={ocrBusy || saving || submitting}
+          className={expanded ? "btn btn-primary btn-md" : "btn btn-primary btn-sm"}
+          title="上传已填好的纸质单据/证照照片、扫描件或电子文档，自动识别并填入表单"
+        >
+          {ocrBusy ? "⏳ 识别并提取中…" : "📄 上传文件 OCR 自动填入"}
+        </button>
+        <span className="text-[10px]" style={{ color: "#6b7280" }}>
+          {ocrBusy
+            ? "本地 OCR + 模型抽取，扫描件约需 10-30 秒，请稍候"
+            : "支持图片 / PDF / Word / Excel / PPT / 文本；识别结果自动填入，可撤销"}
+        </span>
+        {ocrUndo && !ocrBusy && (
+          <button
+            type="button"
+            onClick={handleOcrUndo}
+            className="btn btn-ghost btn-xs"
+            title="撤销本次识别填入的值（恢复到上传前）"
+          >
+            ↩ 撤销本次识别
+          </button>
+        )}
+        {ocrPreview && (
+          <button
+            type="button"
+            onClick={() => setOcrPreviewOpen((v) => !v)}
+            className="btn btn-ghost btn-xs"
+          >
+            {ocrPreviewOpen ? "▾ 收起识别文本" : "▸ 查看识别文本"}
+          </button>
+        )}
+      </div>
+      {ocrError ? (
+        <div className={expanded ? "mt-2 text-[11px]" : "mt-1 text-[10px]"} style={{ color: "#b91c1c" }}>
+          识别失败：{ocrError}
+        </div>
+      ) : (
+        ocrNote && (
+          <div
+            className={expanded ? "mt-2 text-[11px]" : "mt-1 text-[10px]"}
+            style={{ color: "#059669" }}
+          >
+            {ocrNote}
+          </div>
+        )
+      )}
+      {ocrPreviewOpen && ocrPreview && (
+        <pre
+          className="mt-2 max-h-40 overflow-auto rounded border p-2 text-[10px] whitespace-pre-wrap"
+          style={{ borderColor: "#e7e5e4", backgroundColor: "#fafaf9", color: "#4b5563" }}
+        >
+          {ocrPreview}
+          {ocrPreview.length >= 800 ? "\n…（仅预览前 800 字）" : ""}
+        </pre>
+      )}
     </div>
   );
 
@@ -1656,7 +2133,7 @@ function DraftFormCard({
             </span>
             <button
               type="button"
-              onClick={() => setExpanded(false)}
+              onClick={() => onExpandedChange(false)}
               className="flex-shrink-0 rounded-md border px-2 py-1 text-[10px] transition-colors hover:bg-[#f5f5f4]"
               style={{ borderColor: "#d4d4d4", color: "#616161", backgroundColor: "#ffffff" }}
               title="退出全屏填写"
@@ -1674,6 +2151,7 @@ function DraftFormCard({
               </div>
             )}
             {notesBlock}
+            {ocrBar}
             <div
               className="rounded-xl border bg-white p-6"
               style={{ borderColor: "#e7e5e4", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}
@@ -1721,8 +2199,7 @@ function DraftFormCard({
                   type="button"
                   onClick={() => void handleSave()}
                   disabled={saving || submitting}
-                  className="rounded-md border px-4 py-1.5 text-2xs transition-colors hover:bg-[#f5f5f4] disabled:opacity-50"
-                  style={{ borderColor: "#d4d4d4", color: "#616161", backgroundColor: "#ffffff" }}
+                  className="btn btn-secondary btn-md"
                 >
                   {saving ? "保存中…" : "暂存"}
                 </button>
@@ -1730,12 +2207,7 @@ function DraftFormCard({
                   type="button"
                   onClick={() => void handleSubmit()}
                   disabled={submitting || missing.length > 0}
-                  className="rounded-md px-5 py-1.5 text-2xs font-semibold transition-colors hover:bg-[#0e9272] disabled:opacity-50"
-                  style={{
-                    backgroundColor: "#10a37f",
-                    color: "#ffffff",
-                    boxShadow: "0 1px 3px rgba(16,163,127,0.35)",
-                  }}
+                  className="btn btn-success btn-md"
                   title={submitTitle}
                 >
                   {submitLabel}
@@ -1773,9 +2245,8 @@ function DraftFormCard({
         </span>
         <button
           type="button"
-          onClick={() => setExpanded(true)}
-          className="ml-auto flex-shrink-0 rounded border px-1.5 py-0.5 text-[10px]"
-          style={{ borderColor: "#d4d4d4", color: "#0451a5", backgroundColor: "#ffffff" }}
+          onClick={() => onExpandedChange(true)}
+          className="ml-auto flex-shrink-0 btn btn-secondary btn-xs"
           title="全屏填写（空间更大）"
         >
           ⛶ 全屏
@@ -1788,6 +2259,7 @@ function DraftFormCard({
           {statusBadge.label}
         </span>
       </div>
+      {ocrBar}
       {fieldGrid}
       {/* 打回重提对照（BUGFIX #79）：展开上次提交内容，知道自己改哪里 */}
       {rejected && draft.last_snapshot && (
@@ -1816,8 +2288,7 @@ function DraftFormCard({
             type="button"
             onClick={() => void handleSave()}
             disabled={saving || submitting}
-            className="rounded border px-3 py-1 text-2xs disabled:opacity-50"
-            style={{ borderColor: "#d4d4d4", color: "#616161", backgroundColor: "#ffffff" }}
+            className="btn btn-secondary btn-sm"
           >
             {saving ? "保存中…" : "暂存"}
           </button>
@@ -1825,8 +2296,7 @@ function DraftFormCard({
             type="button"
             onClick={() => void handleSubmit()}
             disabled={submitting || missing.length > 0}
-            className="rounded px-3 py-1 text-2xs font-semibold disabled:opacity-50"
-            style={{ backgroundColor: "#10a37f", color: "#ffffff" }}
+            className="btn btn-success btn-sm"
             title={submitTitle}
           >
             {submitLabel}
@@ -1858,21 +2328,38 @@ function CaseFileRow({
 }): JSX.Element {
   const [noteExpanded, setNoteExpanded] = useState(false);
   const [marksOpen, setMarksOpen] = useState(false);
+  /** 材料详情默认折叠（2026-11 交互优化）：行内只留「文件名 + 状态 + 警示」，
+      审核意见/关键要素/证据链/人工改判点开才看 —— 否则单张专家卡会被一份材料撑满。
+      被打回的材料默认展开，因为用户第一件事就是看为什么被打回。 */
+  const [detailOpen, setDetailOpen] = useState(file.status === "rejected");
   const meta = CASE_FILE_STATUS_META[file.status];
   const overrideFile = useOpsCaseStore((s) => s.overrideFile);
   const deleteFile = useOpsCaseStore((s) => s.deleteFile);
   const reviewFile = useOpsCaseStore((s) => s.reviewFile);
+  /** 行内警示：低置信要素数 + 合规风险点（收起状态下也要能看到，否则等于没提醒） */
+  const lowConfCount = (file.extracted_fields ?? []).filter((f) => f.confidence < 0.6).length;
+  const riskCount = file.risk_report?.findings?.length ?? 0;
 
   return (
     <div
       className="rounded-lg border px-2 py-1"
       style={{ borderColor: "#e7e5e4", backgroundColor: "#fafaf9" }}
     >
-      <div className="flex items-center gap-1.5">
-        <span aria-hidden="true">📄</span>
-        <span className="min-w-0 flex-1 truncate text-2xs" style={{ color: "#202124" }} title={file.file_name}>
-          {file.file_name}
-        </span>
+      {/* 摘要行：点文件名展开详情 */}
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => setDetailOpen((v) => !v)}
+          className="flex min-w-0 flex-1 items-center gap-1 text-left"
+          title={detailOpen ? "收起材料详情" : "展开审核意见 / 关键要素 / 审核依据"}
+        >
+          <span className="flex-shrink-0 text-[9px]" style={{ color: "#9ca3af" }} aria-hidden="true">
+            {detailOpen ? "▾" : "▸"}
+          </span>
+          <span className="min-w-0 truncate text-2xs" style={{ color: "#202124" }}>
+            {file.file_name}
+          </span>
+        </button>
         <span
           className="flex-shrink-0 rounded-full px-1.5 text-[10px] font-semibold"
           style={{ backgroundColor: `${meta.color}18`, color: meta.color }}
@@ -1880,137 +2367,164 @@ function CaseFileRow({
           {meta.icon} {meta.label}
           {file.reviewed_by === "ai" ? " · AI" : file.reviewed_by === "human" ? " · 人工" : ""}
         </span>
-        {(file.status === "pending" || file.status === "rejected") && (
-          <button
-            type="button"
-            onClick={() => void reviewFile(file.id)}
-            className="flex-shrink-0 text-[10px]"
-            style={{ color: "#0451a5" }}
-            title="让 AI 专家重新审核"
-          >
-            ↻ 重审
-          </button>
-        )}
-        {/* 打回定位入口（BUGFIX #80）：在文档内高亮问题位置，知道改哪里 */}
-        {file.status === "rejected" && (file.reject_marks?.length ?? 0) > 0 && (
-          <button
-            type="button"
-            onClick={() => setMarksOpen(true)}
+        {lowConfCount > 0 && (
+          <span
             className="flex-shrink-0 text-[10px] font-semibold"
             style={{ color: "#cd3131" }}
-            title="在文档内高亮打回位置与修改建议"
+            title={`${lowConfCount} 项低置信要素，展开后标红，请人工核对`}
           >
-            📍 {file.reject_marks!.length} 处打回
-          </button>
+            ⚠{lowConfCount}
+          </span>
         )}
-        {file.status !== "passed" && (
+        {/* 系统合规审核风险入口（2026-11-05）：有风险点才显示，点开回看报告与原文证据 */}
+        {riskCount > 0 && (
           <button
             type="button"
-            onClick={() => void overrideFile(file.id, "passed", "人工验收通过")}
-            className="flex-shrink-0 text-[10px]"
-            style={{ color: "#059669" }}
-            title="人工改判为通过"
+            onClick={() => useOpsCaseStore.getState().showRiskAudit(file.id)}
+            className="flex-shrink-0 text-[10px] font-semibold"
+            style={{ color: "#cd3131" }}
+            title="查看系统合规审核报告（风险点 + 原文证据）"
           >
-            ✓ 通过
+            ⚠ 合规风险 {riskCount}
           </button>
         )}
-        {file.status !== "rejected" && (
-          <button
-            type="button"
-            onClick={() => void overrideFile(file.id, "rejected", "人工打回")}
-            className="flex-shrink-0 text-[10px]"
-            style={{ color: "#b25c1a" }}
-            title="人工改判为打回"
-          >
-            ✗ 打回
-          </button>
-        )}
-        <button
-          type="button"
-          onClick={() => void deleteFile(file.id)}
-          className="flex-shrink-0 text-[10px]"
-          style={{ color: "#cd3131" }}
-          title="删除材料"
-        >
-          ✕
-        </button>
       </div>
-      {/* 审核步骤链：接收→解析→提取→结论，过程可见（BUGFIX #79） */}
-      <ReviewSteps file={file} />
-      {/* 审核意见：专家口吻气泡（长文点击展开/收起）；草稿材料的意见在草稿卡展示 */}
-      {file.review_note && file.status !== "reviewing" && !draftLinked && (
-        <div className="mt-1 flex items-start gap-1.5">
-          <ExpertAvatar name={expertName} accepted={false} size={18} />
-          <div
-            onClick={() => setNoteExpanded((v) => !v)}
-            className="min-w-0 flex-1 whitespace-pre-wrap rounded-lg rounded-tl-none border px-2 py-1 text-[10px]"
-            style={{
-              borderColor: file.status === "rejected" ? "#f3d9d9" : "#e3efe9",
-              backgroundColor: file.status === "rejected" ? "#fdf5f5" : "#f2f7f5",
-              color: "#374151",
-              cursor: "pointer",
-              display: "-webkit-box",
-              WebkitLineClamp: noteExpanded ? undefined : 3,
-              WebkitBoxOrient: "vertical",
-              overflow: "hidden",
-            }}
-            title="点击展开/收起审核意见"
-          >
-            {file.review_note}
-          </div>
-        </div>
-      )}
-      {/* 关键要素卡（厚资料变薄数据，2026-08-10）：低置信标红置顶，员工只核标红项 */}
-      {(file.extracted_fields?.length ?? 0) > 0 && (
-        <div
-          className="mt-1 rounded-lg border px-2 py-1"
-          style={{ borderColor: "#f0efed", backgroundColor: "#ffffff" }}
-        >
-          <div className="mb-0.5 text-[10px] font-semibold" style={{ color: "#6b7280" }}>
-            关键要素
-            <span className="ml-1 font-normal" style={{ color: "#9ca3af" }}>
-              （标红项置信度低，请重点核对）
-            </span>
-          </div>
-          <div className="flex flex-wrap gap-1">
-            {[...(file.extracted_fields ?? [])]
-              .sort((a, b) => a.confidence - b.confidence)
-              .map((f, i) => {
-                const low = f.confidence < 0.6;
-                return (
-                  <span
-                    key={`${f.field}-${i}`}
-                    className="rounded px-1.5 py-0.5 text-[10px]"
-                    style={{
-                      backgroundColor: low ? "#fdf0f0" : "#f3f6f5",
-                      border: `1px solid ${low ? "#e8b4b4" : "#e2e8e6"}`,
-                      color: low ? "#cd3131" : "#374151",
-                    }}
-                    title={`置信度 ${(f.confidence * 100).toFixed(0)}%${low ? " · 低置信，请人工核对" : ""}`}
-                  >
-                    {low && "⚠ "}
-                    {f.field}：{f.value}
-                  </span>
-                );
-              })}
-          </div>
-        </div>
-      )}
-      {/* 证据链（防黑盒不信任）：审核依据的原文摘录，员工可自己验真 */}
-      {(file.evidence?.length ?? 0) > 0 && (
-        <div className="mt-1 space-y-0.5">
-          <div className="text-[10px] font-semibold" style={{ color: "#6b7280" }}>
-            审核依据（原文摘录）
-          </div>
-          {(file.evidence ?? []).map((s, i) => (
-            <div
-              key={i}
-              className="border-l-2 pl-1.5 text-[10px]"
-              style={{ borderColor: "#10a37f66", color: "#4b5563" }}
-            >
-              “{s}”
+      {detailOpen && (
+        <div className="mt-1 space-y-1">
+          {/* 审核步骤链：接收→解析→提取→结论，过程可见（BUGFIX #79） */}
+          <ReviewSteps file={file} />
+          {/* 审核意见：专家口吻气泡（长文点击展开/收起）；草稿材料的意见在草稿卡展示 */}
+          {file.review_note && file.status !== "reviewing" && !draftLinked && (
+            <div className="mt-1 flex items-start gap-1.5">
+              <ExpertAvatar name={expertName} accepted={false} size={18} />
+              <div
+                onClick={() => setNoteExpanded((v) => !v)}
+                className="min-w-0 flex-1 whitespace-pre-wrap rounded-lg rounded-tl-none border px-2 py-1 text-[10px]"
+                style={{
+                  borderColor: file.status === "rejected" ? "#f3d9d9" : "#e3efe9",
+                  backgroundColor: file.status === "rejected" ? "#fdf5f5" : "#f2f7f5",
+                  color: "#374151",
+                  cursor: "pointer",
+                  display: "-webkit-box",
+                  WebkitLineClamp: noteExpanded ? undefined : 3,
+                  WebkitBoxOrient: "vertical",
+                  overflow: "hidden",
+                }}
+                title="点击展开/收起审核意见"
+              >
+                {file.review_note}
+              </div>
             </div>
-          ))}
+          )}
+          {/* 关键要素卡（厚资料变薄数据，2026-08-10）：低置信标红置顶，员工只核标红项 */}
+          {(file.extracted_fields?.length ?? 0) > 0 && (
+            <div
+              className="mt-1 rounded-lg border px-2 py-1"
+              style={{ borderColor: "#f0efed", backgroundColor: "#ffffff" }}
+            >
+              <div className="mb-0.5 text-[10px] font-semibold" style={{ color: "#6b7280" }}>
+                关键要素
+                <span className="ml-1 font-normal" style={{ color: "#9ca3af" }}>
+                  （标红项置信度低，请重点核对）
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {[...(file.extracted_fields ?? [])]
+                  .sort((a, b) => a.confidence - b.confidence)
+                  .map((f, i) => {
+                    const low = f.confidence < 0.6;
+                    return (
+                      <span
+                        key={`${f.field}-${i}`}
+                        className="rounded px-1.5 py-0.5 text-[10px]"
+                        style={{
+                          backgroundColor: low ? "#fdf0f0" : "#f3f6f5",
+                          border: `1px solid ${low ? "#e8b4b4" : "#e2e8e6"}`,
+                          color: low ? "#cd3131" : "#374151",
+                        }}
+                        title={`置信度 ${(f.confidence * 100).toFixed(0)}%${low ? " · 低置信，请人工核对" : ""}`}
+                      >
+                        {low && "⚠ "}
+                        {f.field}：{f.value}
+                      </span>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
+          {/* 证据链（防黑盒不信任）：审核依据的原文摘录，员工可自己验真 */}
+          {(file.evidence?.length ?? 0) > 0 && (
+            <div className="mt-1 space-y-0.5">
+              <div className="text-[10px] font-semibold" style={{ color: "#6b7280" }}>
+                审核依据（原文摘录）
+              </div>
+              {(file.evidence ?? []).map((s, i) => (
+                <div
+                  key={i}
+                  className="border-l-2 pl-1.5 text-[10px]"
+                  style={{ borderColor: "#10a37f66", color: "#4b5563" }}
+                >
+                  “{s}”
+                </div>
+              ))}
+            </div>
+          )}
+          {/* 人工干预（改判/重审/打回定位）收在详情区，避免摘要行被按钮挤爆 */}
+          <div className="flex flex-wrap items-center gap-2 pt-0.5">
+            {(file.status === "pending" || file.status === "rejected") && (
+              <button
+                type="button"
+                onClick={() => void reviewFile(file.id)}
+                className="text-[10px]"
+                style={{ color: "#0451a5" }}
+                title="让 AI 专家重新审核"
+              >
+                ↻ 重审
+              </button>
+            )}
+            {file.status === "rejected" && (file.reject_marks?.length ?? 0) > 0 && (
+              <button
+                type="button"
+                onClick={() => setMarksOpen(true)}
+                className="text-[10px] font-semibold"
+                style={{ color: "#cd3131" }}
+                title="在文档内高亮打回位置与修改建议"
+              >
+                📍 {file.reject_marks!.length} 处打回
+              </button>
+            )}
+            {file.status !== "passed" && (
+              <button
+                type="button"
+                onClick={() => void overrideFile(file.id, "passed", "人工验收通过")}
+                className="text-[10px]"
+                style={{ color: "#059669" }}
+                title="人工改判为通过"
+              >
+                ✓ 通过
+              </button>
+            )}
+            {file.status !== "rejected" && (
+              <button
+                type="button"
+                onClick={() => void overrideFile(file.id, "rejected", "人工打回")}
+                className="text-[10px]"
+                style={{ color: "#b25c1a" }}
+                title="人工改判为打回"
+              >
+                ✗ 打回
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => void deleteFile(file.id)}
+              className="text-[10px]"
+              style={{ color: "#cd3131" }}
+              title="删除材料"
+            >
+              ✕ 删除
+            </button>
+          </div>
         </div>
       )}
       {marksOpen && <RejectMarkPreview file={file} onClose={() => setMarksOpen(false)} />}

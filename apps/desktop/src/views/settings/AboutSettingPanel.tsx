@@ -143,8 +143,7 @@ export function AboutSettingPanel(): JSX.Element {
             type="button"
             onClick={() => void onExportLogs()}
             disabled={exporting}
-            className="rounded px-3 py-1 text-2xs font-medium text-white transition-colors disabled:opacity-50"
-            style={{ backgroundColor: exporting ? '#9aa0a6' : '#0e639c' }}
+            className="btn btn-primary btn-sm"
             title="把 Rust + Python 两侧全部日志打包成 zip，方便发给支持人员"
           >
             {exporting ? '导出中…' : '📦 一键导出全部日志'}

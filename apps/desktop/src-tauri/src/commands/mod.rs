@@ -1,4 +1,5 @@
 //! Tauri command surface (one module per logical group).
+pub mod agent_http;    // 转发 Agent HTTP 的公共执行逻辑（幂等 GET 瞬时错误重试）
 pub mod agent;
 pub mod asset;
 pub mod audit;

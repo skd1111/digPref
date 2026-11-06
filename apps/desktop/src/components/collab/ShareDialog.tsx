@@ -11,6 +11,16 @@ import { useState } from 'react';
 import { useCollabStore, formatRelativeTime } from '@/store/collabStore';
 import { ANCHOR_LABELS, USER_BY_ID } from '@/types/collab';
 import { useDictOptions } from '@/hooks/useDictOptions';
+import {
+  BulbIcon,
+  CheckIcon,
+  CloseIcon,
+  CopyIcon,
+  MessageIcon,
+  ShareIcon,
+  WarningIcon,
+} from '@/components/ui/Icons';
+import { ANCHOR_TYPE_ICONS } from '@/components/collab/anchorTypeIcons';
 
 interface ShareDialogProps {
   contextId: string;
@@ -46,6 +56,7 @@ export function ShareDialog({ contextId, onClose }: ShareDialogProps): JSX.Eleme
   if (!ctx) return <></>;
 
   const meta = ANCHOR_LABELS[ctx.anchor_type];
+  const AnchorIcon = ANCHOR_TYPE_ICONS[ctx.anchor_type];
 
   const handleShare = (key: string): void => {
     setChosen(key);
@@ -80,16 +91,18 @@ export function ShareDialog({ contextId, onClose }: ShareDialogProps): JSX.Eleme
           className="flex items-center justify-between border-b px-4 py-3"
           style={{ borderColor: '#d4d4d4' }}
         >
-          <h3 className="text-ui font-semibold" style={{ color: '#1f1f1f' }}>
-            📤 分享到企业 IM
+          <h3 className="flex items-center gap-1 text-ui font-semibold" style={{ color: '#1f1f1f' }}>
+            <ShareIcon size={14} />
+            分享到企业 IM
           </h3>
           <button
             type="button"
             onClick={onClose}
             className="rounded px-2 py-0.5 text-2xs transition-colors"
             style={{ color: '#616161' }}
+            aria-label="关闭"
           >
-            ✕
+            <CloseIcon size={13} />
           </button>
         </div>
 
@@ -104,7 +117,8 @@ export function ShareDialog({ contextId, onClose }: ShareDialogProps): JSX.Eleme
                 className="rounded px-1.5 py-0.5 text-2xs font-semibold"
                 style={{ backgroundColor: meta.color, color: '#0e0e0e' }}
               >
-                {meta.icon} {meta.label}
+                <AnchorIcon size={11} />
+                {meta.label}
               </span>
               <span className="text-2xs" style={{ color: '#616161' }}>
                 {ctx.target_env ? `[${ctx.target_env}]` : ''}
@@ -136,7 +150,10 @@ export function ShareDialog({ contextId, onClose }: ShareDialogProps): JSX.Eleme
               </div>
               <span>{ctx.participant_names.length} 参与者</span>
               <span>·</span>
-              <span>💬 {ctx.comment_count} 条讨论</span>
+              <span className="flex items-center gap-1">
+                <MessageIcon size={12} />
+                {ctx.comment_count} 条讨论
+              </span>
               <span>·</span>
               <span>{formatRelativeTime(ctx.updated_at)}</span>
             </div>
@@ -156,15 +173,20 @@ export function ShareDialog({ contextId, onClose }: ShareDialogProps): JSX.Eleme
             )}
             {deepLink && (
               <div
-                className="mt-2 rounded p-2 text-2xs"
+                className="mt-2 flex items-start gap-1 rounded p-2 text-2xs"
                 style={{
                   backgroundColor: 'rgba(99, 102, 241, 0.10)',
                   border: '1px solid #6366f1',
                   color: '#4f46e5',
                 }}
               >
-                💡 收件人点击链接 → OS 唤起本地 EAIDE → 自动跳转到讨论页。
-                Deep Link 一次性 token，5 分钟内有效。
+                <span className="mt-0.5 flex-shrink-0" aria-hidden="true">
+                  <BulbIcon size={12} />
+                </span>
+                <span>
+                  收件人点击链接 → OS 唤起本地 EAIDE → 自动跳转到讨论页。
+                  Deep Link 一次性 token，5 分钟内有效。
+                </span>
               </div>
             )}
           </div>
@@ -203,7 +225,17 @@ export function ShareDialog({ contextId, onClose }: ShareDialogProps): JSX.Eleme
                   color: '#ffffff',
                 }}
               >
-                {copied ? '✓ 已复制' : '📋 复制 Deep Link'}
+                {copied ? (
+                  <span className="flex items-center gap-1">
+                    <CheckIcon size={12} />
+                    已复制
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1">
+                    <CopyIcon size={12} />
+                    复制 Deep Link
+                  </span>
+                )}
               </button>
               <button
                 type="button"
@@ -220,13 +252,18 @@ export function ShareDialog({ contextId, onClose }: ShareDialogProps): JSX.Eleme
             </div>
           ) : (
             <div
-              className="mt-3 rounded p-2 text-center text-2xs"
+              className="mt-3 flex items-start gap-1 rounded p-2 text-center text-2xs"
               style={{
                 backgroundColor: 'rgba(220, 220, 170, 0.10)',
                 color: '#795e26',
               }}
             >
-              ⚠ 分享功能即将上线（Phase 8 集成企微/钉钉/飞书 Webhook）。当前 MVP 可生成 Deep Link 供测试。
+              <span className="mt-0.5 flex-shrink-0" aria-hidden="true">
+                <WarningIcon size={12} />
+              </span>
+              <span>
+                分享功能即将上线（Phase 8 集成企微/钉钉/飞书 Webhook）。当前 MVP 可生成 Deep Link 供测试。
+              </span>
             </div>
           )}
         </div>

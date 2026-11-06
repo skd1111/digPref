@@ -9,6 +9,7 @@
  */
 import type { FileOperation } from '@eaide/shared-protocol';
 import { baseName } from './fileRef';
+import { FileIcon } from '@/components/ui/Icons';
 
 const MAX_RENDER_LINES = 120;
 
@@ -43,7 +44,10 @@ export function FileDiffTooltip({
         className="flex items-center justify-between border-b px-3 py-1.5 text-2xs font-semibold"
         style={{ borderColor: '#e0e0e0', color: '#1f1f1f', backgroundColor: '#f3f3f3' }}
       >
-        <span className="truncate">📄 {baseName(op.path)}</span>
+        <span className="flex items-center gap-1 truncate">
+          <FileIcon size={12} />
+          {baseName(op.path)}
+        </span>
         <span style={{ color: '#616161' }}>
           <span style={{ color: '#059669' }}>+{op.lines_added}</span>
           {'  '}

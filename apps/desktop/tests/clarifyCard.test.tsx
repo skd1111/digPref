@@ -36,10 +36,9 @@ const SINGLE_Q2: ClarifyQuestion = {
 };
 
 function optionButtons(container: HTMLElement): HTMLButtonElement[] {
-  // 选项按钮 = 带 ◉/○/☑/☐ 标记的按钮（排除页签「问题 n」与「发送回答」）
-  return Array.from(container.querySelectorAll('button')).filter((b) =>
-    /[◉○☑☐]/.test(b.textContent ?? ''),
-  );
+  // 选项按钮 = 带 aria-pressed 的按钮（排除页签「问题 n」与「发送回答」）
+  // 注：选中标记已从 ☐/☑/◉/○ 字符改为单色 SVG（aria-hidden），改用 aria-pressed 判定
+  return Array.from(container.querySelectorAll('button[aria-pressed]'));
 }
 
 function findButton(container: HTMLElement, text: string): HTMLButtonElement {
@@ -81,13 +80,13 @@ describe('ClarifyCard 多选交互（#149）', () => {
     // 题干带「可多选」提示
     expect(container.textContent).toContain('可多选');
     // 复选框标记（非单选圆点）
-    expect(container.textContent).toContain('☐');
+    expect(container.querySelector('button[aria-pressed="false"]')).toBeTruthy();
 
-    // 推荐项已预选（基础身份 ☑），再勾「使用场景」→ 两项并存
+    // 推荐项已预选，再勾「使用场景」→ 两项并存
     await act(async () => {
       opts[2].click();
     });
-    expect(container.textContent).toContain('☑');
+    expect(container.querySelector('button[aria-pressed="true"]')).toBeTruthy();
 
     await act(async () => {
       findButton(container, '发送回答').click();

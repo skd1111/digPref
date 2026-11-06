@@ -134,8 +134,7 @@ export function PromptOptPanel(): JSX.Element {
           type="button"
           disabled={!skillId || running}
           onClick={() => void runExperiment()}
-          className="rounded px-3 py-1 text-ui font-semibold disabled:cursor-not-allowed disabled:opacity-40"
-          style={{ backgroundColor: '#0e639c', color: '#ffffff' }}
+          className="btn btn-primary btn-md"
         >
           {running ? '实验中…' : '运行实验'}
         </button>
@@ -190,8 +189,7 @@ export function PromptOptPanel(): JSX.Element {
                   <button
                     type="button"
                     onClick={() => void apply(v.id)}
-                    className="rounded px-2 py-0.5 text-[11px] font-semibold"
-                    style={{ backgroundColor: '#0e639c', color: '#ffffff' }}
+                    className="btn btn-primary btn-xs"
                   >
                     采纳
                   </button>
@@ -202,8 +200,7 @@ export function PromptOptPanel(): JSX.Element {
                     onClick={() => {
                       if (confirm('确认回滚到上一版本？')) void rollback(v.id);
                     }}
-                    className="rounded border px-2 py-0.5 text-[11px] transition-colors hover:bg-[#fef2f2]"
-                    style={{ borderColor: '#fca5a5', color: '#dc2626', backgroundColor: '#ffffff' }}
+                    className="btn btn-danger btn-xs"
                   >
                     回滚
                   </button>

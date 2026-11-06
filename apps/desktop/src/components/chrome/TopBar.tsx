@@ -12,6 +12,7 @@ import { EnvironmentIndicator } from './EnvironmentIndicator';
 import { ModeSwitcher } from './ModeSwitcher';
 import { TokenUsageBadge } from './TokenUsageBadge';
 import { useUIStore } from '@/store/uiStore';
+import { MessageIcon, ZapIcon } from '@/components/ui/Icons';
 
 /** Agent 状态文案 —— 与底部 StatusBar 保持一致，读真实 agentStatus。 */
 const AGENT_LABEL = {
@@ -54,17 +55,18 @@ export function TopBar(): JSX.Element {
           <span
             className="flex items-center gap-1 rounded px-2 py-0.5 font-semibold"
             style={{ backgroundColor: 'rgba(99, 102, 241, 0.18)', color: '#4f46e5' }}
-            title="协作中心 @ 我的未读数（点击 ActivityBar 💬 图标查看）"
+            title="协作中心 @ 我的未读数（点击 ActivityBar 协作图标查看）"
           >
-            💬 @{pendingCollabMentionCount > 9 ? '9+' : pendingCollabMentionCount}
+            <MessageIcon size={13} /> @{pendingCollabMentionCount > 9 ? '9+' : pendingCollabMentionCount}
           </span>
         )}
         {/* Token 用量：实时速率（↑上传/↓下载）+ 当日总量，2s 轮询；悬浮向下弹明细卡片 */}
         <span className="rounded px-2 py-0.5" style={{ backgroundColor: '#e4e4e4' }}>
           <TokenUsageBadge placement="bottom" />
         </span>
-        <span className="rounded px-2 py-0.5" style={{ backgroundColor: '#ececec' }}>
-          ⚡ {AGENT_LABEL[agentStatus]}
+        <span className="flex items-center gap-1 rounded px-2 py-0.5" style={{ backgroundColor: '#ececec' }}>
+          <ZapIcon size={12} />
+          {AGENT_LABEL[agentStatus]}
         </span>
       </div>
     </div>

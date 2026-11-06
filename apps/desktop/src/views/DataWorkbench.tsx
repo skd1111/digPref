@@ -39,9 +39,9 @@ const RESULT_TABS: Array<{ id: ResultTab; label: string }> = [
 ];
 
 const ZOOM_TITLES: Record<'grid' | 'chart' | 'chat', string> = {
-  grid: '📋 数据网格 · 放大视图',
-  chart: '📈 可视化图表 · 放大视图',
-  chat: '💬 AI 对话 · 放大视图',
+  grid: '数据网格 · 放大视图',
+  chart: '可视化图表 · 放大视图',
+  chat: 'AI 对话 · 放大视图',
 };
 
 export function DataWorkbench(): JSX.Element {

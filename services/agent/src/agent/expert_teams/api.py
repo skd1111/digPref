@@ -6,6 +6,7 @@
   PUT    /expert-teams/{id}        — 保存（写 YAML + 立即 load_one()）
   DELETE /expert-teams/{id}        — 删除（含其报告模板）
   POST   /expert-teams/import      — 导入（dict 或 {content: "yaml 文本"}，兼容旧格式）
+  POST   /expert-teams/import-seeds — 一键导入内置种子专家团（已存在跳过，2026-11-04）
   POST   /expert-teams/import-package — 导入专家团资产包 zip（team.yaml 提示词 + templates/ 模板）
   GET    /expert-teams/{id}/package   — 导出专家团资产包 zip（base64）
   GET    /expert-teams/export/all  — 导出全部（YAML 字典）
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 import base64
 import io
+import logging
 import zipfile
 
 import yaml
@@ -26,6 +28,7 @@ from agent.expert_teams.loader import EXPERT_TEAMS_DIR as _DEFAULT_DIR
 from agent.expert_teams.loader import ExpertTeamLoader
 from agent.expert_teams.recommender import recommend_team
 from agent.expert_teams.schema import validate_expert_team_yaml, validate_no_dsn
+from agent.expert_teams.seed import seed_builtin_expert_teams
 from agent.expert_teams.templates import (
     delete_template as _delete_template_file,
 )
@@ -38,6 +41,8 @@ from agent.expert_teams.templates import (
 
 router = APIRouter(prefix="/expert-teams", tags=["expert-teams"])
 
+logger = logging.getLogger(__name__)
+
 # module-level 单例 loader（手动加载模式：save/import 端点更新它）
 _loader = ExpertTeamLoader()
 EXPERT_TEAMS_DIR = _DEFAULT_DIR
@@ -48,9 +53,17 @@ def get_loader() -> ExpertTeamLoader:
 
 
 def init_loader() -> None:
-    """应用启动时调用一次（同 skills api 的 C5 fix：main.py 显式调用）。"""
+    """应用启动时调用一次（同 skills api 的 C5 fix：main.py 显式调用）。
+
+    启动先播种内置专家团种子（运营工作台各业务模块开箱可选），再扫描目录。
+    播种失败绝不阻断启动（catch 后继续 load_all）。
+    """
     global _loader
     _loader = ExpertTeamLoader()
+    try:
+        seed_builtin_expert_teams(_loader._dir)
+    except Exception:
+        logger.exception("[expert-teams] 内置种子播种失败，跳过")
     _loader.load_all()
 
 
@@ -103,6 +116,17 @@ def delete_team(team_id: str) -> dict:
         path.unlink()
     _loader.remove(team_id)
     return {"ok": True}
+
+
+@router.post("/import-seeds")
+def import_seeds() -> dict:
+    """一键导入内置种子专家团（设置页兜底按钮）。
+
+    幂等：已存在同名团跳过；返回本次导入的 team id 列表。
+    """
+    seeded = seed_builtin_expert_teams(_loader._dir)
+    _loader.load_all()
+    return {"ok": True, "imported": seeded, "count": len(seeded)}
 
 
 @router.post("/import")

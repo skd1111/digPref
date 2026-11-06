@@ -25,6 +25,14 @@ fn resolve_request(
                 "base_doc_id": args.get("base_doc_id").and_then(|v| v.as_str()).unwrap_or(""),
             })),
         ),
+        "kb_classify_preview" => (
+            // 导入前分类预判（只读，不写库）：Llm 判定每个待导入文件的分类
+            "/knowledge/v1/docs/classify/preview".to_string(),
+            "POST",
+            Some(json!({
+                "paths": args.get("paths").cloned().unwrap_or(json!([])),
+            })),
+        ),
         "kb_list" => {
             // 用 url crate 安全编码查询参数，然后只取 path+query 部分
             let mut u = Url::parse("http://x/knowledge/v1/docs").unwrap();
@@ -142,30 +150,18 @@ pub async fn knowledge(args: Value) -> AppResult<Value> {
         .timeout(Duration::from_secs(30))
         .build()
         .map_err(|e| AppError::Config(format!("reqwest client: {}", e)))?;
-    let req = match method {
-        "GET" => client.get(&url),
-        "POST" => client.post(&url).json(&body.unwrap_or(json!({}))),
-        "DELETE" => client.delete(&url),
-        _ => return Err(AppError::Config(format!("unsupported method: {}", method))),
-    };
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| AppError::Config(format!("knowledge.http: {}", e)))?;
-    let status = resp.status();
-    let text = resp
-        .text()
-        .await
-        .map_err(|e| AppError::Config(format!("knowledge.read_body: {}", e)))?;
-    if !status.is_success() {
-        return Err(AppError::Config(format!(
-            "knowledge: agent returned HTTP {} body={}",
-            status, text
-        )));
+    let payload = body.unwrap_or_else(|| json!({}));
+    // 幂等 GET 才做瞬时错误重试（导入高峰期 body 被截断可自愈）；POST/DELETE 单次，不重试。
+    use crate::commands::agent_http::send_json;
+    match method {
+        "GET" => send_json("knowledge", 3, || client.get(&url)).await,
+        "POST" => send_json("knowledge", 1, || client.post(&url).json(&payload)).await,
+        "DELETE" => send_json("knowledge", 1, || client.delete(&url)).await,
+        _ => Err(AppError::Config(format!(
+            "unsupported method: {}",
+            method
+        ))),
     }
-    serde_json::from_str(&text).map_err(|e| {
-        AppError::Config(format!("knowledge: invalid JSON response: {} (body={})", e, text))
-    })
 }
 
 #[cfg(test)]
@@ -219,6 +215,19 @@ mod tests {
         assert_eq!(b["base_doc_id"], "d1");
         assert_eq!(b["file_path"], "/x.md");
         assert_eq!(b["category"], "legal");
+    }
+
+    #[test]
+    fn test_resolve_classify_preview_paths() {
+        let (p, m, body) = resolve_request(
+            "kb_classify_preview",
+            &json!({ "paths": ["C:/a.md", "C:/b.pdf"] }),
+            None,
+        )
+        .unwrap();
+        assert_eq!(p, "/knowledge/v1/docs/classify/preview");
+        assert_eq!(m, "POST");
+        assert_eq!(body.unwrap()["paths"][0], "C:/a.md");
     }
 
     #[test]

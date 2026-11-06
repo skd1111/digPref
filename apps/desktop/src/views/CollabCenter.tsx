@@ -17,11 +17,18 @@ import { useCollabStore } from '@/store/collabStore';
 import { ContextList } from '@/components/collab/ContextList';
 import { TaskDiscussionPanel } from '@/components/collab/TaskDiscussionPanel';
 import { COLLAB_ACCENT, type CollabCenterTab } from '@/types/collab';
+import {
+  AtSignIcon,
+  MessageIcon,
+  TargetIcon,
+  UsersIcon,
+  type IconComponent,
+} from '@/components/ui/Icons';
 
-const TABS: Array<{ key: CollabCenterTab; label: string; icon: string }> = [
-  { key: 'participated', label: '我参与的', icon: '◎' },
-  { key: 'mentioned', label: '@ 我的', icon: '@' },
-  { key: 'todo', label: '待解决', icon: '?' },
+const TABS: Array<{ key: CollabCenterTab; label: string; icon: IconComponent }> = [
+  { key: 'participated', label: '我参与的', icon: UsersIcon },
+  { key: 'mentioned', label: '@ 我的', icon: AtSignIcon },
+  { key: 'todo', label: '待解决', icon: TargetIcon },
 ];
 
 export function CollabCenter(): JSX.Element {
@@ -50,10 +57,11 @@ export function CollabCenter(): JSX.Element {
           style={{ borderBottom: '1px solid #e0e0e0' }}
         >
           <span
-            className="mr-2 px-2 py-0.5 text-2xs font-semibold uppercase tracking-wider"
+            className="mr-2 flex items-center gap-1 px-2 py-0.5 text-2xs font-semibold uppercase tracking-wider"
             style={{ color: COLLAB_ACCENT, backgroundColor: 'rgba(99, 102, 241, 0.12)', borderRadius: 3 }}
           >
-            💬 协作中心
+            <MessageIcon size={12} />
+            协作中心
           </span>
         </div>
 
@@ -64,12 +72,13 @@ export function CollabCenter(): JSX.Element {
         >
           {TABS.map((t) => {
             const active = t.key === activeTab;
+            const TabIcon = t.icon;
             return (
               <button
                 key={t.key}
                 type="button"
                 onClick={() => setActiveTab(t.key)}
-                className="flex-1 text-2xs transition-colors"
+                className="flex flex-1 items-center justify-center text-2xs transition-colors"
                 style={{
                   backgroundColor: active ? '#ffffff' : 'transparent',
                   color: active ? COLLAB_ACCENT : '#616161',
@@ -77,7 +86,7 @@ export function CollabCenter(): JSX.Element {
                   fontWeight: active ? 600 : 400,
                 }}
               >
-                <span className="mr-1">{t.icon}</span>
+                <TabIcon size={12} />
                 {t.label}
               </button>
             );
@@ -99,7 +108,9 @@ export function CollabCenter(): JSX.Element {
             className="flex h-full flex-col items-center justify-center text-2xs"
             style={{ color: '#616161' }}
           >
-            <div className="mb-2 text-3xl">💬</div>
+            <div className="mb-2 flex items-center justify-center text-3xl" aria-hidden="true">
+              <MessageIcon size={36} />
+            </div>
             从左侧选择上下文查看讨论
           </div>
         )}

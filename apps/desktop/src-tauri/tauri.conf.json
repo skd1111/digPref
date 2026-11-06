@@ -21,7 +21,8 @@
         "decorations": true,
         "transparent": false,
         "fullscreen": false,
-        "maximized": true
+        "maximized": true,
+        "url": "eaide://localhost/"
       }
     ],
     "security": {
@@ -45,6 +46,7 @@
       "icons/icon.ico"
     ],
     "resources": {
+      "../dist": "./web/",
       "resources/eaide-agent": "./",
       "../../../config/driver/*": "./config/driver/",
       "../../../vendor/officecli/*": "./vendor/officecli/",

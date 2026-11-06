@@ -12,15 +12,15 @@ import { useMemo, useState } from 'react';
 import { useAssetStore, type AssetNode } from '@/store/assetStore';
 import { CodeNavSearch } from '@/components/codenav/CodeNavSearch';
 import { SymbolDetail } from '@/components/codenav/SymbolDetail';
+import { ASSET_TYPE_ICONS } from '@/components/asset-tree/assetTypeIcons';
+import {
+  BracesIcon,
+  DatabaseIcon,
+  SearchIcon,
+  type IconComponent,
+} from '@/components/ui/Icons';
 
 type SearchMode = 'asset' | 'symbol';
-
-const TYPE_ICON: Record<AssetNode['type'], string> = {
-  database: '🗄',
-  rest: '🌐',
-  ssh: '🔐',
-  rpa: '🤖',
-};
 
 export function FindInFiles({ defaultMode }: { defaultMode?: SearchMode } = {}): JSX.Element {
   const tree = useAssetStore((s) => s.tree);
@@ -99,7 +99,9 @@ export function FindInFiles({ defaultMode }: { defaultMode?: SearchMode } = {}):
           className="flex items-center rounded px-2 py-1"
           style={{ backgroundColor: '#ececec', border: '1px solid #d4d4d4' }}
         >
-          <span className="text-fg-muted">⌕</span>
+          <span className="flex items-center text-fg-muted" aria-hidden="true">
+            <SearchIcon size={13} />
+          </span>
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -123,15 +125,20 @@ export function FindInFiles({ defaultMode }: { defaultMode?: SearchMode } = {}):
           <div className="text-2xs text-fg-muted">没有匹配的结果</div>
         ) : (
           <ul>
-            {items.map((hit) => (
+            {items.map((hit) => {
+              const TypeIcon = ASSET_TYPE_ICONS[hit.node.type];
+              return (
               <li
                 key={hit.node.id}
                 className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 hover:bg-vscode-border"
               >
-                <span className="text-fg-muted">{TYPE_ICON[hit.node.type]}</span>
+                <span className="flex items-center text-fg-muted" aria-hidden="true">
+                  <TypeIcon size={13} />
+                </span>
                 <span className="truncate">{hit.node.label}</span>
               </li>
-            ))}
+              );
+            })}
           </ul>
         )}
       </div>
@@ -191,17 +198,18 @@ function ModeTabs({
     >
       {(
         [
-          { key: 'asset', label: '资产', icon: '🗄' },
-          { key: 'symbol', label: '代码符号', icon: '⌘' },
-        ] as Array<{ key: SearchMode; label: string; icon: string }>
+          { key: 'asset', label: '资产', icon: DatabaseIcon },
+          { key: 'symbol', label: '代码符号', icon: BracesIcon },
+        ] as Array<{ key: SearchMode; label: string; icon: IconComponent }>
       ).map((t) => {
         const active = t.key === mode;
+        const ModeIcon = t.icon;
         return (
           <button
             key={t.key}
             type="button"
             onClick={() => onChange(t.key)}
-            className="flex-1 text-2xs transition-colors"
+            className="flex flex-1 items-center justify-center text-2xs transition-colors"
             style={{
               backgroundColor: active ? '#ffffff' : 'transparent',
               color: active ? '#0451a5' : '#616161',
@@ -209,8 +217,8 @@ function ModeTabs({
               fontWeight: active ? 600 : 400,
             }}
           >
-            <span className="mr-1">{t.icon}</span>
-            {t.label}
+            <ModeIcon size={12} />
+            <span className="mr-1">{t.label}</span>
           </button>
         );
       })}

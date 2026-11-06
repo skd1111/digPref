@@ -26,6 +26,7 @@ import {
   type Symbol,
   type SymbolKind,
 } from '@/types/codenav';
+import { HourglassIcon, RefreshIcon, SearchIcon } from '@/components/ui/Icons';
 
 const KINDS: Array<SymbolKind | 'all'> = [
   'all', 'class', 'method', 'function', 'interface', 'field', 'enum',
@@ -265,22 +266,25 @@ export function CodeNavSearch(): JSX.Element {
           className="flex items-center justify-between rounded px-2 py-1 text-2xs"
           style={{ backgroundColor: '#ffffff', color: '#616161' }}
         >
-          <span>
-            🔍 {list.length} 匹配 / {indexStatus?.total_symbols ?? 0} 符号 / {indexStatus?.total_files ?? 0} 文件
+          <span className="flex items-center gap-1">
+            <SearchIcon size={12} />
+            {list.length} 匹配 / {indexStatus?.total_symbols ?? 0} 符号 / {indexStatus?.total_files ?? 0} 文件
             {indexStatus?.is_scanning && (
-              <span className="ml-2" style={{ color: '#795e26' }}>
-                ⏳ 扫描中…
+              <span className="ml-2 flex items-center gap-1" style={{ color: '#795e26' }}>
+                <HourglassIcon size={12} />
+                扫描中…
               </span>
             )}
           </span>
           <button
             type="button"
             onClick={reindex}
-            className="rounded px-1.5 py-0.5 transition-colors hover:bg-vscode-border"
+            className="flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors hover:bg-vscode-border"
             style={{ color: '#0451a5' }}
             title="从后端重新拉取索引"
           >
-            ↻ 重建索引
+            <RefreshIcon size={12} />
+            重建索引
           </button>
         </div>
       </div>
@@ -292,7 +296,9 @@ export function CodeNavSearch(): JSX.Element {
             className="flex h-full flex-col items-center justify-center p-6 text-center text-2xs"
             style={{ color: '#616161' }}
           >
-            <div className="mb-2 text-3xl">⌕</div>
+            <div className="mb-2 flex items-center text-3xl" aria-hidden="true">
+              <SearchIcon size={30} />
+            </div>
             <div>无匹配符号</div>
             <div className="mt-1">调整搜索词 / filter 后重试</div>
           </div>

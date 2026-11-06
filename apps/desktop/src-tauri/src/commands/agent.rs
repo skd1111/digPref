@@ -292,11 +292,16 @@ pub async fn agent_active_runs(state: State<'_, AppState>) -> AppResult<usize> {
 }
 
 /// 重启 Agent 子进程（用于切换 LLM 后端时）。
+///
+/// 内部委托 `router::restart_agent_and_wait`：真重启（kill + spawn）并等 /health
+/// 就绪后再返回，避免保存完 LLM 配置就立即发请求撞上未就绪的 Agent。
 #[tauri::command]
-pub fn agent_restart(_state: State<'_, AppState>) -> AppResult<()> {
+pub async fn agent_restart(state: State<'_, AppState>) -> AppResult<serde_json::Value> {
     crate::agent_manager::app_log("[agent] agent_restart 触发 —— 杀旧进程 + 重启");
-    crate::agent_manager::restart_agent_process();
-    Ok(())
+    let r = super::router::restart_agent_and_wait(state)
+        .await
+        .map_err(crate::error::AppError::Config)?;
+    Ok(r)
 }
 
 /// Phase 18：自动模式风险确认 —— 前端弹窗确认后转发到 FastAPI /autonomy/confirm，

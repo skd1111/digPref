@@ -698,7 +698,9 @@ pub fn pid_listening_on_port(_host: &str, _port: &str) -> Option<u32> {
 /// 转换成 env vars 启动新进程。
 ///
 /// 整个过程持锁——防止并发重启导致孤儿进程。
-pub fn restart_agent_process() {
+///
+/// 返回值：是否成功 spawn 新进程（false = 未找到可执行文件 / spawn 失败）。
+pub fn restart_agent_process() -> bool {
     let slot = shared_child_slot();
 
     // 全程持锁，防止两个并发重启各自 kill/spawn 导致孤儿进程
@@ -706,7 +708,7 @@ pub fn restart_agent_process() {
         Ok(g) => g,
         Err(e) => {
             app_log(&format!("[agent_manager] restart: Mutex 锁失败: {}", e));
-            return;
+            return false;
         }
     };
 
@@ -728,34 +730,84 @@ pub fn restart_agent_process() {
         redacted
     ));
 
-    // 3. 解析 Agent（EAIDE_AGENT_EXE > versions/<active> > 出厂候选）
+    // 3. 解析 Agent：打包版 exe（EAIDE_AGENT_EXE > versions/<active> > 出厂候选）
+    //    解析不到时回退开发模式（uv run）——否则开发态点“重启 Agent”同样会
+    //    落到“只杀不启”，Agent 永远不再起来。
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
         .unwrap_or_default();
-    let Some(exe) = resolve_agent_exe(&exe_dir) else {
-        app_log("[agent_manager] restart: 找不到 eaide-agent（env/versions/出厂均未命中）");
-        return;
-    };
-    app_log(&format!("[agent_manager] restart: spawn 新 Agent: {}", exe.display()));
+    let host = std::env::var("EAIDE_AGENT_HOST").unwrap_or_else(|_| "127.0.0.1".into());
+    let port = std::env::var("EAIDE_AGENT_PORT").unwrap_or_else(|_| "8765".into());
 
-    // 运行时目录（macOS 上落到用户数据目录，.app 包内只读）
-    let runtime_dir = agent_runtime_dir(&exe_dir);
-    let config_dir_str = runtime_dir.join("config").to_string_lossy().into_owned();
+    let (cmd_owned, args, cwd, extra_envs): (String, Vec<String>, PathBuf, Vec<(&'static str, String)>) =
+        match resolve_agent_exe(&exe_dir) {
+            Some(exe) => {
+                app_log(&format!("[agent_manager] restart: spawn 新 Agent: {}", exe.display()));
+                // 运行时目录（macOS 上落到用户数据目录，.app 包内只读）
+                let runtime_dir = agent_runtime_dir(&exe_dir);
+                let config_dir_str = runtime_dir.join("config").to_string_lossy().into_owned();
+                // 与首次启动（AgentManager::start）保持一致的 env 集合
+                let mut envs: Vec<(&'static str, String)> = vec![
+                    ("EAIDE_HOST", host.clone()),
+                    ("EAIDE_PORT", port.clone()),
+                    ("EAIDE_LOG_LEVEL", "info".to_string()),
+                    ("EAIDE_CONFIG_DIR", config_dir_str),
+                    // 数据根（BUGFIX #98）：与首次启动注入保持一致
+                    ("EAIDE_DATA_ROOT", runtime_dir.to_string_lossy().into_owned()),
+                ];
+                // versions 布局下 agent exe 离开安装根，同级无 config/driver；显式指回
+                // 安装根（exe_dir 恒为 shell 所在安装根），离线企业库驱动不静默失效（#I-2）
+                let driver_dir = exe_dir.join("config").join("driver");
+                if driver_dir.is_dir() {
+                    envs.push(("EAIDE_DRIVER_DIR", driver_dir.to_string_lossy().into_owned()));
+                }
+                (exe.to_string_lossy().into_owned(), vec![], runtime_dir, envs)
+            }
+            None => {
+                let project_dir = find_project_dir();
+                if !project_dir.join("pyproject.toml").exists() {
+                    app_log(
+                        "[agent_manager] restart: 找不到 eaide-agent（env/versions/出厂均未命中），\
+                         且无源码目录 → 无法重启",
+                    );
+                    return false;
+                }
+                app_log(&format!(
+                    "[agent_manager] restart: 开发模式 uv run uvicorn (工作目录: {})",
+                    project_dir.display()
+                ));
+                let args = vec![
+                    "run".to_string(),
+                    "uvicorn".to_string(),
+                    "agent.main:app".to_string(),
+                    "--host".to_string(),
+                    host.clone(),
+                    "--port".to_string(),
+                    port.clone(),
+                    "--log-level".to_string(),
+                    "info".to_string(),
+                ];
+                // 开发模式：envconfig 单文件落在源码目录下 ./config/，避免污染 APPDATA
+                let config_dir = project_dir.join("config").to_string_lossy().into_owned();
+                (
+                    "uv".to_string(),
+                    args,
+                    project_dir,
+                    vec![("EAIDE_CONFIG_DIR", config_dir)],
+                )
+            }
+        };
 
-    let mut cmd = Command::new(&exe);
-    cmd.current_dir(&runtime_dir)
-        .env("EAIDE_CONFIG_DIR", config_dir_str)
-        // 数据根（BUGFIX #98）：与首次启动注入保持一致
-        .env("EAIDE_DATA_ROOT", runtime_dir.to_string_lossy().into_owned())
+    let mut cmd = Command::new(&cmd_owned);
+    cmd.args(&args)
+        .current_dir(&cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(target_os = "windows")]
     cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    // 与首次启动一致：显式指回安装根 config/driver（versions 布局回归防护，#I-2）
-    let driver_dir = exe_dir.join("config").join("driver");
-    if driver_dir.is_dir() {
-        cmd.env("EAIDE_DRIVER_DIR", driver_dir.to_string_lossy().into_owned());
+    for (k, v) in &extra_envs {
+        cmd.env(k, v);
     }
     for (k, v) in &env_vars {
         cmd.env(k, v);
@@ -792,8 +844,6 @@ pub fn restart_agent_process() {
             }
 
             // Start health check loop (same as AgentManager::start)
-            let host = std::env::var("EAIDE_AGENT_HOST").unwrap_or_else(|_| "127.0.0.1".into());
-            let port = std::env::var("EAIDE_AGENT_PORT").unwrap_or_else(|_| "8765".into());
             let health_url = format!("http://{}:{}/health", host, port);
             tauri::async_runtime::spawn(async move {
                 for i in 0..60 {
@@ -815,9 +865,11 @@ pub fn restart_agent_process() {
             });
 
             *guard = Some(child);
+            true
         }
         Err(e) => {
             app_log(&format!("[agent_manager] restart: spawn 失败: {}", e));
+            false
         }
     }
 }
@@ -1082,7 +1134,7 @@ mod resolve_tests {
         std::fs::write(root.join("versions/agent-active.txt"), "0.9.9\n").unwrap();
         std::fs::write(root.join("eaide-agent.exe"), b"factory").unwrap();
         let resolved = resolve_agent_exe_with(root, &root.join("versions"), None).unwrap();
-        assert!(resolved.starts_with(&root.join("versions/agent/0.9.9")));
+        assert!(resolved.starts_with(root.join("versions/agent/0.9.9")));
     }
 
     #[test]

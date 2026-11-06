@@ -158,14 +158,14 @@ export const COLLAB_ACCENT = '#6366f1';
 export const COLLAB_ACCENT_DARK = '#4f46e5';
 export const COLLAB_ACCENT_BG = 'rgba(99, 102, 241, 0.12)';
 
-export const ANCHOR_LABELS: Record<AnchorType, { label: string; icon: string; color: string }> = {
-  code_line:       { label: '代码行',     icon: '⌨', color: '#0451a5' },
-  sql_block:       { label: 'SQL 块',     icon: '⊞', color: '#059669' },
-  deploy_task:     { label: '部署任务',   icon: '🚀', color: '#795e26' },
-  approval_ticket: { label: '审批单',     icon: '✓', color: '#c586c0' },
-  log_segment:     { label: '日志片段',   icon: '⌘', color: '#b25c1a' },
-  hotswap_task:    { label: 'JVM 热更',   icon: '⚡', color: '#cd3131' },
-  custom:          { label: '自定义',     icon: '◉', color: '#616161' },
+export const ANCHOR_LABELS: Record<AnchorType, { label: string; color: string }> = {
+  code_line:       { label: '代码行',     color: '#0451a5' },
+  sql_block:       { label: 'SQL 块',     color: '#059669' },
+  deploy_task:     { label: '部署任务',   color: '#795e26' },
+  approval_ticket: { label: '审批单',     color: '#c586c0' },
+  log_segment:     { label: '日志片段',   color: '#b25c1a' },
+  hotswap_task:    { label: 'JVM 热更',   color: '#cd3131' },
+  custom:          { label: '自定义',     color: '#616161' },
 };
 
 export const STATUS_LABELS: Record<ContextStatus, string> = {

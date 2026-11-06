@@ -12,18 +12,50 @@ import { ipc } from '@/ipc/invoke';
 import type { KbDocSummary, KbStatus, KbVersionItem } from '@/ipc/invoke';
 import { previewLocalFile } from '@/store/officePreviewStore';
 import { useDictOptions, type DictOption } from '@/hooks/useDictOptions';
+import { CloseIcon } from '@/components/ui/Icons';
+import { KbImportDialog, type PendingImport } from '@/components/doc-review/KbImportDialog';
 
 const SUPPORTED_EXTENSIONS = [
   'pdf', 'docx', 'doc', 'txt', 'md', 'csv', 'html', 'htm', 'xlsx', 'pptx',
 ];
 
-// 内置兜底（数据字典不可用时降级）
+// 内置兜底（数据字典不可用时降级）；与后端 datadict 种子「知识库分类」保持一致
 const FALLBACK_CATEGORIES: DictOption[] = [
   { key: 'finance', label: '财务/财税', value: 'finance', description: '' },
   { key: 'legal', label: '法务/合同', value: 'legal', description: '' },
   { key: 'compliance', label: '合规/制度', value: 'compliance', description: '' },
   { key: 'data_security', label: '数据安全', value: 'data_security', description: '' },
+  { key: 'hr', label: '人力/组织', value: 'hr', description: '' },
+  { key: 'operations', label: '运营/业务', value: 'operations', description: '' },
+  { key: 'risk', label: '风险/信贷', value: 'risk', description: '' },
+  { key: 'marketing', label: '营销/品牌', value: 'marketing', description: '' },
+  { key: 'engineering', label: '技术/研发', value: 'engineering', description: '' },
 ];
+
+/** 分类预判分批：每批文件数（云端模型限流时小批量更稳） */
+const CLASSIFY_BATCH_SIZE = 5;
+/** 某批失败（限流）后下一批的退避等待（ms） */
+const CLASSIFY_BATCH_BACKOFF_MS = 3000;
+
+/** 阻塞等待（分批之间的让速/退避用） */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+/** 把后端原始错误翻译成可读中文（限流/超时/连接失败等常见原因）。 */
+function friendlyError(raw: unknown): string {
+  const text = String(raw ?? '');
+  if (/429|rate.?limit|速率限制|限流/i.test(text)) {
+    return '模型限流（Token Plan 速率限制）：请稍后重试；批量导入请在「检索参数」里把「入库并发数」调小到 1，或恢复本地模型';
+  }
+  if (/timeout|timed out|超时/i.test(text)) {
+    return '请求超时：Agent 繁忙或模型响应慢，请稍后重试';
+  }
+  if (/connect|连接|refused|网络/i.test(text)) {
+    return '无法连接 Agent：请确认 Agent 进程在运行（状态栏应显示「Agent: 就绪」）';
+  }
+  return text;
+}
 
 const STATUS_META: Record<string, { label: string; color: string }> = {
   pending: { label: '待索引', color: '#616161' },
@@ -58,10 +90,12 @@ export function KbPanel(): JSX.Element {
   const [docs, setDocs] = useState<KbDocSummary[]>([]);
   const [status, setStatus] = useState<KbStatus | null>(null);
   const [category, setCategory] = useState('__auto__');
-  const [busy, setBusy] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [reindexing, setReindexing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<number | null>(null);
+  // 刷新并发闸门：为 true 时丢弃重入，避免慢响应下轮询请求叠加成风暴
+  const inflightRef = useRef(false);
   // 搜索：输入框实时绑定 + debounce 300ms 后触发后端 FTS 检索
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
@@ -69,6 +103,18 @@ export function KbPanel(): JSX.Element {
   const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
   const [versions, setVersions] = useState<KbVersionItem[]>([]);
   const [versionsBusy, setVersionsBusy] = useState(false);
+  // 批量选择：主列表按 doc_id 勾选，配合「批量删除」（连同各自全部版本）
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState(false);
+  // 表头全选框（半选态需用 DOM property 表达）
+  const headCheckRef = useRef<HTMLInputElement>(null);
+  // 导入确认：待导入清单（尚未入库）+ 弹窗开关 + 更新版本时的基准资料
+  const [pending, setPending] = useState<PendingImport[]>([]);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importBase, setImportBase] = useState<KbDocSummary | null>(null);
+  // 导入前分类预判：识别中 / 提示（未开启、部分失败）
+  const [classifying, setClassifying] = useState(false);
+  const [classifyHint, setClassifyHint] = useState('');
 
   // 从数据字典动态读取知识库分类（实时生效）；不可用时降级到内置兜底
   const { options: dictCats } = useDictOptions('知识库分类');
@@ -80,7 +126,11 @@ export function KbPanel(): JSX.Element {
     return () => window.clearTimeout(t);
   }, [searchQuery]);
 
-  const refresh = useCallback(async (): Promise<void> => {
+  const refresh = useCallback(async (opts?: { silent?: boolean }): Promise<void> => {
+    // 并发闸门：导入高峰期后端响应变慢，1.5s 定时器会与未完成的重叠请求叠加成请求风暴，
+    // 反过来打满 Agent 单 worker 触发 read_body 截断。这里丢弃重入，保证同一时刻只有一组在飞。
+    if (inflightRef.current) return;
+    inflightRef.current = true;
     try {
       const [list, st] = await Promise.all([
         ipc.kbList(debouncedQuery ? { q: debouncedQuery } : undefined),
@@ -89,17 +139,53 @@ export function KbPanel(): JSX.Element {
       setDocs(list.docs ?? []);
       setStatus(st);
       setReindexing(st.reindexing);
+      setError(null);
     } catch (e) {
-      setError(`读取知识库失败 · ${String(e)}`);
+      // 后台轮询遇瞬时错误（如 read_body 截断）静默跳过、保留上次数据，下一轮自动重试；
+      // 仅用户主动/初始化刷新才提示红字，避免偶发抖动误报「读取知识库失败」。
+      if (!opts?.silent) setError(`读取知识库失败 · ${friendlyError(e)}`);
+    } finally {
+      inflightRef.current = false;
     }
   }, [debouncedQuery]);
+
+  // 列表变化（搜索/刷新）后裁剪选中集：只保留仍在列表中的条目
+  useEffect(() => {
+    setSelected((prev) => {
+      if (prev.size === 0) return prev;
+      const ids = new Set(docs.map((d) => d.id));
+      const next = new Set([...prev].filter((id) => ids.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [docs]);
+
+  // 全选框半选态：部分选中时显示 indeterminate
+  useEffect(() => {
+    if (headCheckRef.current) {
+      headCheckRef.current.indeterminate = selected.size > 0 && selected.size < docs.length;
+    }
+  }, [selected.size, docs.length]);
+
+  // 单条勾选 / 全选
+  const toggleOne = (id: string): void => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAll = (checked: boolean): void => {
+    setSelected(checked ? new Set(docs.map((d) => d.id)) : new Set());
+  };
 
   // 有文档在索引中或正在重建 → 轮询，直到落定
   useEffect(() => {
     const busyNow =
       reindexing || docs.some((d) => d.status === 'indexing' || d.status === 'pending');
     if (busyNow && pollRef.current === null) {
-      pollRef.current = window.setInterval(() => void refresh(), 1500);
+      pollRef.current = window.setInterval(() => void refresh({ silent: true }), 1500);
     } else if (!busyNow && pollRef.current !== null) {
       window.clearInterval(pollRef.current);
       pollRef.current = null;
@@ -126,7 +212,7 @@ export function KbPanel(): JSX.Element {
         try {
           const r = await ipc.kbVersions(anchor);
           setVersions(r.versions ?? []);
-          await refresh();
+          await refresh({ silent: true });
         } catch {
           /* 轮询失败静默，下一轮重试 */
         }
@@ -154,6 +240,94 @@ export function KbPanel(): JSX.Element {
     };
   }, [refresh]);
 
+  // 导入前自动分类预判（只读，不写库）：把判定结果回填到待导入清单。
+  // 正式导入时直接带上已判定的分类 → 入库阶段不再重复调用分类（省一次模型调用）。
+  // 条数多时分批调用（默认 5 个/批）：避免一次把模型打爆触发 429 限流；
+  // 某批出现失败（多为限流）时下一批先退避，给后端恢复窗口。
+  const runAutoClassify = async (list: PendingImport[]): Promise<void> => {
+    if (list.length === 0) return;
+    setClassifying(true);
+    setClassifyHint('');
+    const batches: PendingImport[][] = [];
+    for (let i = 0; i < list.length; i += CLASSIFY_BATCH_SIZE) {
+      batches.push(list.slice(i, i + CLASSIFY_BATCH_SIZE));
+    }
+    const byPath = new Map<string, { category: string; label: string; error?: string; source?: string }>();
+    let failed = 0;
+    let disabled = false;
+    try {
+      for (let bi = 0; bi < batches.length; bi++) {
+        const batch = batches[bi];
+        setClassifyHint(
+          `正在识别分类…（第 ${bi + 1}/${batches.length} 批，共 ${list.length} 个文件）`,
+        );
+        let res: Awaited<ReturnType<typeof ipc.kbClassifyPreview>>;
+        try {
+          res = await ipc.kbClassifyPreview(batch.map((it) => it.path));
+        } catch (e) {
+          failed += batch.length;
+          setClassifyHint(`第 ${bi + 1} 批识别失败：${friendlyError(e)}`);
+          await sleep(CLASSIFY_BATCH_BACKOFF_MS);
+          continue;
+        }
+        if (!res.enabled) {
+          disabled = true;
+          setClassifyHint(res.reason ?? '自动分类未启用，导入时不会自动判定分类');
+          break; // 开关未开 → 后续批次无需继续
+        }
+        for (const it of res.items ?? []) byPath.set(it.path, it);
+        const batchFailed = (res.items ?? []).filter((it) => !it.category).length;
+        failed += batchFailed;
+        applyClassifyResults(byPath);
+        if (batchFailed > 0) {
+          // 本批有失败（多为限流）→ 下一批先退避，避免继续加压
+          await sleep(CLASSIFY_BATCH_BACKOFF_MS);
+        }
+      }
+      applyClassifyResults(byPath);
+      if (!disabled && failed > 0) {
+        setClassifyHint(
+          `${failed} 个文件未能判定分类（模型限流或不可用）· 可点「重试分类」或手动选择`,
+        );
+      }
+    } catch (e) {
+      setClassifyHint(`自动分类预判失败：${friendlyError(e)}`);
+    } finally {
+      setClassifying(false);
+    }
+  };
+
+  // 把预判结果回填到待导入清单（已判定的即时可见；用户手改的不覆盖）
+  const applyClassifyResults = (
+    byPath: Map<string, { category: string; label: string; error?: string; source?: string }>,
+  ): void => {
+    if (byPath.size === 0) return;
+    setPending((prev) =>
+      prev.map((it) => {
+        if (it.category !== '__auto__') return it; // 用户已手动指定 → 不覆盖
+        const hit = byPath.get(it.path);
+        if (!hit) return it;
+        if (hit.category) {
+          return {
+            ...it,
+            category: hit.category,
+            detected: hit.source === 'heuristic' ? 'heuristic' : 'llm',
+            error: undefined,
+          };
+        }
+        return { ...it, error: hit.error || '未能判定分类' };
+      }),
+    );
+  };
+
+  // 重试分类：只对仍未判定的条目再跑一次预判（已判定的不重复消耗模型）
+  const retryAutoClassify = async (): Promise<void> => {
+    const todo = pending.filter((it) => it.category === '__auto__');
+    if (todo.length === 0) return;
+    await runAutoClassify(todo);
+  };
+
+  // 选择文件 → 只生成待导入清单，确认弹窗里点「确认导入」后才入库 + 向量化
   const onUpload = async (): Promise<void> => {
     setError(null);
     let picked: string | string[] | null = null;
@@ -173,18 +347,18 @@ export function KbPanel(): JSX.Element {
       setError('没有受支持的文件（pdf/docx/doc/txt/md/csv/html/xlsx/pptx）');
       return;
     }
-    setBusy(true);
-    const failed: string[] = [];
-    for (const p of supported) {
-      try {
-        await ipc.kbUpload(p, category === '__auto__' ? '' : category);
-      } catch (e) {
-        failed.push(`${p.split(/[\\/]/).pop()}: ${String(e)}`);
-      }
-    }
-    setBusy(false);
-    if (failed.length > 0) setError(`部分上传失败：\n${failed.join('\n')}`);
-    await refresh();
+    const now = Date.now();
+    const list: PendingImport[] = supported.map((p, i) => ({
+      key: `imp-${now}-${i}`,
+      path: p,
+      name: p.split(/[\\/]/).pop() ?? p,
+      category,
+      addedAt: now,
+    }));
+    setPending(list);
+    setImportBase(null);
+    setImportOpen(true);
+    void runAutoClassify(list);
   };
 
   const onDelete = async (doc: KbDocSummary): Promise<void> => {
@@ -201,6 +375,39 @@ export function KbPanel(): JSX.Element {
     } catch (e) {
       setError(`删除失败 · ${String(e)}`);
     }
+  };
+
+  // 批量删除：逐条删除选中的资料（语义同单条删除 → 含各自全部版本），失败项汇总提示
+  const onBatchDelete = async (): Promise<void> => {
+    const targets = docs.filter((d) => selected.has(d.id));
+    if (targets.length === 0) return;
+    const names = targets.map((d) => d.file_name || d.title).join('、');
+    const shown = names.length > 60 ? `${names.slice(0, 60)}…` : names;
+    if (
+      !window.confirm(
+        `确认删除选中的 ${targets.length} 份参考资料（含各自全部版本）？\n${shown}\n该操作不可撤销。`,
+      )
+    ) {
+      return;
+    }
+    setError(null);
+    setDeleting(true);
+    const failed: string[] = [];
+    for (const d of targets) {
+      try {
+        await ipc.kbDelete(d.id, true);
+      } catch (e) {
+        failed.push(`${d.file_name || d.title}: ${String(e)}`);
+      }
+    }
+    setDeleting(false);
+    setSelected(new Set());
+    if (expandedGroup && targets.some((d) => d.group_id === expandedGroup)) {
+      setExpandedGroup(null);
+      setVersions([]);
+    }
+    if (failed.length > 0) setError(`部分删除失败：\n${failed.join('\n')}`);
+    await refresh();
   };
 
   // 加载并展开某资料的版本历史（用组内任一 doc_id 查，后端按 group 归并）
@@ -226,6 +433,7 @@ export function KbPanel(): JSX.Element {
   };
 
   // 更新版本：选一个新文件作为该资料的下一版本（索引期间旧版本仍生效，就绪后自动切换）
+  // 与新增资料一致：先出待导入清单，确认后才入库 + 向量化
   const onUpdateVersion = async (doc: KbDocSummary): Promise<void> => {
     setError(null);
     let picked: string | string[] | null = null;
@@ -244,15 +452,60 @@ export function KbPanel(): JSX.Element {
       setError('没有受支持的文件（pdf/docx/doc/txt/md/csv/html/xlsx/pptx）');
       return;
     }
-    setBusy(true);
-    try {
-      await ipc.kbUpload(path, doc.category, doc.id);
-      await loadVersions(doc.id, doc.group_id); // 展开以观察新版本索引进度
-    } catch (e) {
-      setError(`更新版本失败 · ${String(e)}`);
+    const now = Date.now();
+    const list: PendingImport[] = [
+      {
+        key: `imp-${now}-0`,
+        path,
+        name: path.split(/[\\/]/).pop() ?? path,
+        category: doc.category ?? '',
+        addedAt: now,
+        baseDocId: doc.id,
+      },
+    ];
+    setPending(list);
+    setImportBase(doc);
+    setImportOpen(true);
+    void runAutoClassify(list);
+  };
+
+  // 确认导入：逐条入库（复制源文件 → 解析 → 分块 → 向量化由后端后台跑）
+  const onConfirmImport = async (): Promise<void> => {
+    if (pending.length === 0) return;
+    setImporting(true);
+    const failed: string[] = [];
+    for (const item of pending) {
+      try {
+        await ipc.kbUpload(
+          item.path,
+          item.category === '__auto__' ? '' : item.category,
+          item.baseDocId,
+        );
+      } catch (e) {
+        failed.push(`${item.name}: ${friendlyError(e)}`);
+      }
     }
-    setBusy(false);
+    setImporting(false);
+    const base = importBase;
+    setPending([]);
+    setImportBase(null);
+    setImportOpen(false);
+    if (failed.length > 0) setError(`部分导入失败：\n${failed.join('\n')}`);
     await refresh();
+    if (base) {
+      try {
+        await loadVersions(base.id, base.group_id); // 展开以观察新版本索引进度
+      } catch {
+        /* 展开失败静默：导入本身已成功 */
+      }
+    }
+  };
+
+  // 取消导入：丢弃待导入清单（不入库、不向量化）
+  const onCancelImport = (): void => {
+    setPending([]);
+    setImportBase(null);
+    setImportOpen(false);
   };
 
   // 设为生效：把某个（可能是旧的）版本切为唯一生效版本（O(1)、无需重建索引）
@@ -354,8 +607,7 @@ export function KbPanel(): JSX.Element {
             type="button"
             onClick={() => void onReindex()}
             disabled={reindexing}
-            className="rounded px-2.5 py-1 text-2xs disabled:opacity-50"
-            style={{ backgroundColor: '#ececec', color: '#333333' }}
+            className="btn btn-secondary btn-sm"
             title="模型变更后基于库内原文重建向量索引"
           >
             {reindexing ? `重建中 ${Math.round((status?.reindex_progress ?? 0) * 100)}%` : '重建索引'}
@@ -363,8 +615,7 @@ export function KbPanel(): JSX.Element {
           <button
             type="button"
             onClick={() => navigate('/settings/knowledge')}
-            className="rounded px-2.5 py-1 text-2xs"
-            style={{ backgroundColor: '#ececec', color: '#333333' }}
+            className="btn btn-secondary btn-sm"
             title="打开设置页调整 RAG 参数"
           >
             检索参数
@@ -412,22 +663,30 @@ export function KbPanel(): JSX.Element {
             <button
               type="button"
               onClick={() => setSearchQuery('')}
-              className="absolute right-1 top-1/2 -translate-y-1/2 rounded px-1 text-2xs"
-              style={{ color: '#616161' }}
+              className="btn btn-ghost btn-icon absolute right-1 top-1/2 -translate-y-1/2"
               title="清除搜索"
+              aria-label="清除搜索"
             >
-              ✕
+              <CloseIcon size={12} />
             </button>
           )}
         </div>
         <button
           type="button"
           onClick={() => void onUpload()}
-          disabled={busy}
-          className="rounded px-3 py-1 text-2xs text-white disabled:opacity-50"
-          style={{ backgroundColor: '#0e639c' }}
+          disabled={importing}
+          className="btn btn-primary btn-sm"
         >
-          {busy ? '上传中…' : '＋ 上传参考资料'}
+          {importing ? '导入中…' : '＋ 上传参考资料'}
+        </button>
+        <button
+          type="button"
+          onClick={() => void onBatchDelete()}
+          disabled={selected.size === 0 || deleting}
+          className="btn btn-danger btn-sm"
+          title="删除选中的参考资料（连同各自的全部版本），不可撤销"
+        >
+          {deleting ? '删除中…' : `批量删除${selected.size > 0 ? ` (${selected.size})` : ''}`}
         </button>
         <span className="text-2xs" style={{ color: '#616161' }}>
           支持 pdf / docx / doc / txt / md / csv / html / xlsx / pptx（可多选）
@@ -463,8 +722,7 @@ export function KbPanel(): JSX.Element {
           <button
             type="button"
             onClick={() => setSearchQuery('')}
-            className="rounded px-1.5 py-0.5"
-            style={{ color: '#0e639c' }}
+            className="btn btn-ghost btn-xs"
           >
             清除搜索
           </button>
@@ -505,11 +763,23 @@ export function KbPanel(): JSX.Element {
           <table className="w-full border-collapse text-2xs">
             <thead>
               <tr style={{ color: '#616161', borderBottom: '1px solid #e0e0e0' }}>
+                <th className="w-6 px-2 py-1.5 text-left font-medium">
+                  <input
+                    ref={headCheckRef}
+                    type="checkbox"
+                    checked={docs.length > 0 && selected.size === docs.length}
+                    onChange={(e) => toggleAll(e.target.checked)}
+                    title="全选 / 取消全选"
+                    aria-label="全选"
+                    className="cursor-pointer"
+                  />
+                </th>
                 <th className="px-2 py-1.5 text-left font-medium">文件</th>
                 <th className="px-2 py-1.5 text-left font-medium">分类</th>
                 <th className="px-2 py-1.5 text-left font-medium">状态</th>
                 <th className="px-2 py-1.5 text-right font-medium">分块</th>
                 <th className="px-2 py-1.5 text-right font-medium">大小</th>
+                <th className="px-2 py-1.5 text-right font-medium">导入时间</th>
                 <th className="px-2 py-1.5 text-right font-medium">操作</th>
               </tr>
             </thead>
@@ -521,6 +791,16 @@ export function KbPanel(): JSX.Element {
                 return (
                   <Fragment key={d.id}>
                     <tr style={{ borderBottom: '1px solid #f0f0f0' }}>
+                      <td className="px-2 py-1.5">
+                        <input
+                          type="checkbox"
+                          checked={selected.has(d.id)}
+                          onChange={() => toggleOne(d.id)}
+                          title={`选择 ${d.file_name || d.title}`}
+                          aria-label={`选择 ${d.file_name || d.title}`}
+                          className="cursor-pointer"
+                        />
+                      </td>
                       <td className="px-2 py-1.5" style={{ color: '#1f1f1f' }}>
                         <div className="flex items-center gap-1.5">
                           {d.file_path ? (
@@ -586,13 +866,18 @@ export function KbPanel(): JSX.Element {
                       <td className="px-2 py-1.5 text-right" style={{ color: '#616161' }}>
                         {fmtSize(d.size_bytes)}
                       </td>
+                      <td
+                        className="px-2 py-1.5 text-right whitespace-nowrap"
+                        style={{ color: '#616161' }}
+                      >
+                        {fmtTime(d.created_at)}
+                      </td>
                       <td className="px-2 py-1.5 text-right whitespace-nowrap">
                         <button
                           type="button"
                           onClick={() => void onPreview(d)}
                           disabled={!d.file_path}
-                          className="mr-1 rounded px-2 py-0.5 disabled:opacity-40"
-                          style={{ backgroundColor: '#ececec', color: '#0e639c' }}
+                          className="mr-1 btn btn-secondary btn-xs"
                           title={d.file_path ? '预览源文件' : '无可预览的源文件'}
                         >
                           预览
@@ -600,9 +885,8 @@ export function KbPanel(): JSX.Element {
                         <button
                           type="button"
                           onClick={() => void onUpdateVersion(d)}
-                          disabled={busy}
-                          className="mr-1 rounded px-2 py-0.5 disabled:opacity-40"
-                          style={{ backgroundColor: '#ececec', color: '#0e639c' }}
+                          disabled={importing}
+                          className="mr-1 btn btn-secondary btn-xs"
                           title="上传新文件作为该资料的新版本（就绪后自动生效，旧版本保留）"
                         >
                           更新版本
@@ -610,11 +894,7 @@ export function KbPanel(): JSX.Element {
                         <button
                           type="button"
                           onClick={() => void onToggleVersions(d)}
-                          className="mr-1 rounded px-2 py-0.5"
-                          style={{
-                            backgroundColor: expanded ? '#0e639c' : '#ececec',
-                            color: expanded ? '#ffffff' : '#333333',
-                          }}
+                          className={`mr-1 btn btn-xs ${expanded ? 'btn-primary' : 'btn-secondary'}`}
                           title="查看/切换该资料的历史版本"
                         >
                           {expanded ? '收起版本' : `版本历史${vc > 1 ? ` ${vc}` : ''}`}
@@ -622,8 +902,7 @@ export function KbPanel(): JSX.Element {
                         <button
                           type="button"
                           onClick={() => void onDelete(d)}
-                          className="rounded px-2 py-0.5"
-                          style={{ backgroundColor: '#ececec', color: '#cd3131' }}
+                          className="btn btn-danger btn-xs"
                           title={vc > 1 ? `删除该资料及其全部 ${vc} 个版本` : '删除该参考资料及其索引'}
                         >
                           删除
@@ -632,7 +911,7 @@ export function KbPanel(): JSX.Element {
                     </tr>
                     {expanded && (
                       <tr style={{ borderBottom: '1px solid #f0f0f0', backgroundColor: '#fafcff' }}>
-                        <td colSpan={6} className="px-3 py-2">
+                        <td colSpan={8} className="px-3 py-2">
                           {versionsBusy ? (
                             <div className="text-2xs" style={{ color: '#616161' }}>
                               加载版本历史…
@@ -699,8 +978,7 @@ export function KbPanel(): JSX.Element {
                                             type="button"
                                             onClick={() => void onPreviewVersion(v)}
                                             disabled={!v.file_path}
-                                            className="mr-1 rounded px-2 py-0.5 disabled:opacity-40"
-                                            style={{ backgroundColor: '#ececec', color: '#0e639c' }}
+                                            className="mr-1 btn btn-secondary btn-xs"
                                           >
                                             预览
                                           </button>
@@ -708,8 +986,7 @@ export function KbPanel(): JSX.Element {
                                             type="button"
                                             onClick={() => void onActivate(v.doc_id, d.group_id)}
                                             disabled={v.is_active || v.status !== 'ready'}
-                                            className="mr-1 rounded px-2 py-0.5 disabled:opacity-40"
-                                            style={{ backgroundColor: '#e7f6ec', color: '#059669' }}
+                                            className="mr-1 btn btn-success btn-xs"
                                             title={
                                               v.is_active
                                                 ? '当前生效版本'
@@ -725,8 +1002,7 @@ export function KbPanel(): JSX.Element {
                                             onClick={() =>
                                               void onDeleteVersion(v.doc_id, d.group_id)
                                             }
-                                            className="rounded px-2 py-0.5"
-                                            style={{ backgroundColor: '#ececec', color: '#cd3131' }}
+                                            className="btn btn-danger btn-xs"
                                           >
                                             删除
                                           </button>
@@ -748,6 +1024,29 @@ export function KbPanel(): JSX.Element {
           </table>
         )}
       </div>
+
+      {/* 导入确认弹窗：确认后才真正入库（分块 + 向量化） */}
+      {importOpen && (
+        <KbImportDialog
+          items={pending}
+          categories={categories}
+          busy={importing}
+          mode={importBase ? 'version' : 'new'}
+          onChangeCategory={(key, cat) =>
+            setPending((prev) =>
+              prev.map((it) =>
+                it.key === key ? { ...it, category: cat, detected: undefined, error: undefined } : it,
+              ),
+            )
+          }
+          onRemove={(key) => setPending((prev) => prev.filter((it) => it.key !== key))}
+          classifying={classifying}
+          hint={classifyHint}
+          onRetry={() => void retryAutoClassify()}
+          onCancel={onCancelImport}
+          onConfirm={() => void onConfirmImport()}
+        />
+      )}
     </div>
   );
 }

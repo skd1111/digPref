@@ -8,22 +8,35 @@ import { useState } from 'react';
 import type { ThinkingStep } from '@eaide/shared-protocol';
 import { FileReferenceBadge } from './FileReferenceBadge';
 import { splitFileRefs } from './fileRef';
+import {
+  BookIcon,
+  BrainIcon,
+  ComponentIcon,
+  CompassIcon,
+  DotIcon,
+  EyeIcon,
+  MessageIcon,
+  ShieldIcon,
+  TargetIcon,
+  WrenchIcon,
+  type IconComponent,
+} from '@/components/ui/Icons';
 
-const NODE_META: Record<string, { label: string; icon: string; color: string }> = {
-  mode_router: { label: '模式路由', icon: '🚦', color: '#6b7280' },
-  intent: { label: '意图识别', icon: '🧭', color: '#059669' },
-  skill_route: { label: '技能路由', icon: '🎯', color: '#0b6bcb' },
-  planner: { label: '任务规划', icon: '🧠', color: '#0451a5' },
-  decompose: { label: '任务分解', icon: '🧩', color: '#c586c0' },
-  tool_orchestrator: { label: '工具调用', icon: '🔧', color: '#0b6bcb' },
-  tool_runner: { label: '工具执行', icon: '⚙️', color: '#0b6bcb' },
-  hitl_gate: { label: '人工审批', icon: '🛡️', color: '#cd3131' },
-  repair: { label: '自动修复', icon: '🩹', color: '#795e26' },
-  responder: { label: '回答生成', icon: '💬', color: '#c586c0' },
-  rag_retrieve: { label: '知识检索', icon: '📚', color: '#059669' },
-  vision_understand: { label: '截图理解', icon: '👁️', color: '#059669' },
-  local_intent: { label: '端侧意图', icon: '🧭', color: '#059669' },
-  builtin_tool: { label: '内置工具', icon: '🔧', color: '#0b6bcb' },
+const NODE_META: Record<string, { label: string; icon: IconComponent; color: string }> = {
+  mode_router: { label: '模式路由', icon: CompassIcon, color: '#6b7280' },
+  intent: { label: '意图识别', icon: CompassIcon, color: '#059669' },
+  skill_route: { label: '技能路由', icon: TargetIcon, color: '#0b6bcb' },
+  planner: { label: '任务规划', icon: BrainIcon, color: '#0451a5' },
+  decompose: { label: '任务分解', icon: ComponentIcon, color: '#c586c0' },
+  tool_orchestrator: { label: '工具调用', icon: WrenchIcon, color: '#0b6bcb' },
+  tool_runner: { label: '工具执行', icon: WrenchIcon, color: '#0b6bcb' },
+  hitl_gate: { label: '人工审批', icon: ShieldIcon, color: '#cd3131' },
+  repair: { label: '自动修复', icon: WrenchIcon, color: '#795e26' },
+  responder: { label: '回答生成', icon: MessageIcon, color: '#c586c0' },
+  rag_retrieve: { label: '知识检索', icon: BookIcon, color: '#059669' },
+  vision_understand: { label: '截图理解', icon: EyeIcon, color: '#059669' },
+  local_intent: { label: '端侧意图', icon: CompassIcon, color: '#059669' },
+  builtin_tool: { label: '内置工具', icon: WrenchIcon, color: '#0b6bcb' },
 };
 
 /** 四段式标记着色 */
@@ -45,10 +58,11 @@ export function ThinkingStepCard({
   const [open, setOpen] = useState(true);
   const meta = NODE_META[step.node_name] ?? {
     label: step.node_name,
-    icon: '•',
+    icon: DotIcon,
     color: '#616161',
   };
   const ts = step.created_at ? new Date(step.created_at).toLocaleTimeString() : '';
+  const MetaIcon = meta.icon;
   const latency = step.latency_ms != null ? `${step.latency_ms}ms` : '';
 
   return (
@@ -69,7 +83,9 @@ export function ThinkingStepCard({
           className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-2xs"
           style={{ cursor: 'pointer' }}
         >
-          <span aria-hidden>{meta.icon}</span>
+          <span className="flex items-center" aria-hidden>
+            <MetaIcon size={13} />
+          </span>
           <span className="font-semibold" style={{ color: meta.color }}>
             {meta.label}
           </span>

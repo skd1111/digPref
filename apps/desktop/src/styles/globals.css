@@ -30,6 +30,157 @@
   }
 }
 
+/* —— 统一按钮规范（VSCode 官方风格，2026-11-04）——
+   用法：className="btn btn-primary btn-md"
+   变体：btn-primary / btn-secondary / btn-ghost / btn-danger / btn-success
+   尺寸：btn-xs(20px) / btn-sm(22px) / btn-md(26px)，另加 btn-icon（方形图标按钮）
+   约定：按钮颜色一律由类控制，不再写 inline backgroundColor / border / color，
+        否则 inline style 会覆盖类样式，导致风格再次分裂。 */
+@layer components {
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    height: 22px;
+    padding: 0 10px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+    user-select: none;
+    transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease,
+      box-shadow 0.12s ease;
+  }
+
+  .btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 1px #0078d4, 0 0 0 3px rgba(0, 120, 212, 0.35);
+  }
+
+  .btn:disabled,
+  .btn[aria-disabled='true'] {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  /* —— 尺寸 —— */
+  .btn-xs {
+    height: 20px;
+    padding: 0 6px;
+    font-size: 11px;
+  }
+  .btn-sm {
+    height: 22px;
+    padding: 0 10px;
+    font-size: 11px;
+  }
+  .btn-md {
+    height: 26px;
+    padding: 0 14px;
+    font-size: 12px;
+  }
+  /* 方形图标按钮（工具栏/关闭按钮） */
+  .btn-icon {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    font-size: 12px;
+  }
+  /* 撑满父容器（表单底部整行操作） */
+  .btn-block {
+    width: 100%;
+  }
+
+  /* —— 变体 —— */
+  .btn-primary {
+    background-color: #0e639c;
+    border-color: #0e639c;
+    color: #ffffff;
+  }
+  .btn-primary:hover:not(:disabled) {
+    background-color: #1177bb;
+    border-color: #1177bb;
+  }
+  .btn-primary:active:not(:disabled) {
+    background-color: #0d568f;
+    border-color: #0d568f;
+  }
+
+  .btn-secondary {
+    background-color: #ffffff;
+    border-color: #d4d4d4;
+    color: #333333;
+  }
+  .btn-secondary:hover:not(:disabled) {
+    background-color: #f3f3f3;
+    border-color: #b8b8b8;
+  }
+  .btn-secondary:active:not(:disabled) {
+    background-color: #ececec;
+  }
+
+  .btn-ghost {
+    background-color: transparent;
+    border-color: transparent;
+    color: #616161;
+  }
+  .btn-ghost:hover:not(:disabled) {
+    background-color: #ececec;
+    color: #333333;
+  }
+
+  .btn-danger {
+    background-color: #ffffff;
+    border-color: #d4d4d4;
+    color: #cd3131;
+  }
+  .btn-danger:hover:not(:disabled) {
+    background-color: #fdecec;
+    border-color: #cd3131;
+  }
+
+  .btn-success {
+    background-color: #10a37f;
+    border-color: #10a37f;
+    color: #ffffff;
+  }
+  .btn-success:hover:not(:disabled) {
+    background-color: #0d8a6c;
+    border-color: #0d8a6c;
+  }
+
+  /* —— 设置页左侧分类导航项（整行点击，非 .btn 形态） —— */
+  .nav-item {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 5px 8px;
+    font-size: 12px;
+    line-height: 18px;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color 0.12s ease, color 0.12s ease;
+  }
+  .nav-item:hover:not(.nav-item-active) {
+    background-color: #e8e8e8;
+  }
+  .nav-item-active {
+    background-color: #0e639c;
+    color: #ffffff;
+  }
+  .nav-item-active:hover {
+    background-color: #1177bb;
+  }
+}
+
 @layer utilities {
   .scrollbar-thin {
     scrollbar-width: thin;

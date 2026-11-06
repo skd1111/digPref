@@ -31,6 +31,7 @@ vi.mock("@/ipc/invoke", () => ({
     opsCreateRecord: vi.fn(),
     opsCaseDraftSave: vi.fn(),
     opsCaseDraftSubmit: vi.fn(),
+    opsCaseDraftOcrFill: vi.fn(),
     opsCaseFileContent: vi.fn(),
     opsCaseFileSaveAs: vi.fn(),
     opsCaseClear: vi.fn(),
@@ -149,6 +150,8 @@ describe("ExpertWorkflowPanel", () => {
     );
     expect(screen.getByText("客户身份识别专家")).toBeTruthy();
     expect(screen.getByText("营业执照.txt")).toBeTruthy();
+    // 材料详情默认折叠（2026-11 交互优化）：点文件名展开后才见关键要素与证据链
+    fireEvent.click(screen.getByText("营业执照.txt"));
     // 关键要素卡：低置信项标红置顶 + 证据链原文摘录
     expect(screen.getByText("关键要素")).toBeTruthy();
     expect(screen.getByText(/⚠ 有效期：模糊不清/)).toBeTruthy();
@@ -328,6 +331,190 @@ describe("交付草稿表单（BUGFIX #78）", () => {
 });
 
 // ---------------------------------------------------------------------------
+// 上传文件 OCR 自动填入（2026-11-05）：所有专家录入表单通用
+// ---------------------------------------------------------------------------
+
+describe("上传文件 OCR 自动填入", () => {
+  it("选文件后自动填入字段并标 OCR 徽标，可一键撤销", async () => {
+    (ipc.opsCaseDraftSave as ReturnType<typeof vi.fn>).mockImplementation(
+      async (_id: string, body: { values: Record<string, string> }) => ({
+        ...DRAFT,
+        values: body.values,
+      }),
+    );
+    (ipc.opsCaseDraftOcrFill as ReturnType<typeof vi.fn>).mockResolvedValue({
+      values: { corp_name: "某某贸易有限公司" },
+      filled: ["corp_name"],
+      engine: "document",
+      source: "llm",
+      text_chars: 26,
+      text_preview: "企业名称：某某贸易有限公司",
+    });
+    (ipc.opsCaseGet as ReturnType<typeof vi.fn>).mockResolvedValue({
+      case_id: "bank__ops_open",
+      files: [],
+      qa: [],
+      drafts: [DRAFT],
+    });
+    useOpsCaseStore.setState({ drafts: [DRAFT as never] });
+
+    render(
+      <ExpertWorkflowPanel
+        selection={selection}
+        projectName="bank"
+        onSaveTeamPreset={() => undefined}
+      />,
+    );
+    expandDraftPanel();
+
+    // OCR 专用文件选择框（带 accept 白名单，区别于专家卡材料上传框）
+    const fileInput = document.querySelector(
+      'input[type="file"][accept*=".pdf"]',
+    ) as HTMLInputElement;
+    fireEvent.change(fileInput, {
+      target: {
+        files: [new File(["企业名称：某某贸易有限公司"], "执照.txt", { type: "text/plain" })],
+      },
+    });
+
+    await waitFor(() => expect(ipc.opsCaseDraftOcrFill).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText("OCR 填入")).toBeTruthy());
+    const textInputs = screen
+      .getAllByRole("textbox")
+      .filter((el) => !(el as HTMLInputElement).placeholder);
+    expect((textInputs[0] as HTMLInputElement).value).toBe("某某贸易有限公司");
+    // 自动填入后立即暂存，刷新/切页不丢
+    expect(ipc.opsCaseDraftSave).toHaveBeenCalledWith("DR-1", {
+      values: { corp_name: "某某贸易有限公司" },
+    });
+
+    // 撤销本次识别：值回退、徽标移除
+    fireEvent.click(screen.getByText(/撤销本次识别/).closest("button")!);
+    expect((textInputs[0] as HTMLInputElement).value).toBe("");
+    expect(screen.queryByText("OCR 填入")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 系统合规审核报告（2026-11-05）：专家审核前先过文档审核模块，
+// 有风险点自动弹报告（附原文证据），无风险不弹窗
+// ---------------------------------------------------------------------------
+
+function riskReportFixture() {
+  return {
+    audited: true,
+    degraded: false,
+    error: "",
+    basis: "document",
+    doc_category: "contract",
+    risk_types: ["legal"],
+    overall_risk_level: "high",
+    findings: [
+      {
+        finding_id: "F-1",
+        risk_type: "legal",
+        risk_level: "high",
+        title: "单方最终解释权",
+        description: "条款剥夺相对方解释权，存在无效风险",
+        suggestion: "删除该条或改为双方协商解释",
+        rule_ref: null,
+        evidence_text: "甲方享有最终解释权",
+        positions: [{ page_no: 1, block_id: "p1b1", start: 0, end: 9 }],
+        kb_refs: [],
+      },
+    ],
+    elapsed_ms: 1200,
+    audited_at: 1,
+  };
+}
+
+describe("系统合规审核报告", () => {
+  function pendingFile() {
+    return { ...passedFile(), id: "CF-PENDING", status: "pending" as const };
+  }
+
+  it("审核发现风险点 → 自动弹报告（含原文证据），关闭后可从材料行回看", async () => {
+    const risky = {
+      ...passedFile(),
+      id: "CF-PENDING",
+      status: "rejected" as const,
+      risk_report: riskReportFixture(),
+    };
+    const pending = pendingFile();
+    (ipc.opsCaseGet as ReturnType<typeof vi.fn>).mockResolvedValue({
+      case_id: "bank__ops_open",
+      files: [pending],
+      qa: [],
+      drafts: [],
+    });
+    (ipc.opsCaseFileReview as ReturnType<typeof vi.fn>).mockResolvedValue(risky);
+    useOpsCaseStore.setState({ files: [pending as never], drafts: [], riskAuditFileId: "" });
+
+    render(
+      <ExpertWorkflowPanel
+        selection={selection}
+        projectName="bank"
+        onSaveTeamPreset={() => undefined}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText("营业执照.txt")).toBeTruthy());
+    // 材料详情默认折叠，展开后才有点「重审」入口
+    fireEvent.click(screen.getByText("营业执照.txt"));
+    await waitFor(() => expect(screen.getByText("↻ 重审")).toBeTruthy());
+    fireEvent.click(screen.getByText("↻ 重审"));
+
+    await waitFor(() =>
+      expect(screen.getByText(/系统合规审核发现 1 项风险/)).toBeTruthy(),
+    );
+    // 风险点 + 原文证据必须同时出现（需求：报告附原文证据）
+    expect(screen.getByText(/单方最终解释权/)).toBeTruthy();
+    expect(screen.getByText("甲方享有最终解释权")).toBeTruthy();
+    expect(screen.getByText(/处理建议：删除该条或改为双方协商解释/)).toBeTruthy();
+
+    // 关闭后不再自动弹；材料行保留「合规风险 1」入口可回看
+    fireEvent.click(screen.getByText("知道了"));
+    expect(screen.queryByText(/系统合规审核发现/)).toBeNull();
+    expect(useOpsCaseStore.getState().riskAuditFileId).toBe("");
+    fireEvent.click(screen.getByText(/合规风险 1/).closest("button")!);
+    expect(screen.getByText(/系统合规审核发现 1 项风险/)).toBeTruthy();
+  });
+
+  it("审核无风险点 → 不弹窗", async () => {
+    const clean = {
+      ...passedFile(),
+      id: "CF-PENDING",
+      status: "passed" as const,
+      risk_report: { ...riskReportFixture(), findings: [], overall_risk_level: "" },
+    };
+    const pending = pendingFile();
+    (ipc.opsCaseGet as ReturnType<typeof vi.fn>).mockResolvedValue({
+      case_id: "bank__ops_open",
+      files: [pending],
+      qa: [],
+      drafts: [],
+    });
+    (ipc.opsCaseFileReview as ReturnType<typeof vi.fn>).mockResolvedValue(clean);
+    useOpsCaseStore.setState({ files: [pending as never], drafts: [], riskAuditFileId: "" });
+
+    render(
+      <ExpertWorkflowPanel
+        selection={selection}
+        projectName="bank"
+        onSaveTeamPreset={() => undefined}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText("营业执照.txt")).toBeTruthy());
+    // 材料详情默认折叠，展开后才有点「重审」入口
+    fireEvent.click(screen.getByText("营业执照.txt"));
+    await waitFor(() => expect(screen.getByText("↻ 重审")).toBeTruthy());
+    fireEvent.click(screen.getByText("↻ 重审"));
+    await waitFor(() => expect(ipc.opsCaseFileReview).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/系统合规审核发现/)).toBeNull();
+    expect(screen.queryByText(/合规风险/)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 草稿区默认收起（BUGFIX #134）：启动恢复的历史草稿不自动铺屏，
 // 只留提醒栏；本会话新到达的草稿才自动展开
 // ---------------------------------------------------------------------------
@@ -354,7 +541,7 @@ describe("草稿区默认收起（BUGFIX #134）", () => {
     // 点开提醒栏 → 表单出现，可再收起
     expandDraftPanel();
     expect(screen.getByText("提交给专家审核")).toBeTruthy();
-    fireEvent.click(screen.getByText(/▾ 收起/).closest("button")!);
+    fireEvent.click(screen.getByText(/收起/).closest("button")!);
     expect(screen.queryByText("提交给专家审核")).toBeNull();
   });
 
@@ -373,6 +560,8 @@ describe("草稿区默认收起（BUGFIX #134）", () => {
     // 无草稿时连提醒栏都没有
     expect(screen.queryByText(/展开填写/)).toBeNull();
     // 通过专家卡提问框发起提问（专家卡输入框带 placeholder，按此区分）
+    // 提问框默认收起（2026-11 交互优化），点「追问」展开后才输入
+    fireEvent.click(screen.getByTitle(/向客户身份识别专家追问/));
     const askInput = screen.getByPlaceholderText(/提问…（回车发送）/);
     fireEvent.change(askInput, { target: { value: "给我一份资料清单" } });
     fireEvent.keyDown(askInput, { key: "Enter" });
@@ -493,6 +682,8 @@ describe("草稿增强（BUGFIX #85）", () => {
         onSaveTeamPreset={() => undefined}
       />,
     );
+    // 危险操作收在「⋯」溢出菜单（2026-11 交互优化）
+    fireEvent.click(screen.getByTitle("更多操作"));
     fireEvent.click(screen.getByText(/重新开始办理/));
     await waitFor(() => expect(ipc.opsCaseClear).toHaveBeenCalledTimes(1));
     expect(confirmSpy).toHaveBeenCalled();
@@ -636,6 +827,45 @@ describe("全屏草稿表单（BUGFIX #93）", () => {
     fireEvent.change(input, { target: { value: "某某贸易有限公司" } });
     expect(screen.getAllByText("1/1").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/必填项已完成，可提交专家审核/)).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 直开草稿只自动全屏一次（2026-11-05）：页签来回切换不应再弹全屏
+// ---------------------------------------------------------------------------
+
+describe("直开草稿全屏只弹一次（2026-11-05）", () => {
+  const draftA = { ...DRAFT, id: "DR-A", title: "资料预审意见书" };
+  const draftB = { ...DRAFT, id: "DR-B", title: "资料预审信息及补件申请表" };
+
+  it("退出全屏后切页签再切回，保持紧凑卡不再全屏", async () => {
+    (ipc.opsCaseGet as ReturnType<typeof vi.fn>).mockResolvedValue({
+      case_id: "bank__ops_open",
+      files: [],
+      qa: [],
+      drafts: [draftA, draftB],
+    });
+    useOpsCaseStore.setState({
+      drafts: [draftA as never, draftB as never],
+      lastDirectDraftId: "DR-A",
+      lastNewDraftId: "DR-A",
+    });
+    render(
+      <ExpertWorkflowPanel
+        selection={selection}
+        projectName="bank"
+        onSaveTeamPreset={() => undefined}
+      />,
+    );
+    // 直开草稿仍然自动全屏一次
+    await waitFor(() => expect(screen.getByText(/✕ 退出全屏/)).toBeTruthy());
+    fireEvent.click(screen.getByText(/✕ 退出全屏/));
+    await waitFor(() => expect(screen.queryByText(/✕ 退出全屏/)).toBeNull());
+    // 切到另一份草稿，再切回直开草稿：不应再次全屏
+    fireEvent.click(screen.getAllByText("资料预审信息及补件申请表")[0]);
+    fireEvent.click(screen.getAllByText("资料预审意见书")[0]);
+    expect(screen.queryByText(/✕ 退出全屏/)).toBeNull();
+    expect(screen.getByText(/⛶ 全屏/)).toBeTruthy();
   });
 });
 

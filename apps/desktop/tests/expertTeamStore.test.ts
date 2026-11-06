@@ -9,6 +9,7 @@ vi.mock("@/ipc/invoke", () => ({
     expertTeamsSave: vi.fn(),
     expertTeamsDelete: vi.fn(),
     expertTeamsImport: vi.fn(),
+    expertTeamsImportSeeds: vi.fn(),
   },
 }));
 
@@ -96,6 +97,30 @@ describe("expertTeamStore", () => {
     const res = await useExpertTeamStore.getState().importTeamYamlText("id: imported_team");
     expect(res.ok).toBe(true);
     expect(useExpertTeamStore.getState().teams[0].id).toBe("imported_team");
+  });
+
+  it("importBuiltinSeeds reports count and reloads teams", async () => {
+    (ipc.expertTeamsImportSeeds as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      imported: ["aml_team", "post_loan_team"],
+      count: 2,
+    });
+    (ipc.expertTeamsList as ReturnType<typeof vi.fn>).mockResolvedValue({
+      teams: [_team("aml_team"), _team("post_loan_team")],
+    });
+    const res = await useExpertTeamStore.getState().importBuiltinSeeds();
+    expect(res.ok).toBe(true);
+    expect(res.imported).toBe(2);
+    expect(useExpertTeamStore.getState().teams).toHaveLength(2);
+  });
+
+  it("importBuiltinSeeds surfaces backend error", async () => {
+    (ipc.expertTeamsImportSeeds as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("agent not ready"),
+    );
+    const res = await useExpertTeamStore.getState().importBuiltinSeeds();
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("agent not ready");
   });
 
   it("deleteTeam removes team and clears its selection", () => {

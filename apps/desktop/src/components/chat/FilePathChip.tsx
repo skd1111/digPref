@@ -13,6 +13,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { ipc } from '@/ipc/invoke';
 import { useCodeNavStore } from '@/store/codeNavStore';
+import { FileIcon } from '@/components/ui/Icons';
 import { useUIStore } from '@/store/uiStore';
 
 /** 路径主体：不含空白与常见引号/括号/中文标点（防止吞掉后续文本） */
@@ -206,7 +207,9 @@ export function FilePathChip({ path }: { path: string }): JSX.Element {
           fontSize: '0.92em',
         }}
       >
-        <span aria-hidden="true" style={{ fontSize: '0.9em' }}>📄</span>
+        <span className="flex items-center" aria-hidden="true">
+          <FileIcon size={12} />
+        </span>
         <span className="truncate font-mono" style={{ maxWidth: 320 }}>
           {baseName(path)}
         </span>

@@ -4,6 +4,7 @@
  * 简单模态：半透明背景 + 居中卡片 + 关闭。
  */
 import { useUIStore } from '@/store/uiStore';
+import { CloseIcon } from '@/components/ui/Icons';
 
 const SHORTCUTS: { keys: string; desc: string; group: string }[] = [
   { group: '通用', keys: 'Ctrl+Shift+P', desc: '打开命令面板' },
@@ -54,9 +55,9 @@ export function CheatSheet(): JSX.Element | null {
           <button
             type="button"
             onClick={() => toggle(false)}
-            className='rounded px-2 text-fg-muted hover:bg-vscode-border hover:text-fg'
+            className='rounded p-1 text-fg-muted hover:bg-vscode-border hover:text-fg'
           >
-            ✕
+            <CloseIcon size={14} />
           </button>
         </div>
 

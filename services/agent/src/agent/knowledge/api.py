@@ -6,6 +6,7 @@
 - /knowledge/v1/status             V1 本地 KB 状态（文档/块/模型漂移/重建进度）
 - /knowledge/v1/docs               V1 文档列表
 - /knowledge/v1/docs/upload        V1 上传导入（后台分块+向量化，轮询状态）
+- /knowledge/v1/docs/classify/preview V1 导入前分类预判（只读，LLM 判定分类）
 - /knowledge/v1/docs/{id} DELETE    V1 删除（级联清 chunks+FTS+vec+parents）
 - /knowledge/v1/search             V1 混合检索（FTS5 BM25 + 向量 + RRF + rerank）
 - /knowledge/v1/reindex            V1 全量重建向量（模型漂移自愈）
@@ -46,6 +47,20 @@ router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 _storage: KnowledgeStorage | None = None
 _retriever: RAGRetriever | None = None
 _ingestion: KnowledgeIngestion | None = None
+# 入库并发闸门（信号量）：批量导入时后台任务全部并发会打爆云端模型（429）；
+# 限制同时在跑的入库数，其余排队等待。
+_ingest_semaphore: asyncio.Semaphore | None = None
+_ingest_semaphore_limit: int = 0
+
+
+def _get_ingest_semaphore() -> asyncio.Semaphore:
+    """入库并发信号量（按 rag_ingest_concurrency 限流，惰性创建）。"""
+    global _ingest_semaphore, _ingest_semaphore_limit
+    limit = max(1, int(settings.rag_ingest_concurrency))
+    if _ingest_semaphore is None or _ingest_semaphore_limit != limit:
+        _ingest_semaphore = asyncio.Semaphore(limit)
+        _ingest_semaphore_limit = limit
+    return _ingest_semaphore
 
 
 def _get_storage() -> KnowledgeStorage:
@@ -225,6 +240,27 @@ class V1UploadRequest(BaseModel):
 class V1UploadResponse(BaseModel):
     doc_id: str
     status: str
+
+
+class V1ClassifyPreviewRequest(BaseModel):
+    """导入前分类预判请求（只读，不写库）。"""
+
+    paths: list[str] = Field(default_factory=list, description="待预判分类的本地文件路径")
+
+
+class V1ClassifyPreviewItem(BaseModel):
+    path: str
+    category: str = ""
+    label: str = ""
+    error: str = ""
+    # 判定来源：llm=模型判定；heuristic=文件名启发式兜底；空=未判定
+    source: str = ""
+
+
+class V1ClassifyPreviewResponse(BaseModel):
+    enabled: bool = False
+    reason: str = ""
+    items: list[V1ClassifyPreviewItem] = Field(default_factory=list)
 
 
 class V1DeleteResponse(BaseModel):
@@ -426,22 +462,135 @@ async def _run_ingest(
     version: int = 1,
     is_active: bool = True,
 ) -> None:
-    """后台导入（分块+向量化可能耗时）；ingest_file 内部已置 failed 状态。"""
+    """后台导入（分块+向量化可能耗时）；ingest_file 内部已置 failed 状态。
+
+    并发闸门：同时在跑的入库数受 rag_ingest_concurrency 限制（默认 2），
+    避免批量导入时把云端模型打出 429 限流（限流 → 分类/增强阶段成片失败）。
+    """
     ing = _get_ingestion()
-    try:
-        await ing.ingest_file(
-            path,
-            doc_id=doc_id,
-            category=category,
-            metadata=metadata,
-            group_id=group_id,
-            version=version,
-            is_active=is_active,
+    async with _get_ingest_semaphore():
+        try:
+            await ing.ingest_file(
+                path,
+                doc_id=doc_id,
+                category=category,
+                metadata=metadata,
+                group_id=group_id,
+                version=version,
+                is_active=is_active,
+            )
+        except IngestionError as exc:
+            logger.warning("background ingest failed doc_id=%s: %s", doc_id, exc)
+        except Exception:
+            logger.exception("background ingest crashed doc_id=%s", doc_id)
+
+
+# ---- 导入前分类预判（只读，不写库）--------------------------------------
+
+_PREVIEW_TEXT_SUFFIXES = {".md", ".markdown", ".txt", ".csv", ".html", ".htm"}
+_PREVIEW_MAX_CHARS = 2000
+_PREVIEW_MAX_FILES = 50
+# 预判并发：云端后端常有 Token Plan 速率限制，并发过高会直接 429 → 失败一片
+_PREVIEW_CONCURRENCY = 2
+# 条数多时分批：每批若干文件串行处理，批与批之间短暂让速（防持续打限流）
+_PREVIEW_BATCH_SIZE = 10
+_PREVIEW_BATCH_PAUSE_S = 0.4
+# 遇到限流时的退避重试（秒）与重试次数
+_PREVIEW_RATE_LIMIT_BACKOFF_S = 2.0
+_PREVIEW_RATE_LIMIT_RETRIES = 2
+
+
+def _is_rate_limited(exc: BaseException) -> bool:
+    """判断异常是否为限流（429 / rate_limit）——用于退避重试。"""
+    text = str(exc).lower()
+    return "429" in text or "rate limit" in text or "rate_limit" in text
+
+
+def _read_preview_text(path: Path) -> str:
+    """读取文件前 2000 字用于分类预判（纯文本直读；docx/pdf 等走文档解析器）。"""
+    suffix = path.suffix.lower()
+    if suffix in _PREVIEW_TEXT_SUFFIXES:
+        raw = path.read_bytes()
+        for encoding in ("utf-8", "gbk"):
+            try:
+                return raw.decode(encoding)[:_PREVIEW_MAX_CHARS]
+            except UnicodeDecodeError:
+                continue
+        return raw.decode("utf-8", errors="replace")[:_PREVIEW_MAX_CHARS]
+    if suffix == ".doc":
+        # Word 97-2003 需 COM 转换（可达数十秒），预判阶段不等待：交用户手选分类
+        return ""
+    from agent.doc_review.parser import parse_document
+
+    parsed = parse_document(str(path))
+    return (getattr(parsed, "full_text", "") or "")[:_PREVIEW_MAX_CHARS]
+
+
+@router.post("/v1/docs/classify/preview", response_model=V1ClassifyPreviewResponse)
+async def v1_classify_preview(body: V1ClassifyPreviewRequest) -> V1ClassifyPreviewResponse:
+    """导入前分类预判：对每个待导入文件用 LLM 判定分类（只读，不写库）。
+
+    供前端「导入确认」弹窗使用：先看到分类再入库；确认导入时直接带上已判定的分类，
+    入库阶段不再重复调用分类（ingestion 仅在 category 为空时才自动分类）。
+    """
+    if not settings.rag_llm_enhance_enabled or not settings.rag_auto_classify_enabled:
+        return V1ClassifyPreviewResponse(
+            enabled=False,
+            reason="自动分类未启用：请在「检索参数」中开启「大模型知识库验证」与「LLM 自动分类」",
         )
-    except IngestionError as exc:
-        logger.warning("background ingest failed doc_id=%s: %s", doc_id, exc)
-    except Exception:
-        logger.exception("background ingest crashed doc_id=%s", doc_id)
+    from agent.knowledge.category import get_kb_categories
+
+    categories = get_kb_categories()
+    if not categories:
+        return V1ClassifyPreviewResponse(
+            enabled=False, reason="数据字典缺少「知识库分类」条目，无法自动分类"
+        )
+    label_map = {str(c["key"]): str(c["label"]) for c in categories}
+    ingestion = _get_ingestion()
+    semaphore = asyncio.Semaphore(_PREVIEW_CONCURRENCY)
+
+    async def classify_one(raw_path: str) -> V1ClassifyPreviewItem:
+        path = Path(raw_path)
+        try:
+            text = await asyncio.to_thread(_read_preview_text, path)
+        except Exception as exc:
+            return V1ClassifyPreviewItem(path=raw_path, error=f"读取失败：{exc}")
+        if not text.strip():
+            return V1ClassifyPreviewItem(path=raw_path, error="未提取到文本，请手动选择分类")
+        async with semaphore:
+            attempts = 0
+            while True:
+                try:
+                    category, source = await ingestion.classify_text(
+                        text, path.stem, path.name
+                    )
+                    break
+                except Exception as exc:
+                    # 限流：退避后重试（并发已下调，这里再加退避避免持续打限流）
+                    if _is_rate_limited(exc) and attempts < _PREVIEW_RATE_LIMIT_RETRIES:
+                        attempts += 1
+                        await asyncio.sleep(_PREVIEW_RATE_LIMIT_BACKOFF_S * attempts)
+                        continue
+                    logger.warning("classify preview failed path=%s: %s", raw_path, exc)
+                    return V1ClassifyPreviewItem(path=raw_path, error=f"分类失败：{exc}")
+        if not category:
+            return V1ClassifyPreviewItem(path=raw_path, error="未能判定分类，请手动选择")
+        return V1ClassifyPreviewItem(
+            path=raw_path,
+            category=category,
+            label=label_map.get(category, category),
+            source=source,
+        )
+
+    paths = [p for p in body.paths[:_PREVIEW_MAX_FILES] if p.strip()]
+    # 分批串行：每批 _PREVIEW_BATCH_SIZE 个，批间让速；批内并发受信号量限制
+    items: list[V1ClassifyPreviewItem] = []
+    for start in range(0, len(paths), _PREVIEW_BATCH_SIZE):
+        batch = paths[start : start + _PREVIEW_BATCH_SIZE]
+        items.extend(await asyncio.gather(*(classify_one(p) for p in batch)))
+        if start + _PREVIEW_BATCH_SIZE < len(paths):
+            await asyncio.sleep(_PREVIEW_BATCH_PAUSE_S)
+    return V1ClassifyPreviewResponse(enabled=True, items=items)
 
 
 @router.post("/v1/docs/upload", response_model=V1UploadResponse)

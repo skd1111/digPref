@@ -13,6 +13,7 @@
 import { useState } from 'react';
 import type { ChatMessage } from '@eaide/shared-protocol';
 import { useTraceStore } from '@/store/traceStore';
+import { ChevronDownIcon, ChevronRightIcon } from '@/components/ui/Icons';
 import { useChatStore } from '@/store/chatStore';
 import { ShellOutputPanel } from './ShellOutputPanel';
 import { WritePreviewCard } from './WritePreviewCard';
@@ -220,10 +221,11 @@ export function ExecutionRow({
           type="button"
           onClick={() => setOpen((v) => !v)}
           title={open ? '收起详情' : '展开详情'}
-          className="flex-shrink-0 transition-opacity hover:opacity-70"
+          className="flex flex-shrink-0 items-center transition-opacity hover:opacity-70"
           style={{ color: '#9ca3af' }}
+          aria-label={open ? '收起详情' : '展开详情'}
         >
-          {open ? '▾' : '▸'}
+          {open ? <ChevronDownIcon size={13} /> : <ChevronRightIcon size={13} />}
         </button>
       </div>
       {/* 进度副标题（执行过程可视化）：长耗时工具的阶段文案，跑完自动消失 */}

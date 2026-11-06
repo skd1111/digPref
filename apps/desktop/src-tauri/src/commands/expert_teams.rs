@@ -125,3 +125,14 @@ pub async fn expert_teams_export_package(
     let resp = reqwest::get(&url).await.map_err(err)?;
     json_or_err(resp).await
 }
+
+/// 一键导入内置种子专家团（已存在同名团跳过；设置页兜底按钮）。
+#[tauri::command]
+pub async fn expert_teams_import_seeds(
+    state: State<'_, AppState>,
+) -> CmdResult<serde_json::Value> {
+    let url = agent_url(&state, "/expert-teams/import-seeds");
+    let client = reqwest::Client::new();
+    let resp = client.post(&url).send().await.map_err(err)?;
+    json_or_err(resp).await
+}

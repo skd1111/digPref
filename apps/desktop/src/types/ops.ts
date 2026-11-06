@@ -66,6 +66,59 @@ export interface OpsRejectMark {
   advice: string;
 }
 
+// ---------------------------------------------------------------------------
+// 系统合规审核报告（2026-11-05）：专家验收前先过一遍「文档审核」模块，
+// 有风险点 → 前端弹审核报告（风险点 + 原文证据），无风险不弹窗。
+// ---------------------------------------------------------------------------
+
+export type OpsRiskLevel = "low" | "medium" | "high" | "critical";
+
+/** 原文证据定位（与 doc_review Position 对齐） */
+export interface OpsRiskPosition {
+  page_no: number;
+  block_id: string;
+  start: number;
+  end: number;
+}
+
+/** 知识库依据（为什么有风险） */
+export interface OpsRiskKbRef {
+  source: string;
+  heading: string;
+  excerpt: string;
+  matched_terms: string[];
+  file_path: string;
+}
+
+export interface OpsRiskFinding {
+  finding_id: string;
+  risk_type: string;
+  risk_level: OpsRiskLevel;
+  title: string;
+  description: string;
+  suggestion: string;
+  rule_ref?: string | null;
+  /** 风险点对应原文证据（弹窗必展示） */
+  evidence_text: string;
+  positions?: OpsRiskPosition[];
+  kb_refs?: OpsRiskKbRef[];
+}
+
+export interface OpsRiskReport {
+  /** 审核链路是否跑完（false = 降级，无风险点） */
+  audited: boolean;
+  degraded: boolean;
+  error: string;
+  /** document（材料文本/OCR）/ vision（图片视觉描述） */
+  basis?: string;
+  doc_category: string;
+  risk_types?: string[];
+  overall_risk_level: OpsRiskLevel | "";
+  findings: OpsRiskFinding[];
+  elapsed_ms?: number;
+  audited_at?: number;
+}
+
 export interface OpsCaseFile {
   id: string;
   case_id: string;
@@ -82,6 +135,8 @@ export interface OpsCaseFile {
   evidence?: string[];
   /** 打回定位：问题在原文中的位置（文档内高亮，BUGFIX #80） */
   reject_marks?: OpsRejectMark[];
+  /** 系统合规审核报告（2026-11-05）：有 findings → 前端弹审核报告 */
+  risk_report?: OpsRiskReport;
   created_at: number;
   updated_at: number;
 }

@@ -5,6 +5,7 @@
 import { useState } from 'react';
 import { useSkillsStore } from '@/store/skillsStore';
 import type { Skill } from '@/types/skill';
+import { DownloadIcon } from '@/components/ui/Icons';
 
 interface ValidationError {
   field: string;
@@ -70,8 +71,9 @@ export function SkillImportDialog(): JSX.Element | null {
         className="rounded p-4 shadow-2xl"
         style={{ backgroundColor: '#ffffff', minWidth: 480, maxWidth: 720 }}
       >
-        <h3 className="mb-3 text-ui font-semibold" style={{ color: '#1f1f1f' }}>
-          📥 导入 Skill
+        <h3 className="mb-3 flex items-center gap-1 text-ui font-semibold" style={{ color: '#1f1f1f' }}>
+          <DownloadIcon size={14} />
+          导入 Skill
         </h3>
         <p className="mb-3 text-2xs" style={{ color: '#616161' }}>
           选择 .json 文件（V0 单文件 JSON 导入；V1 接后端真实 YAML 解析）
@@ -108,8 +110,7 @@ export function SkillImportDialog(): JSX.Element | null {
           <button
             type="button"
             onClick={close}
-            className="rounded px-3 py-1 text-ui"
-            style={{ backgroundColor: '#ececec', color: '#1f1f1f' }}
+            className="btn btn-secondary btn-md"
           >
             取消
           </button>
@@ -117,12 +118,7 @@ export function SkillImportDialog(): JSX.Element | null {
             type="button"
             onClick={handleConfirm}
             disabled={!content}
-            className="rounded px-3 py-1 text-ui font-semibold"
-            style={{
-              backgroundColor: content ? '#0e639c' : '#ececec',
-              color: content ? '#ffffff' : '#616161',
-              cursor: content ? 'pointer' : 'not-allowed',
-            }}
+            className="btn btn-primary btn-md"
           >
             确认导入
           </button>

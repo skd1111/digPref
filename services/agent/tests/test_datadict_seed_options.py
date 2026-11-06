@@ -15,8 +15,7 @@ from __future__ import annotations
 import json
 
 import pytest
-
-from agent.datadict.storage import DictStorage, SEED_ITEMS
+from agent.datadict.storage import SEED_ITEMS, DictStorage
 
 
 @pytest.fixture()
@@ -28,19 +27,71 @@ def storage(tmp_path):
 
 # ---- 分组计数 ----------------------------------------------------------------
 
+
 def test_all_six_categories_seeded(storage):
     """7 个业务下拉分组全部存在于 seed 数据中。"""
     cats = set(storage.categories())
-    expected = {"知识库分类", "资产类型", "数据库类型", "环境类型", "IM渠道", "模型部署类型", "实体类型"}
+    expected = {
+        "知识库分类",
+        "资产类型",
+        "数据库类型",
+        "环境类型",
+        "IM渠道",
+        "模型部署类型",
+        "实体类型",
+    }
     assert expected.issubset(cats), f"缺少分组: {expected - cats}"
 
 
 def test_kb_category_count(storage):
-    """知识库分类应有 4 条种子数据。"""
+    """知识库分类应有 9 条种子数据（4 基础 + 5 扩展业务域）。"""
     items = storage.list(category="知识库分类")
-    assert len(items) == 4
+    assert len(items) == 9
     keys = {item.key for item in items}
-    assert keys == {"finance", "legal", "compliance", "data_security"}
+    assert keys == {
+        "finance",
+        "legal",
+        "compliance",
+        "data_security",
+        "hr",
+        "operations",
+        "risk",
+        "marketing",
+        "engineering",
+    }
+
+
+def test_kb_category_backfill_on_existing_db(tmp_path):
+    """已有库（非空）也会补齐「知识库分类」缺失项，不覆盖用户改过的条目。"""
+    import sqlite3
+
+    db = str(tmp_path / "dict.db")
+    conn = sqlite3.connect(db)
+    conn.executescript(
+        "CREATE TABLE IF NOT EXISTS dict_items("
+        "key TEXT PRIMARY KEY, category TEXT, label TEXT, value TEXT,"
+        " description TEXT, source TEXT, updated_by TEXT,"
+        " created_at INTEGER, updated_at INTEGER)"
+    )
+    # 已有一条被用户改过标签的分类项
+    conn.execute(
+        "INSERT INTO dict_items(key, category, label, value, description, source,"
+        " updated_by, created_at, updated_at)"
+        " VALUES('finance','知识库分类','财务（用户改名）','finance','用户自定义','manual',"
+        "'admin',1,1)"
+    )
+    conn.commit()
+    conn.close()
+
+    storage = DictStorage(db)
+    items = storage.list(category="知识库分类")
+    keys = {item.key for item in items}
+    # 缺失的分类被补齐
+    assert {"hr", "operations", "risk", "marketing", "engineering"}.issubset(keys)
+    # 用户改过的那条不被覆盖
+    finance = next(i for i in items if i.key == "finance")
+    assert finance.label == "财务（用户改名）"
+    assert finance.source == "manual"
 
 
 def test_db_type_count_and_metadata(storage):
@@ -99,6 +150,7 @@ def test_entity_type_count(storage):
 
 
 # ---- SEED_ITEMS 常量自检 -----------------------------------------------------
+
 
 def test_seed_items_has_no_duplicate_keys():
     """SEED_ITEMS 内同一 (category, key) 不应重复。"""

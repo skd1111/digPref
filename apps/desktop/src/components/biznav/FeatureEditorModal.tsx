@@ -19,6 +19,14 @@ import { useExpertTeamStore } from '@/store/expertTeamStore';
 import type { Feature, RelatedApi, RelatedFile, RelatedTable } from '@/types/biznav';
 import type { ExpertTeam } from '@/types/expertTeam';
 import { featureToYaml } from '@/lib/yamlExport';
+import {
+  BracesIcon,
+  CloseIcon,
+  FileTextIcon,
+  PencilIcon,
+  WarningIcon,
+  type IconComponent,
+} from '@/components/ui/Icons';
 
 type TabId = 'form' | 'yaml';
 
@@ -135,8 +143,9 @@ export function FeatureEditorModal(): JSX.Element | null {
           style={{ borderColor: '#d4d4d4', backgroundColor: '#f3f3f3' }}
         >
           <div>
-            <h3 className="text-ui font-semibold" style={{ color: '#1f1f1f' }}>
-              ✏️ 编辑功能点：{feature.name}
+            <h3 className="flex items-center gap-1 text-ui font-semibold" style={{ color: '#1f1f1f' }}>
+              <PencilIcon size={14} />
+              编辑功能点：{feature.name}
             </h3>
             <div className="text-2xs" style={{ color: '#616161' }}>
               {feature.id} · v{feature.version}
@@ -150,7 +159,7 @@ export function FeatureEditorModal(): JSX.Element | null {
             title="关闭"
             aria-label="关闭"
           >
-            ✕
+            <CloseIcon size={13} />
           </button>
         </div>
 
@@ -161,17 +170,18 @@ export function FeatureEditorModal(): JSX.Element | null {
         >
           {(
             [
-              { id: 'form', label: '📝 表单' },
-              { id: 'yaml', label: '</> YAML 源' },
-            ] as Array<{ id: TabId; label: string }>
+              { id: 'form', label: '表单', icon: FileTextIcon },
+              { id: 'yaml', label: 'YAML 源', icon: BracesIcon },
+            ] as Array<{ id: TabId; label: string; icon: IconComponent }>
           ).map((t) => {
             const active = t.id === tab;
+            const TabIcon = t.icon;
             return (
               <button
                 key={t.id}
                 type="button"
                 onClick={() => setTab(t.id)}
-                className="px-4 py-1.5 text-ui transition-colors"
+                className="flex items-center gap-1 px-4 py-1.5 text-ui transition-colors"
                 style={{
                   color: active ? '#0451a5' : '#616161',
                   backgroundColor: active ? '#ffffff' : 'transparent',
@@ -179,13 +189,15 @@ export function FeatureEditorModal(): JSX.Element | null {
                   fontWeight: active ? 600 : 400,
                 }}
               >
+                <TabIcon size={13} />
                 {t.label}
               </button>
             );
           })}
           {tab === 'yaml' && (
-            <span className="ml-2 self-center text-2xs" style={{ color: '#795e26' }}>
-              ⚠️ V0 YAML Tab 只读，请切回表单 Tab 编辑
+            <span className="ml-2 flex items-center gap-1 self-center text-2xs" style={{ color: '#795e26' }}>
+              <WarningIcon size={12} />
+              V0 YAML Tab 只读，请切回表单 Tab 编辑
             </span>
           )}
         </div>
@@ -263,8 +275,9 @@ export function FeatureEditorModal(): JSX.Element | null {
               minWidth: 360,
             }}
           >
-            <div className="mb-3 text-ui" style={{ color: '#1f1f1f' }}>
-              ⚠️ 当前有未保存的修改
+            <div className="mb-3 flex items-center gap-1 text-ui" style={{ color: '#1f1f1f' }}>
+              <WarningIcon size={14} />
+              当前有未保存的修改
             </div>
             <div className="mb-3 text-2xs" style={{ color: '#a0a0a0' }}>
               关闭后所有修改将丢失。
@@ -427,8 +440,9 @@ function FormTab({
                 }
                 className="rounded px-1 text-2xs"
                 style={{ color: '#cd3131' }}
+                aria-label="移除该项"
               >
-                ✕
+                <CloseIcon size={12} />
               </button>
             </div>
           )}
@@ -496,8 +510,9 @@ function FormTab({
                 }
                 className="rounded px-1 text-2xs"
                 style={{ color: '#cd3131' }}
+                aria-label="移除该项"
               >
-                ✕
+                <CloseIcon size={12} />
               </button>
             </div>
           )}
@@ -550,8 +565,9 @@ function FormTab({
                 }
                 className="rounded px-1 text-2xs"
                 style={{ color: '#cd3131' }}
+                aria-label="移除该项"
               >
-                ✕
+                <CloseIcon size={12} />
               </button>
             </div>
           )}
@@ -592,8 +608,9 @@ function FormTab({
                 }
                 className="rounded px-1 text-2xs"
                 style={{ color: '#cd3131' }}
+                aria-label="移除该项"
               >
-                ✕
+                <CloseIcon size={12} />
               </button>
             </div>
           )}

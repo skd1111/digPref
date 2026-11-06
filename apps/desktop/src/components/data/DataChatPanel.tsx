@@ -6,6 +6,7 @@
  */
 import { useDataStore } from '@/store/dataStore';
 import { PanelHeader } from './DataGrid';
+import { MessageIcon, MaximizeIcon } from '@/components/ui/Icons';
 
 export function DataChatPanel({
   zoomed = false,
@@ -26,17 +27,23 @@ export function DataChatPanel({
   return (
     <div className="flex h-full flex-col overflow-hidden" style={{ backgroundColor: '#ffffff' }}>
       <PanelHeader
-        title="💬 AI 对话"
+        title={
+          <span className="flex items-center gap-1">
+            <MessageIcon size={12} />
+            AI 对话
+          </span>
+        }
+        testId="panel-chat"
         right={
           onZoom ? (
             <button
               type="button"
               onClick={onZoom}
-              className="rounded px-1.5 text-2xs transition-all hover:brightness-95"
-              style={{ backgroundColor: '#ececec', color: '#333333' }}
+              className="btn btn-ghost btn-icon"
               title={zoomed ? '退出放大' : '放大查看'}
+              aria-label={zoomed ? '退出放大' : '放大查看'}
             >
-              ⛶
+              <MaximizeIcon size={13} />
             </button>
           ) : undefined
         }
@@ -60,7 +67,7 @@ export function DataChatPanel({
               }}
             >
               <div className={`mb-0.5 ${roleText}`} style={{ color: m.role === 'user' ? '#cfe6ff' : '#059669' }}>
-                {m.role === 'user' ? '👤 我' : '🤖 数据助手'}
+                {m.role === 'user' ? '我' : '数据助手'}
               </div>
               {m.content}
             </div>
@@ -86,12 +93,8 @@ export function DataChatPanel({
           type="button"
           onClick={() => void send()}
           disabled={running || !draft.trim()}
-          className="rounded px-4 py-2 text-ui font-semibold transition-all hover:brightness-110"
-          style={{
-            backgroundColor: running || !draft.trim() ? '#ececec' : '#059669',
-            color: running || !draft.trim() ? '#616161' : '#ffffff',
-            cursor: running || !draft.trim() ? 'not-allowed' : 'pointer',
-          }}
+          className="btn btn-success btn-md"
+          style={{ cursor: running || !draft.trim() ? 'not-allowed' : 'pointer' }}
         >
           {running ? '生成中…' : '发送'}
         </button>

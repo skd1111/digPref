@@ -6,6 +6,7 @@
 import { useMemo, useState } from 'react';
 import { useSkillsStore } from '@/store/skillsStore';
 import { SkillCard } from './SkillCard';
+import { BrainIcon, DownloadIcon, PlusIcon } from '@/components/ui/Icons';
 import { SkillDraftsPanel, usePendingDraftCount } from './SkillDraftsPanel';
 
 export function SkillsManager(): JSX.Element {
@@ -83,8 +84,9 @@ export function SkillsManager(): JSX.Element {
         className="flex-shrink-0 border-b px-4 py-3"
         style={{ borderColor: '#d4d4d4' }}
       >
-        <h2 className="mb-2 text-ui font-semibold" style={{ color: '#1f1f1f' }}>
-          🧠 业务技能
+        <h2 className="mb-2 flex items-center gap-1 text-ui font-semibold" style={{ color: '#1f1f1f' }}>
+          <BrainIcon size={14} />
+          业务技能
         </h2>
         <div className="flex items-center gap-2">
           <input
@@ -98,18 +100,22 @@ export function SkillsManager(): JSX.Element {
           <button
             type="button"
             onClick={() => setShowNewDialog(true)}
-            className="rounded px-2 py-1 text-2xs"
-            style={{ backgroundColor: '#0e639c', color: '#ffffff' }}
+            className="btn btn-primary btn-sm"
           >
-            + 新建
+            <span className="flex items-center gap-1">
+              <PlusIcon size={12} />
+              新建
+            </span>
           </button>
           <button
             type="button"
             onClick={openImportDialog}
-            className="rounded px-2 py-1 text-2xs"
-            style={{ backgroundColor: '#ececec', color: '#1f1f1f' }}
+            className="btn btn-secondary btn-sm"
           >
-            📥 导入
+            <span className="flex items-center gap-1">
+              <DownloadIcon size={12} />
+              导入
+            </span>
           </button>
         </div>
       </div>
@@ -131,7 +137,7 @@ export function SkillsManager(): JSX.Element {
               key={t.id}
               type="button"
               onClick={() => setTab(t.id)}
-              className="px-4 py-1.5 text-ui transition-colors"
+              className="px-4 py-1.5 text-ui transition-colors hover:bg-[#f3f3f3]"
               style={{
                 color: active ? '#0451a5' : '#616161',
                 borderBottom: active ? '2px solid #007acc' : '2px solid transparent',
@@ -149,7 +155,7 @@ export function SkillsManager(): JSX.Element {
         ) : tab === 'list' ? (
           filtered.length === 0 ? (
             <div className="flex h-full items-center justify-center text-2xs" style={{ color: '#616161' }}>
-              {search ? '无匹配技能' : '暂无技能，点 [+ 新建] 或 [📥 导入] 开始'}
+              {search ? '无匹配技能' : '暂无技能，点「新建」或「导入」开始'}
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
@@ -181,10 +187,12 @@ export function SkillsManager(): JSX.Element {
             <button
               type="button"
               onClick={openImportDialog}
-              className="rounded px-3 py-1.5"
-              style={{ backgroundColor: '#0e639c', color: '#ffffff' }}
+              className="btn btn-primary btn-md"
             >
-              📥 导入单个 skill
+              <span className="flex items-center gap-1">
+                <DownloadIcon size={13} />
+                导入单个 skill
+              </span>
             </button>
           </div>
         )}
@@ -220,16 +228,14 @@ export function SkillsManager(): JSX.Element {
               <button
                 type="button"
                 onClick={() => setShowNewDialog(false)}
-                className="rounded px-3 py-1 text-ui"
-                style={{ backgroundColor: '#ececec', color: '#1f1f1f' }}
+                className="btn btn-secondary btn-md"
               >
                 取消
               </button>
               <button
                 type="button"
                 onClick={handleNewConfirm}
-                className="rounded px-3 py-1 text-ui font-semibold"
-                style={{ backgroundColor: '#0e639c', color: '#ffffff' }}
+                className="btn btn-primary btn-md"
               >
                 创建
               </button>

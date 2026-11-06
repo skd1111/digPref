@@ -156,7 +156,7 @@ describe('多选 / 右键编译（2026-08-19）', () => {
     fireEvent.click(screen.getByTitle('/proj/pom.xml'), { ctrlKey: true });
     expect(screen.getByText('已选 2 项')).toBeTruthy();
 
-    fireEvent.click(screen.getByText('⚙ 编译选中'));
+    fireEvent.click(screen.getByText('编译选中'));
     await waitFor(() => expect(compileFiles).toHaveBeenCalledTimes(1));
 
     const [items, outputDir] = compileFiles.mock.calls[0];
@@ -177,7 +177,7 @@ describe('多选 / 右键编译（2026-08-19）', () => {
     await waitFor(() => expect(screen.getByText('pom.xml')).toBeTruthy());
 
     fireEvent.contextMenu(screen.getByTitle('/proj/pom.xml'));
-    fireEvent.click(screen.getByText('⚙ 编译此文件'));
+    fireEvent.click(screen.getByText('编译此文件'));
     await waitFor(() => expect(compileFiles).toHaveBeenCalledTimes(1));
     expect(compileFiles.mock.calls[0][0]).toEqual([{ path: '/proj/pom.xml', is_dir: false }]);
     alertSpy.mockRestore();
@@ -189,7 +189,7 @@ describe('多选 / 右键编译（2026-08-19）', () => {
     await waitFor(() => expect(screen.getByText('src')).toBeTruthy());
 
     fireEvent.contextMenu(screen.getByTitle('/proj/src'));
-    expect(screen.getByText('⚙ 编译此目录')).toBeTruthy();
+    expect(screen.getByText('编译此目录')).toBeTruthy();
   });
 });
 
@@ -202,7 +202,7 @@ describe('空态导入按钮（2026-08-28）', () => {
     });
 
     render(<ProjectFileTree />);
-    const btn = screen.getByText('📁 导入工程');
+    const btn = screen.getByText('导入工程');
     expect(btn).toBeTruthy();
 
     fireEvent.click(btn);
@@ -211,6 +211,6 @@ describe('空态导入按钮（2026-08-28）', () => {
     );
     // 导入后文件树标题栏出现，空态按钮消失
     await waitFor(() => expect(screen.getByText('打开的项目')).toBeTruthy());
-    expect(screen.queryByText('📁 导入工程')).toBeNull();
+    expect(screen.queryByText('导入工程')).toBeNull();
   });
 });

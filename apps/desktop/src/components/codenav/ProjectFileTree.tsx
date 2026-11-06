@@ -14,6 +14,15 @@ import { useUIStore } from '@/store/uiStore';
 import { useOfficePreviewStore } from '@/store/officePreviewStore';
 import { pickAndImportFolder } from '@/components/codenav/fileOps';
 import { ipc } from '@/ipc/invoke';
+import {
+  ChevronDownIcon,
+  ChevronRightIcon,
+  FileIcon,
+  FolderIcon,
+  FolderOpenIcon,
+  PaletteIcon,
+  WrenchIcon,
+} from '@/components/ui/Icons';
 
 /** Office 文档后缀（V9 右键预览入口判定） */
 const OFFICE_SUFFIX_RE = /\.(docx|xlsx|pptx)$/i;
@@ -71,14 +80,22 @@ function TreeItem({
       >
         {/* 展开/折叠箭头 */}
         {node.isDir ? (
-          <span className="w-[16px] flex-shrink-0 text-center text-[9px] text-[#616161]">
-            {node.loading ? '⋯' : node.expanded ? '▾' : '▸'}
+          <span className="flex w-[16px] flex-shrink-0 items-center justify-center text-[#616161]">
+            {node.loading ? (
+              <span className="text-[9px]">⋯</span>
+            ) : node.expanded ? (
+              <ChevronDownIcon size={13} />
+            ) : (
+              <ChevronRightIcon size={13} />
+            )}
           </span>
         ) : (
           <span className="w-[16px] flex-shrink-0" />
         )}
         {/* 图标 */}
-        <span className="flex-shrink-0 text-[13px] opacity-80">{node.isDir ? '📁' : '📄'}</span>
+        <span className="flex flex-shrink-0 items-center opacity-80" aria-hidden="true">
+          {node.isDir ? <FolderIcon size={13} /> : <FileIcon size={13} />}
+        </span>
         {/* 名称 */}
         <span className="truncate text-[#333333]">{node.name}</span>
         {/* 选中勾（多选编译，2026-08-19） */}
@@ -372,18 +389,22 @@ export function ProjectFileTree(): JSX.Element | null {
   if (!openedProjects || openedProjects.length === 0) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 px-4 py-10 text-center">
-        <div className="text-3xl">📂</div>
+        <div className="flex items-center text-3xl" aria-hidden="true">
+          <FolderOpenIcon size={30} />
+        </div>
         <div className="text-2xs" style={{ color: '#616161' }}>
           暂无已导入的工程文件夹
         </div>
         <button
           type="button"
           onClick={() => void pickAndImportFolder()}
-          className="rounded px-3 py-1.5 text-2xs font-semibold"
-          style={{ backgroundColor: '#0e639c', color: '#ffffff' }}
+          className="btn btn-primary btn-sm"
           title="选择项目文件夹，导入后展示文件树并建立代码索引"
         >
-          📁 导入工程
+          <span className="flex items-center gap-1">
+            <FolderIcon size={13} />
+            导入工程
+          </span>
         </button>
       </div>
     );
@@ -417,15 +438,21 @@ export function ProjectFileTree(): JSX.Element | null {
             type="button"
             disabled={compileBusy}
             onClick={compileSelected}
-            className="rounded px-2 py-0.5 text-[11px] font-semibold text-white disabled:opacity-50"
-            style={{ backgroundColor: '#007acc' }}
+            className="btn btn-primary btn-xs"
           >
-            {compileBusy ? '编译中…' : '⚙ 编译选中'}
+            {compileBusy ? (
+              '编译中…'
+            ) : (
+              <span className="flex items-center gap-1">
+                <WrenchIcon size={12} />
+                编译选中
+              </span>
+            )}
           </button>
           <button
             type="button"
             onClick={() => setSelected(new Map())}
-            className="ml-auto rounded px-1.5 py-0.5 text-[11px] text-[#616161] hover:bg-[#d0e0f5]"
+            className="ml-auto btn btn-ghost btn-xs"
           >
             清除
           </button>
@@ -456,10 +483,12 @@ export function ProjectFileTree(): JSX.Element | null {
               }}
               title={folder}
             >
-              <span className="w-[16px] flex-shrink-0 text-center text-[9px] text-[#616161]">
-                {isExpanded ? '▾' : '▸'}
+              <span className="flex w-[16px] flex-shrink-0 items-center justify-center text-[#616161]">
+                {isExpanded ? <ChevronDownIcon size={13} /> : <ChevronRightIcon size={13} />}
               </span>
-              <span className="flex-shrink-0 text-[13px]">📂</span>
+              <span className="flex flex-shrink-0 items-center" aria-hidden="true">
+                <FolderOpenIcon size={13} />
+              </span>
               <span className="truncate text-[#333333]">{rootName}</span>
               {selected.has(folder) && (
                 <span className="ml-auto text-[11px] text-[#0451a5]">✓</span>
@@ -512,7 +541,14 @@ export function ProjectFileTree(): JSX.Element | null {
                 void runCompile([target]);
               }}
             >
-              {compileBusy ? '编译中…' : `⚙ 编译此${contextMenu.isDir ? '目录' : '文件'}`}
+              {compileBusy ? (
+                '编译中…'
+              ) : (
+                <span className="flex items-center gap-1.5">
+                  <WrenchIcon size={13} />
+                  编译此{contextMenu.isDir ? '目录' : '文件'}
+                </span>
+              )}
             </button>
             {selected.size > 0 && (
               <button
@@ -523,7 +559,10 @@ export function ProjectFileTree(): JSX.Element | null {
                   compileSelected();
                 }}
               >
-                ⚙ 编译已选 {selected.size} 项
+                <span className="flex items-center gap-1.5">
+                  <WrenchIcon size={13} />
+                  编译已选 {selected.size} 项
+                </span>
               </button>
             )}
             {/* V9 Office 预览（2026-08-25）：仅 docx/xlsx/pptx 文件显示 */}
@@ -536,7 +575,10 @@ export function ProjectFileTree(): JSX.Element | null {
                   void useOfficePreviewStore.getState().openPreview(target);
                 }}
               >
-                📄 Office 预览
+                <span className="flex items-center gap-1.5">
+                  <FileIcon size={13} />
+                  Office 预览
+                </span>
               </button>
             )}
             {/* V9.6 HTML 演示预览（2026-08-25）：视觉演示稿（单文件 HTML）直读展示 */}
@@ -549,7 +591,10 @@ export function ProjectFileTree(): JSX.Element | null {
                   void useOfficePreviewStore.getState().openHtml(target);
                 }}
               >
-                🎨 HTML 演示预览
+                <span className="flex items-center gap-1.5">
+                  <PaletteIcon size={13} />
+                  HTML 演示预览
+                </span>
               </button>
             )}
             {contextMenu.isRoot && (

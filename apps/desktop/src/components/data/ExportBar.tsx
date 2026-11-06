@@ -10,12 +10,20 @@ import { useState } from 'react';
 import { save } from '@tauri-apps/plugin-dialog';
 import { useDataStore } from '@/store/dataStore';
 import { PanelHeader } from './DataGrid';
+import {
+  BarChartIcon,
+  DownloadIcon,
+  FileIcon,
+  SaveIcon,
+  TableIcon,
+  type IconComponent,
+} from '@/components/ui/Icons';
 
-const ACTIONS: Array<{ id: string; label: string; icon: string; color: string }> = [
-  { id: 'excel', label: '导出 Excel', icon: '📊', color: '#217346' },
-  { id: 'pdf', label: '导出 PDF 报表', icon: '📄', color: '#c74634' },
-  { id: 'csv', label: '导出 CSV', icon: '📑', color: '#0e639c' },
-  { id: 'template', label: '保存为模板', icon: '💾', color: '#059669' },
+const ACTIONS: Array<{ id: string; label: string; icon: IconComponent; color: string }> = [
+  { id: 'excel', label: '导出 Excel', icon: BarChartIcon, color: '#217346' },
+  { id: 'pdf', label: '导出 PDF 报表', icon: FileIcon, color: '#c74634' },
+  { id: 'csv', label: '导出 CSV', icon: TableIcon, color: '#0e639c' },
+  { id: 'template', label: '保存为模板', icon: SaveIcon, color: '#059669' },
 ];
 
 /** 导出格式 → save 对话框扩展名/过滤器 */
@@ -64,21 +72,31 @@ export function ExportBar(): JSX.Element {
 
   return (
     <div className="flex flex-col overflow-hidden border-t" style={{ borderColor: '#d0d0d0', backgroundColor: '#ffffff' }}>
-      <PanelHeader title="⬇ 导出与分享" />
+      <PanelHeader
+        title={
+          <span className="flex items-center gap-1">
+            <DownloadIcon size={12} />
+            导出与分享
+          </span>
+        }
+      />
       <div className="grid grid-cols-2 gap-2 p-3">
-        {ACTIONS.map((a) => (
+        {ACTIONS.map((a) => {
+          const ActionIcon = a.icon;
+          return (
           <button
             key={a.id}
             type="button"
             onClick={() => onExport(a.id, a.label)}
             disabled={exporting}
-            className="flex items-center justify-center gap-1.5 rounded py-2 text-ui font-semibold transition-all hover:brightness-110"
+            className="btn btn-md"
             style={{ backgroundColor: a.color, color: '#ffffff', opacity: exporting ? 0.6 : 1 }}
           >
-            <span aria-hidden>{a.icon}</span>
+            <ActionIcon size={13} />
             {a.label}
           </button>
-        ))}
+          );
+        })}
       </div>
       <div className="px-3 pb-2 text-2xs" style={{ color: '#6a9955' }}>
         🔒 导出自动脱敏 + 数字水印 + 审计（可一键送「审核专家」复核）

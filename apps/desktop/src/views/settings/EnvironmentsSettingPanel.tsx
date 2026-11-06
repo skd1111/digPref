@@ -261,8 +261,7 @@ export function EnvironmentsSettingPanel(): JSX.Element {
           <button
             type="button"
             onClick={() => setCreating(true)}
-            className="rounded px-3 py-1 text-ui font-semibold"
-            style={{ backgroundColor: '#007acc', color: '#ffffff' }}
+            className="btn btn-primary btn-md"
           >
             ＋ 创建环境
           </button>
@@ -270,8 +269,7 @@ export function EnvironmentsSettingPanel(): JSX.Element {
             type="button"
             onClick={() => void doExport()}
             disabled={exporting || list.length === 0}
-            className="rounded px-3 py-1 text-ui"
-            style={{ backgroundColor: '#ececec', color: '#333333', border: '1px solid #b8b8b8' }}
+            className="btn btn-secondary btn-md"
           >
             {exporting ? '导出中…' : '加密导出'}
           </button>
@@ -279,16 +277,14 @@ export function EnvironmentsSettingPanel(): JSX.Element {
             type="button"
             onClick={() => void doImport()}
             disabled={importing}
-            className="rounded px-3 py-1 text-ui"
-            style={{ backgroundColor: '#ececec', color: '#333333', border: '1px solid #b8b8b8' }}
+            className="btn btn-secondary btn-md"
           >
             {importing ? '导入中…' : '导入 .eae'}
           </button>
           <button
             type="button"
             onClick={() => void refresh()}
-            className="rounded px-3 py-1 text-ui"
-            style={{ backgroundColor: '#ececec', color: '#333333', border: '1px solid #b8b8b8' }}
+            className="btn btn-secondary btn-md"
           >
             ↻ 刷新
           </button>
@@ -318,8 +314,7 @@ export function EnvironmentsSettingPanel(): JSX.Element {
           <button
             type="button"
             onClick={() => setCreating(true)}
-            className="rounded px-4 py-1.5 text-ui font-semibold"
-            style={{ backgroundColor: '#007acc', color: '#ffffff' }}
+            className="btn btn-primary btn-md"
           >
             ＋ 创建第一个环境
           </button>
@@ -369,7 +364,7 @@ export function EnvironmentsSettingPanel(): JSX.Element {
                     <button
                       type="button"
                       onClick={() => void activate(e.environment)}
-                      className="rounded px-2 py-0.5 text-2xs hover:bg-vscode-border"
+                      className="btn btn-ghost btn-xs"
                     >
                       激活
                     </button>
@@ -377,14 +372,14 @@ export function EnvironmentsSettingPanel(): JSX.Element {
                   <button
                     type="button"
                     onClick={() => void openEditor(e.environment)}
-                    className="ml-2 rounded px-2 py-0.5 text-2xs hover:bg-vscode-border"
+                    className="ml-2 btn btn-secondary btn-xs"
                   >
                     {e.configured ? '编辑' : '立即配置'}
                   </button>
                   <button
                     type="button"
                     onClick={() => void remove(e.environment)}
-                    className="ml-2 rounded px-2 py-0.5 text-2xs text-accent-danger hover:bg-vscode-border"
+                    className="ml-2 btn btn-danger btn-xs"
                   >
                     删除
                   </button>
@@ -489,12 +484,7 @@ function CreateEnvModal({
                   key={name}
                   type="button"
                   onClick={() => setEnv(name)}
-                  className="rounded px-2 py-0.5 font-mono text-2xs hover:bg-vscode-border"
-                  style={{
-                    backgroundColor: '#ececec',
-                    color: existingEnvNames.includes(name) ? '#616161' : '#333333',
-                    border: '1px solid #d4d4d4',
-                  }}
+                  className="btn btn-secondary btn-xs"
                 >
                   {name}
                   {existingEnvNames.includes(name) && (
@@ -538,8 +528,7 @@ function CreateEnvModal({
           <button
             type="button"
             onClick={onCancel}
-            className="rounded px-3 py-1.5 text-ui"
-            style={{ backgroundColor: '#ececec', color: '#333333' }}
+            className="btn btn-secondary btn-md"
           >
             取消
           </button>
@@ -554,8 +543,7 @@ function CreateEnvModal({
                 .catch((e) => setErr(String(e)))
                 .finally(() => setBusy(false));
             }}
-            className="rounded px-3 py-1.5 text-ui font-semibold disabled:opacity-50"
-            style={{ backgroundColor: '#007acc', color: '#ffffff' }}
+            className="btn btn-primary btn-md"
           >
             {busy ? '创建中…' : '创建'}
           </button>
@@ -636,8 +624,7 @@ function EnvEditor({
             <button
               type="button"
               onClick={addDb}
-              className="rounded px-2 py-0.5 text-2xs"
-              style={{ backgroundColor: '#ececec', color: '#333333' }}
+              className="btn btn-secondary btn-xs"
             >
               ＋ 新增
             </button>
@@ -665,7 +652,7 @@ function EnvEditor({
               <button
                 type="button"
                 onClick={() => delDb(i)}
-                className="mt-1 rounded px-2 py-0.5 text-2xs text-accent-danger"
+                className="mt-1 btn btn-danger btn-xs"
               >
                 删除
               </button>
@@ -699,8 +686,7 @@ function EnvEditor({
                   ],
                 })
               }
-              className="rounded px-2 py-0.5 text-2xs"
-              style={{ backgroundColor: '#ececec', color: '#333333' }}
+              className="btn btn-secondary btn-xs"
             >
               ＋ 新增
             </button>
@@ -815,7 +801,7 @@ function EnvEditor({
                       target_servers: draft.target_servers.filter((_, idx) => idx !== i),
                     })
                   }
-                  className="rounded px-2 py-0.5 text-2xs text-accent-danger"
+                  className="btn btn-danger btn-xs"
                 >
                   删除
                 </button>
@@ -833,16 +819,14 @@ function EnvEditor({
           <button
             type="button"
             onClick={onCancel}
-            className="rounded px-3 py-1.5 text-ui"
-            style={{ backgroundColor: '#ececec', color: '#333333' }}
+            className="btn btn-secondary btn-md"
           >
             取消
           </button>
           <button
             type="button"
             onClick={onSave}
-            className="rounded px-3 py-1.5 text-ui font-semibold"
-            style={{ backgroundColor: '#007acc', color: '#ffffff' }}
+            className="btn btn-primary btn-md"
           >
             保存
           </button>

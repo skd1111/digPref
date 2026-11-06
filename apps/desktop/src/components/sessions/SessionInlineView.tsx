@@ -22,6 +22,7 @@
 import { useEffect, useState } from 'react';
 import { useSessionsStore } from '@/store/sessionsStore';
 import { SessionDetailDialog } from './SessionDetailDialog';
+import { FolderOpenIcon, WarningIcon, WrenchIcon } from '@/components/ui/Icons';
 
 export function SessionInlineView(): JSX.Element {
   const activeId = useSessionsStore((s) => s.activeSessionId);
@@ -44,7 +45,10 @@ export function SessionInlineView(): JSX.Element {
     return (
       <div className="flex h-full items-center justify-center" style={{ color: '#9ca3af' }}>
         <div className="text-center">
-          <div className="mb-2 text-lg">📂 会话浏览</div>
+          <div className="mb-2 flex items-center justify-center gap-1.5 text-lg">
+            <FolderOpenIcon size={18} />
+            会话浏览
+          </div>
           <div className="text-xs">从左侧选择会话查看历史消息</div>
         </div>
       </div>
@@ -80,7 +84,7 @@ export function SessionInlineView(): JSX.Element {
           </h2>
           <div className="mt-0.5 text-xs" style={{ color: '#6b7280' }}>
             {meta?.owner ? `${meta.owner} · ` : ''}
-            {meta?.is_branch ? '🔀 分支会话 · ' : ''}
+            {meta?.is_branch ? '分支会话 · ' : ''}
             {meta?.created_at
               ? `创建于 ${new Date(meta.created_at).toLocaleString()}`
               : ''}
@@ -92,8 +96,7 @@ export function SessionInlineView(): JSX.Element {
         <button
           type="button"
           onClick={() => setShowDetailDialog(true)}
-          className="rounded px-3 py-1 text-xs hover:opacity-90"
-          style={{ backgroundColor: '#0e639c', color: '#ffffff' }}
+          className="btn btn-primary btn-sm"
           title="打开完整详情（统计 / 分支 / 共享 / 事件链）"
         >
           详情 →
@@ -103,10 +106,11 @@ export function SessionInlineView(): JSX.Element {
       {/* 错误提示（用户说"没渲染聊天记录"可能是因为 get() 失败被吞） */}
       {error && (
         <div
-          className="px-4 py-2 text-xs"
+          className="flex items-center gap-1 px-4 py-2 text-xs"
           style={{ backgroundColor: '#fdeaea', color: '#cd3131', borderBottom: '1px solid #e0e0e0' }}
         >
-          ⚠️ {error}
+          <WarningIcon size={13} />
+          {error}
         </div>
       )}
 
@@ -134,8 +138,9 @@ export function SessionInlineView(): JSX.Element {
                 </div>
                 <div className="whitespace-pre-wrap break-words">{String(m.content)}</div>
                 {Boolean(m.tool_name) && (
-                  <div className="mt-1" style={{ color: '#0b6bcb' }}>
-                    🔧 {String(m.tool_name)}
+                  <div className="mt-1 flex items-center gap-1" style={{ color: '#0b6bcb' }}>
+                    <WrenchIcon size={12} />
+                    {String(m.tool_name)}
                   </div>
                 )}
               </div>

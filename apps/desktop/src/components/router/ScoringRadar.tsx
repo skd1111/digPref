@@ -7,6 +7,7 @@
  * 颜色编码：绿 ≥ 0.66 / 黄 0.33-0.65 / 红 < 0.33。
  */
 import { useRouterStore } from '@/store/routerStore';
+import { BarChartIcon } from '@/components/ui/Icons';
 
 const DIM_LABELS: Record<string, string> = {
   capability: '能力',
@@ -19,13 +20,18 @@ const DIM_LABELS: Record<string, string> = {
 interface ScoringRadarProps {
   /** 0-1 范围 5 维评分；缺字段按 0 显示 */
   scores?: Partial<Record<string, number>>;
-  /** 顶部标题（默认 "📊 5 维评分"） */
-  title?: string;
+  /** 顶部标题（默认「5 维评分（当前引擎权重）」） */
+  title?: React.ReactNode;
 }
 
 export function ScoringRadar({
   scores,
-  title = '📊 5 维评分（当前引擎权重）',
+  title = (
+    <span className="flex items-center gap-1">
+      <BarChartIcon size={12} />
+      5 维评分（当前引擎权重）
+    </span>
+  ),
 }: ScoringRadarProps): JSX.Element {
   const weights = useRouterStore((s) => s.weights);
 

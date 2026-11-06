@@ -217,8 +217,7 @@ export function GenLimitsPanel(): JSX.Element {
           type="button"
           onClick={() => void save()}
           disabled={!dirty || saving}
-          className="rounded px-4 py-1.5 text-ui text-white disabled:opacity-50"
-          style={{ backgroundColor: '#0e639c' }}
+          className="btn btn-primary btn-md"
         >
           {saving ? '保存中…' : '保存'}
         </button>

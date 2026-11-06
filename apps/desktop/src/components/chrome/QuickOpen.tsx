@@ -6,13 +6,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useUIStore } from '@/store/uiStore';
 import { useAssetStore, type AssetNode } from '@/store/assetStore';
-
-const TYPE_ICON: Record<AssetNode['type'], string> = {
-  database: '🗄',
-  rest: '🌐',
-  ssh: '🔐',
-  rpa: '🤖',
-};
+import { ASSET_TYPE_ICONS } from '@/components/asset-tree/assetTypeIcons';
 
 export function QuickOpen(): JSX.Element | null {
   const open = useUIStore((s) => s.quickOpenOpen);
@@ -95,7 +89,9 @@ export function QuickOpen(): JSX.Element | null {
           {items.length === 0 ? (
             <li className="px-3 py-2 text-fg-muted">无匹配</li>
           ) : (
-            items.map((n, i) => (
+            items.map((n, i) => {
+              const TypeIcon = ASSET_TYPE_ICONS[n.type];
+              return (
               <li
                 key={n.id}
                 onMouseEnter={() => setHighlight(i)}
@@ -106,11 +102,14 @@ export function QuickOpen(): JSX.Element | null {
                   color: '#1f1f1f',
                 }}
               >
-                <span className="text-fg-muted">{TYPE_ICON[n.type]}</span>
+                <span className="flex items-center text-fg-muted" aria-hidden="true">
+                  <TypeIcon size={13} />
+                </span>
                 <span className="flex-1">{n.label}</span>
                 <span className="text-2xs text-fg-muted">{n.type}</span>
               </li>
-            ))
+              );
+            })
           )}
         </ul>
       </div>

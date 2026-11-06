@@ -6,13 +6,49 @@
  *   - screenshot 模式：base64 PNG 图片展示
  * 安全红线：渲染产物为本地静态内容，iframe 不给 allow-same-origin。
  */
+import { useEffect, useRef, useState } from "react";
 import { useOfficePreviewStore } from "@/store/officePreviewStore";
 import { Markdown } from "@/components/chat/Markdown";
 import { ipc } from "@/ipc/invoke";
+import { injectAnchors } from "./officeAnchor";
 
 export function OfficePreviewPanel(): JSX.Element | null {
-  const { open, loading, error, path, mode, source, html, imageBase64, pdfUrl, close, refresh } =
-    useOfficePreviewStore();
+  const {
+    open,
+    loading,
+    error,
+    path,
+    mode,
+    source,
+    html,
+    imageBase64,
+    pdfUrl,
+    anchors,
+    sessionId,
+    close,
+    refresh,
+  } = useOfficePreviewStore();
+  // 定位结果（渲染页脚本回传）：命中多少处风险位置
+  const [hitInfo, setHitInfo] = useState<{ hits: number; total: number } | null>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  // 渲染页（sandbox iframe）内的定位脚本用 postMessage 回传命中数
+  useEffect(() => {
+    const onMsg = (e: MessageEvent): void => {
+      if (iframeRef.current && e.source !== iframeRef.current.contentWindow) return;
+      const d = e.data as { type?: string; hits?: number; total?: number } | null;
+      if (d && d.type === "eaide-anchor-result") {
+        setHitInfo({ hits: d.hits ?? 0, total: d.total ?? 0 });
+      }
+    };
+    window.addEventListener("message", onMsg);
+    return () => window.removeEventListener("message", onMsg);
+  }, []);
+
+  // 切换预览目标时清空上一轮的定位提示
+  useEffect(() => {
+    setHitInfo(null);
+  }, [path, sessionId]);
 
   if (!open) return null;
   const fileName = path ? path.split(/[\\/]/).pop() ?? path : "";
@@ -72,6 +108,22 @@ export function OfficePreviewPanel(): JSX.Element | null {
           </div>
         </div>
 
+        {/* 定位结果提示条（渲染页脚本回传命中数） */}
+        {anchors.length > 0 && !loading && !error && hitInfo && (
+          <div
+            className="flex flex-shrink-0 items-center gap-2 border-b px-3 py-1.5 text-[11px]"
+            style={{
+              borderColor: "#1f2937",
+              backgroundColor: hitInfo.hits > 0 ? "#10243a" : "#2a1f1f",
+              color: hitInfo.hits > 0 ? "#7dd3fc" : "#fca5a5",
+            }}
+          >
+            {hitInfo.hits > 0
+              ? `已在原文中定位并高亮 ${hitInfo.hits} / ${hitInfo.total} 处风险（对应列/段落已滚动到视口）`
+              : `未能在原文中定位到风险位置（${hitInfo.total} 处），可手动滚动查看`}
+          </div>
+        )}
+
         {/* 内容区 */}
         <div className="flex min-h-0 flex-1 items-stretch justify-center overflow-auto bg-neutral-950">
           {loading && (
@@ -106,9 +158,10 @@ export function OfficePreviewPanel(): JSX.Element | null {
           )}
           {!loading && !error && mode === "html" && html && (
             <iframe
+              ref={iframeRef}
               className="h-full w-full border-0 bg-white"
               sandbox="allow-scripts"
-              srcDoc={html}
+              srcDoc={injectAnchors(html, anchors)}
               title={fileName}
             />
           )}

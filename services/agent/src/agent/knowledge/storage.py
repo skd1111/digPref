@@ -987,7 +987,8 @@ class KnowledgeStorage:
         if did:
             clauses.append("e.doc_id = ?")
             params.append(str(did))
-        and_clause = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        # 过滤子句（AND 形式）：LIKE 兜底拼在主 WHERE 之后，不能再带 WHERE
+        filter_sql = (" AND " + " AND ".join(clauses)) if clauses else ""
 
         with self._connect() as conn:
             # 优先 FTS5
@@ -1001,7 +1002,7 @@ class KnowledgeStorage:
                             f" JOIN entities e ON e.seq = f.rowid"
                             f" WHERE {_ENT_FTS_TABLE} MATCH ?"
                             + (f" AND {' AND '.join(clauses)}" if clauses else "")
-                            + f" LIMIT ?"
+                            + " LIMIT ?"
                         )
                         rows = conn.execute(
                             fts_sql, (match_q, *params, int(limit))
@@ -1021,7 +1022,7 @@ class KnowledgeStorage:
             # LIKE 兜底
             like_sql = (
                 "SELECT entity_name, entity_type, doc_id, parent_seq FROM entities e"
-                f" WHERE e.entity_name LIKE ?{and_clause} LIMIT ?"
+                f" WHERE e.entity_name LIKE ?{filter_sql} LIMIT ?"
             )
             rows = conn.execute(
                 like_sql, (f"%{text}%", *params, int(limit))

@@ -12,6 +12,13 @@ import { useEffect, useState } from 'react';
 import { useSessionsStore } from '@/store/sessionsStore';
 import { BranchDialog } from './BranchDialog';
 import { ExportDialog } from './ExportDialog';
+import {
+  CloseIcon,
+  GitForkIcon,
+  LinkIcon,
+  SaveIcon,
+  WrenchIcon,
+} from '@/components/ui/Icons';
 import { EventGraphViz } from './EventGraphViz';
 
 type Tab = 'overview' | 'messages' | 'branches' | 'sharing' | 'chain';
@@ -86,9 +93,9 @@ export function SessionDetailDialog({ sessionId, open, onClose }: Props): JSX.El
           <button
             type="button"
             onClick={onClose}
-            className="px-3 py-1 text-sm hover:bg-[#333]"
+            className="btn btn-ghost btn-icon"
           >
-            ✕
+            <CloseIcon size={13} />
           </button>
         </div>
 
@@ -99,9 +106,10 @@ export function SessionDetailDialog({ sessionId, open, onClose }: Props): JSX.El
               key={t}
               type="button"
               onClick={() => setTab(t)}
-              className="px-4 py-2 text-xs hover:bg-[#2a2d2e]"
+              className="px-4 py-2 text-xs hover:bg-[#f3f3f3]"
               style={{
                 backgroundColor: tab === t ? '#0e639c' : 'transparent',
+                color: tab === t ? '#ffffff' : '#616161',
                 borderBottom: tab === t ? '2px solid #007acc' : '2px solid transparent',
               }}
             >
@@ -136,18 +144,22 @@ export function SessionDetailDialog({ sessionId, open, onClose }: Props): JSX.El
                 <button
                   type="button"
                   onClick={() => setShowBranchDialog(true)}
-                  className="rounded px-3 py-1 text-xs"
-                  style={{ backgroundColor: '#0e639c', color: '#fff' }}
+                  className="btn btn-primary btn-sm"
                 >
-                  🔀 创建分支
+                  <span className="flex items-center gap-1">
+                    <GitForkIcon size={13} />
+                    创建分支
+                  </span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setShowExportDialog(true)}
-                  className="rounded px-3 py-1 text-xs"
-                  style={{ backgroundColor: '#0e639c', color: '#fff' }}
+                  className="btn btn-primary btn-sm"
                 >
-                  💾 加密导出
+                  <span className="flex items-center gap-1">
+                    <SaveIcon size={13} />
+                    加密导出
+                  </span>
                 </button>
               </div>
             </div>
@@ -169,8 +181,9 @@ export function SessionDetailDialog({ sessionId, open, onClose }: Props): JSX.El
                   </div>
                   <div className="whitespace-pre-wrap break-words">{String(m.content)}</div>
                   {Boolean(m.tool_name) && (
-                    <div className="mt-1" style={{ color: '#0b6bcb' }}>
-                      🔧 {String(m.tool_name)}
+                    <div className="mt-1 flex items-center gap-1" style={{ color: '#0b6bcb' }}>
+                      <WrenchIcon size={12} />
+                      {String(m.tool_name)}
                     </div>
                   )}
                 </div>
@@ -183,8 +196,7 @@ export function SessionDetailDialog({ sessionId, open, onClose }: Props): JSX.El
               <button
                 type="button"
                 onClick={() => setShowBranchDialog(true)}
-                className="mb-3 rounded px-3 py-1 text-xs"
-                style={{ backgroundColor: '#0e639c', color: '#fff' }}
+                className="mb-3 btn btn-primary btn-sm"
               >
                 + 新建分支
               </button>
@@ -196,7 +208,10 @@ export function SessionDetailDialog({ sessionId, open, onClose }: Props): JSX.El
                   style={{ backgroundColor: '#f3f3f3', border: '1px solid #c0c0c0' }}
                 >
                   <div className="flex items-center justify-between">
-                    <span className="font-medium">🔀 {b.title}</span>
+                    <span className="flex items-center gap-1 font-medium">
+                      <GitForkIcon size={12} />
+                      {b.title}
+                    </span>
                     <span style={{ color: '#616161' }}>{b.branch_label}</span>
                   </div>
                   <div style={{ color: '#616161' }} className="mt-1">
@@ -241,8 +256,7 @@ export function SessionDetailDialog({ sessionId, open, onClose }: Props): JSX.El
                       await shareList(sessionId);
                     }
                   }}
-                  className="rounded px-3 py-1 text-xs"
-                  style={{ backgroundColor: '#0e639c', color: '#fff' }}
+                  className="btn btn-primary btn-sm"
                 >
                   + 创建
                 </button>
@@ -264,8 +278,7 @@ export function SessionDetailDialog({ sessionId, open, onClose }: Props): JSX.El
                         await shareRevoke(sessionId, t.token);
                         await shareList(sessionId);
                       }}
-                      className="text-xs hover:underline"
-                      style={{ color: '#cd3131' }}
+                      className="btn btn-danger btn-xs"
                     >
                       撤销
                     </button>
@@ -303,8 +316,7 @@ export function SessionDetailDialog({ sessionId, open, onClose }: Props): JSX.El
                     await shareList(sessionId);
                     setGrantTarget('');
                   }}
-                  className="rounded px-3 py-1 text-xs"
-                  style={{ backgroundColor: '#0e639c', color: '#fff' }}
+                  className="btn btn-primary btn-sm"
                 >
                   授权
                 </button>
@@ -327,10 +339,12 @@ export function SessionDetailDialog({ sessionId, open, onClose }: Props): JSX.El
                     const r = await verifyEventChain(sessionId);
                     setChainVerified(r);
                   }}
-                  className="rounded px-3 py-1 text-xs"
-                  style={{ backgroundColor: '#0e639c', color: '#fff' }}
+                  className="btn btn-primary btn-sm"
                 >
-                  🔐 验证哈希链
+                  <span className="flex items-center gap-1">
+                    <LinkIcon size={13} />
+                    验证哈希链
+                  </span>
                 </button>
                 {chainVerified && (
                   <span

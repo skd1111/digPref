@@ -6,6 +6,7 @@
  */
 import { useEffect } from 'react';
 import { useSessionsStore } from '@/store/sessionsStore';
+import { CheckIcon, WarningIcon } from '@/components/ui/Icons';
 
 interface Props {
   open: boolean;
@@ -52,15 +53,17 @@ export function RecoveryPanel({ open, onClose, onResume }: Props): JSX.Element |
           style={{ backgroundColor: '#ffffff', color: '#333333' }}
           onClick={(e) => e.stopPropagation()}
         >
-          <h2 className="mb-2 text-lg font-semibold">✓ 无可恢复会话</h2>
+          <h2 className="mb-2 flex items-center gap-1 text-lg font-semibold">
+            <CheckIcon size={16} />
+            无可恢复会话
+          </h2>
           <p className="text-sm" style={{ color: '#616161' }}>
             所有会话都已正常结束，无需恢复。
           </p>
           <button
             type="button"
             onClick={onClose}
-            className="mt-3 rounded px-3 py-1 text-sm"
-            style={{ backgroundColor: '#0e639c', color: '#fff' }}
+            className="btn btn-primary btn-md mt-3"
           >
             确定
           </button>
@@ -83,7 +86,10 @@ export function RecoveryPanel({ open, onClose, onResume }: Props): JSX.Element |
         onClick={(e) => e.stopPropagation()}
       >
         <div className="px-4 py-3" style={{ borderBottom: '1px solid #c0c0c0' }}>
-          <h2 className="text-lg font-semibold">⚠️ 检测到 {recoveryReport.total} 个中断会话</h2>
+          <h2 className="flex items-center gap-1 text-lg font-semibold">
+            <WarningIcon size={16} />
+            检测到 {recoveryReport.total} 个中断会话
+          </h2>
           <p className="mt-1 text-xs" style={{ color: '#616161' }}>
             空闲阈值：{Math.round(recoveryReport.threshold_ms / 60_000)} 分钟 · 最久空闲：{idleMinutes} 分钟
           </p>
@@ -105,8 +111,7 @@ export function RecoveryPanel({ open, onClose, onResume }: Props): JSX.Element |
                         onResume(sid);
                         onClose();
                       }}
-                      className="rounded px-2 py-1 text-xs"
-                      style={{ backgroundColor: '#0e639c', color: '#fff' }}
+                      className="btn btn-primary btn-sm"
                     >
                       恢复
                     </button>
@@ -120,7 +125,7 @@ export function RecoveryPanel({ open, onClose, onResume }: Props): JSX.Element |
           <button
             type="button"
             onClick={onClose}
-            className="rounded px-3 py-1 text-sm hover:bg-[#333]"
+            className="btn btn-secondary btn-md"
           >
             稍后处理
           </button>

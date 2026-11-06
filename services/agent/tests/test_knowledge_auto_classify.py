@@ -30,15 +30,25 @@ def dict_db(tmp_path):
 
 def test_get_kb_categories_reads_from_dictdb(dict_db):
     """get_kb_categories 应从 dict.db 读取 category='知识库分类' 的条目。"""
-    with patch("agent.knowledge.category.data_root") as mock_root:
+    with patch("agent.paths.data_root") as mock_root:
         from pathlib import Path
         mock_root.return_value = Path(dict_db).parent
         from agent.knowledge.category import get_kb_categories
 
         cats = get_kb_categories()
-        assert len(cats) == 4
+        assert len(cats) == 9
         keys = {c["key"] for c in cats}
-        assert keys == {"finance", "legal", "compliance", "data_security"}
+        assert keys == {
+            "finance",
+            "legal",
+            "compliance",
+            "data_security",
+            "hr",
+            "operations",
+            "risk",
+            "marketing",
+            "engineering",
+        }
         # 每条都有 label 和 description
         for c in cats:
             assert c["label"]
@@ -46,8 +56,11 @@ def test_get_kb_categories_reads_from_dictdb(dict_db):
 
 
 def test_get_kb_categories_empty_on_bad_db(tmp_path):
-    """dict.db 不存在或不可用时返回空列表（不抛异常）。"""
-    with patch("agent.knowledge.category.data_root") as mock_root:
+    """dict.db 不可用时返回空列表（不抛异常）。"""
+    with (
+        patch("agent.paths.data_root") as mock_root,
+        patch("agent.datadict.storage.DictStorage", side_effect=RuntimeError("db unavailable")),
+    ):
         mock_root.return_value = tmp_path / "nonexistent"
         from agent.knowledge.category import get_kb_categories
 
@@ -60,9 +73,9 @@ def test_get_kb_categories_empty_on_bad_db(tmp_path):
 @pytest.fixture()
 def ingestion_instance():
     """创建一个最小化的 Ingestion 实例（mock 掉 storage）。"""
-    from agent.knowledge.ingestion import Ingestion
+    from agent.knowledge.ingestion import KnowledgeIngestion
     mock_storage = MagicMock()
-    ing = Ingestion.__new__(Ingestion)
+    ing = KnowledgeIngestion.__new__(KnowledgeIngestion)
     ing.storage = mock_storage
     return ing
 
@@ -70,7 +83,7 @@ def ingestion_instance():
 @pytest.mark.asyncio
 async def test_auto_classify_normal_path(ingestion_instance, dict_db):
     """正常分类：LLM 返回合法 key → 返回该 key。"""
-    with patch("agent.knowledge.category.data_root") as mock_root:
+    with patch("agent.paths.data_root") as mock_root:
         from pathlib import Path
         mock_root.return_value = Path(dict_db).parent
 
@@ -84,7 +97,7 @@ async def test_auto_classify_normal_path(ingestion_instance, dict_db):
 @pytest.mark.asyncio
 async def test_auto_classify_invalid_key_returns_empty(ingestion_instance, dict_db):
     """LLM 返回不在合法 key 列表中的值 → 返回空串。"""
-    with patch("agent.knowledge.category.data_root") as mock_root:
+    with patch("agent.paths.data_root") as mock_root:
         from pathlib import Path
         mock_root.return_value = Path(dict_db).parent
 
@@ -98,7 +111,7 @@ async def test_auto_classify_invalid_key_returns_empty(ingestion_instance, dict_
 @pytest.mark.asyncio
 async def test_auto_classify_exception_returns_empty(ingestion_instance, dict_db):
     """LLM 抛异常 → 返回空串（best-effort）。"""
-    with patch("agent.knowledge.category.data_root") as mock_root:
+    with patch("agent.paths.data_root") as mock_root:
         from pathlib import Path
         mock_root.return_value = Path(dict_db).parent
 
@@ -112,7 +125,7 @@ async def test_auto_classify_exception_returns_empty(ingestion_instance, dict_db
 @pytest.mark.asyncio
 async def test_auto_classify_label_fallback(ingestion_instance, dict_db):
     """LLM 返回 label（如 '财务/财税'）而非 key → 反向匹配到 'finance'。"""
-    with patch("agent.knowledge.category.data_root") as mock_root:
+    with patch("agent.paths.data_root") as mock_root:
         from pathlib import Path
         mock_root.return_value = Path(dict_db).parent
 
@@ -143,8 +156,12 @@ async def test_auto_classify_no_categories_returns_empty(ingestion_instance, tmp
     )
     conn.close()
 
-    with patch("agent.knowledge.category.data_root") as mock_root:
+    with (
+        patch("agent.paths.data_root") as mock_root,
+        patch("agent.datadict.storage.DictStorage") as mock_cls,
+    ):
         mock_root.return_value = tmp_path / "empty_dict_parent"
+        mock_cls.return_value.list.return_value = []  # 无分类条目
         mock_llm = AsyncMock()
         result = await ingestion_instance._auto_classify(
             "文档内容", "标题", "file.txt", mock_llm

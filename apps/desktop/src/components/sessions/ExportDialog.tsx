@@ -5,6 +5,7 @@
  */
 import { useState } from 'react';
 import { useSessionsStore } from '@/store/sessionsStore';
+import { SaveIcon, CheckIcon, WarningIcon } from '@/components/ui/Icons';
 
 interface Props {
   sessionId: string;
@@ -54,7 +55,10 @@ export function ExportDialog({ sessionId, open, onClose }: Props): JSX.Element |
         style={{ backgroundColor: '#ffffff', color: '#333333' }}
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 className="mb-3 text-lg font-semibold">💾 加密导出（.eas）</h2>
+        <h2 className="mb-3 flex items-center gap-1.5 text-lg font-semibold">
+          <SaveIcon size={17} />
+          加密导出（.eas）
+        </h2>
         <div className="space-y-3 text-sm">
           <div>
             <label className="mb-1 block text-xs" style={{ color: '#616161' }}>
@@ -100,34 +104,32 @@ export function ExportDialog({ sessionId, open, onClose }: Props): JSX.Element |
             </span>
           </label>
           {result && (
-            <div
-              className="rounded p-2 text-xs"
-              style={{ backgroundColor: '#0e3a0e', color: '#6a9955' }}
-            >
-              ✓ 导出成功
+            <div className="flex items-center gap-1 text-xs" style={{ backgroundColor: '#0e3a0e', color: '#6a9955' }}>
+              <CheckIcon size={12} />
+              导出成功
               <div className="mt-1 font-mono">{result.path}</div>
               <div>大小：{(result.bytes / 1024).toFixed(1)} KB</div>
               <div className="font-mono">SHA-256: {result.checksum.slice(0, 16)}…</div>
             </div>
           )}
           {error && (
-            <div className="text-xs" style={{ color: '#cd3131' }}>
-              ⚠️ {error}
+            <div className="flex items-center gap-1 text-xs" style={{ color: '#cd3131' }}>
+              <WarningIcon size={12} />
+              {error}
             </div>
           )}
           <div className="flex gap-2 pt-2">
             <button
               type="button"
               onClick={handleExport}
-              className="flex-1 rounded px-3 py-1.5 text-sm"
-              style={{ backgroundColor: '#0e639c', color: '#fff' }}
+              className="btn btn-primary btn-md flex-1"
             >
               加密导出
             </button>
             <button
               type="button"
               onClick={onClose}
-              className="rounded px-3 py-1.5 text-sm hover:bg-[#333]"
+              className="btn btn-secondary btn-md"
             >
               关闭
             </button>

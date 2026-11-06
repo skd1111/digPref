@@ -7,6 +7,7 @@
 import { useEffect } from 'react';
 import { useDataStore } from '@/store/dataStore';
 import { PanelHeader } from './DataGrid';
+import { BulbIcon } from '@/components/ui/Icons';
 
 export function HistoryAnalysisList(): JSX.Element {
   const history = useDataStore((s) => s.history);
@@ -20,13 +21,17 @@ export function HistoryAnalysisList(): JSX.Element {
   return (
     <div className="flex h-full flex-col overflow-hidden" style={{ backgroundColor: '#ffffff' }}>
       <PanelHeader
-        title="💡 历史分析"
+        title={
+          <span className="flex items-center gap-1">
+            <BulbIcon size={12} />
+            历史分析
+          </span>
+        }
         right={
           <button
             type="button"
             onClick={() => void fetchHistory()}
-            className="rounded px-1.5 text-2xs transition-all hover:brightness-90"
-            style={{ color: '#0e639c' }}
+            className="btn btn-ghost btn-icon"
             title="刷新"
           >
             ⟳

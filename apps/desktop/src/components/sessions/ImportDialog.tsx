@@ -6,6 +6,7 @@
  */
 import { useState } from 'react';
 import { useSessionsStore } from '@/store/sessionsStore';
+import { DownloadIcon, CheckIcon, WarningIcon } from '@/components/ui/Icons';
 
 interface Props {
   open: boolean;
@@ -78,7 +79,10 @@ export function ImportDialog({ open, onClose, onImported }: Props): JSX.Element 
         style={{ backgroundColor: '#ffffff', color: '#333333' }}
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 className="mb-3 text-lg font-semibold">📥 导入会话（.eas）</h2>
+        <h2 className="mb-3 flex items-center gap-1.5 text-lg font-semibold">
+          <DownloadIcon size={17} />
+          导入会话（.eas）
+        </h2>
         <div className="space-y-3 text-sm">
           <div>
             <label className="mb-1 block text-xs" style={{ color: '#616161' }}>
@@ -122,7 +126,10 @@ export function ImportDialog({ open, onClose, onImported }: Props): JSX.Element 
               className="rounded p-2 text-xs"
               style={{ backgroundColor: '#e6f4e6', color: '#1e6b1e' }}
             >
-              ✓ 导入成功
+              <span className="flex items-center gap-1">
+                <CheckIcon size={12} />
+                导入成功
+              </span>
               <div className="mt-1 font-mono">新会话 ID：{result.new_session_id.slice(0, 24)}…</div>
               {typeof result.message_count === 'number' && <div>消息数：{result.message_count}</div>}
               {result.chain_check && (
@@ -133,8 +140,9 @@ export function ImportDialog({ open, onClose, onImported }: Props): JSX.Element 
             </div>
           )}
           {error && (
-            <div className="text-xs" style={{ color: '#cd3131' }}>
-              ⚠️ {error}
+            <div className="flex items-center gap-1 text-xs" style={{ color: '#cd3131' }}>
+              <WarningIcon size={12} />
+              {error}
             </div>
           )}
           <div className="flex gap-2 pt-2">
@@ -142,15 +150,14 @@ export function ImportDialog({ open, onClose, onImported }: Props): JSX.Element 
               type="button"
               onClick={() => void handleImport()}
               disabled={busy}
-              className="flex-1 rounded px-3 py-1.5 text-sm disabled:opacity-60"
-              style={{ backgroundColor: '#0e639c', color: '#fff' }}
+              className="btn btn-primary btn-md flex-1"
             >
               {busy ? '导入中…' : '导入'}
             </button>
             <button
               type="button"
               onClick={handleClose}
-              className="rounded px-3 py-1.5 text-sm hover:bg-[#333]"
+              className="btn btn-secondary btn-md"
             >
               关闭
             </button>

@@ -1,15 +1,21 @@
-//! 前端 dist 热替换 loader 的**纯逻辑**（spec §7）。
+//! 前端 dist 热替换 loader（spec §7；runbook §6 已接线）。
 //!
-//! ⚠️ 本模块只提供「把请求路径解析到磁盘文件 + 推断 content-type」的可测函数。
-//! 真正的 `window.url` 改写 + `register_asynchronous_uri_scheme_protocol` 接线是
-//! **spike 门控项**（见 docs/ops/incremental-update-runbook.md §5 与文末 SPIKE 注），
-//! 未验证前不并入主线，以免在无法本机编译的情况下影响全体用户 app 启动。
+//! 布局（按优先级）：
+//! 1. `versions/web/<active>/<rel>` —— 增量更新/手工热替换，改前端无需重编 Rust；
+//! 2. `exe_dir/web/<rel>` —— 出厂 web 资源（`bundle.resources` 由 `../dist` 映射而来）；
+//! 3. 内嵌 `frontendDist` —— 最后兜底，老安装包没有 `web/` 时不白屏。
 //!
-//! 布局：`versions/web/<active>/<rel>`（更新覆盖，优先）→ `exe_dir/web/<rel>`
-//! （出厂 web 资源兜底）。注意前端**不**走内嵌 `frontendDist`，而走磁盘 `web/`
-//! 资源目录——这样热替换与内嵌 origin 覆盖这两个难点都规避了。
+//! 生效链路：`pnpm build` → 把 `apps/desktop/dist/*` 复制到
+//! `<安装根>/versions/web/<ver>/` → `<安装根>/web-active.txt` 写一行 `<ver>` → 重启。
+//!
+//! ⚠️ 窗口 url 是 `eaide://localhost/`（tauri.conf.json；BUGFIX #194 后不再带
+//! `index.html` 后缀，避免 react-router 的 pathname 落在入口文件上 404）；
+//! dev 模式由 lib.rs 改回 `WebviewUrl::App("index.html")` 以保留 devUrl + HMR。
 
 use std::path::{Path, PathBuf};
+
+use tauri::http::{header::CONTENT_TYPE, Response, StatusCode};
+use tauri::{AppHandle, Runtime};
 
 /// 归一化请求路径：去首尾 `/`、空路径视为 `index.html`。
 /// 拒绝含 `..` 分段 / 反斜杠 / 盘符戒号 / NUL 的路径（Windows 下 `\` 也是分隔符、
@@ -28,12 +34,17 @@ fn normalize_rel(path: &str) -> Option<String> {
     Some(rel.to_string())
 }
 
+/// 末段无扩展名 → 视为 SPA history 路由（深链需回落 index.html）。
+fn is_spa_route(rel: &str) -> bool {
+    !rel.rsplit('/').next().unwrap_or("").contains('.')
+}
+
 /// 把请求 URI path 解析为磁盘文件；找不到具体文件且无扩展名 → SPA 回落 index.html。
 ///
 /// 优先顺序：`versions/web/<active>` > 出厂 `<exe_dir>/web`。
 pub fn resolve_asset(exe_dir: &Path, vroot: &Path, uri_path: &str) -> Option<PathBuf> {
     let rel = normalize_rel(uri_path)?;
-    let looks_spa = !rel.rsplit('/').next().unwrap_or("").contains('.');
+    let looks_spa = is_spa_route(&rel);
 
     let pick_in = |base: &Path| -> Option<PathBuf> {
         let cand = base.join(&rel);
@@ -84,6 +95,94 @@ pub fn mime_of(rel: &str) -> &'static str {
         "txt" => "text/plain; charset=utf-8",
         _ => "application/octet-stream",
     }
+}
+
+// ─────────────────────────── 协议 handler ───────────────────────────
+
+/// 一次前端请求的完整应答：磁盘 `web/` 优先，内嵌 `frontendDist` 兜底。
+///
+/// 由 `lib.rs` 的 `register_asynchronous_uri_scheme_protocol("eaide", …)` 在 worker
+/// 线程调用。**任何失败路径都必须返回 Response**：吞掉 responder 会让窗口请求永久
+/// 悬挂（无超时）。
+pub fn serve<R: Runtime>(app: &AppHandle<R>, uri_path: &str) -> Response<Vec<u8>> {
+    let Some(rel) = normalize_rel(uri_path) else {
+        return plain(StatusCode::NOT_FOUND, "not found");
+    };
+    let Some(exe_dir) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+    else {
+        return plain(StatusCode::INTERNAL_SERVER_ERROR, "no exe_dir");
+    };
+    let vroot = crate::agent_manager::resolve_versions_root(&exe_dir);
+
+    // 1) 磁盘 web：versions/web/<active> → 出厂 web
+    //    出厂根：Windows/Linux 是 exe_dir/web；macOS .app 是 Contents/Resources/web
+    //    （exe 在 Contents/MacOS/，与 resources 目录不同层）。
+    for root in factory_roots(&exe_dir) {
+        if let Some(file) = resolve_asset(&root, &vroot, uri_path) {
+            if let Ok(bytes) = std::fs::read(&file) {
+                let mime = mime_of(&file.to_string_lossy());
+                // 磁盘 index.html 复用内嵌 assets 预计算的 CSP，origin 换成 eaide 后
+                // 策略与出厂一致（否则页面裸奔无 CSP）。
+                let csp = mime.starts_with("text/html").then(|| embedded_csp(app)).flatten();
+                return respond(mime, csp, bytes);
+            }
+            // 读失败（权限/占用）→ 继续试下一个根 / 内嵌兜底
+        }
+    }
+
+    // 2) 内嵌 frontendDist 兜底（老安装包没有 web/ 时不白屏）
+    embedded_response(app, &rel)
+}
+
+/// 出厂 web 的候选根（顺序即优先级）。
+/// 非 macOS 只有一个根：避免 `exe_dir/../Resources` 在 Windows 上误命中邻近目录。
+fn factory_roots(exe_dir: &Path) -> impl Iterator<Item = PathBuf> {
+    let mac_resources = cfg!(target_os = "macos").then(|| exe_dir.join("..").join("Resources"));
+    std::iter::once(exe_dir.to_path_buf()).chain(mac_resources)
+}
+
+fn embedded_response<R: Runtime>(app: &AppHandle<R>, rel: &str) -> Response<Vec<u8>> {
+    let key = if is_spa_route(rel) { "index.html" } else { rel };
+    match app.asset_resolver().get(key.to_string()) {
+        Some(asset) => {
+            let mime = asset.mime_type;
+            let csp = asset.csp_header;
+            respond(&mime, csp, asset.bytes)
+        }
+        None => plain(StatusCode::NOT_FOUND, "not found"),
+    }
+}
+
+/// 内嵌 index.html 上由 tauri-codegen 预计算的 CSP 头。
+fn embedded_csp<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
+    app.asset_resolver()
+        .get("index.html".to_string())
+        .and_then(|a| a.csp_header)
+}
+
+fn respond(mime: &str, csp: Option<String>, bytes: Vec<u8>) -> Response<Vec<u8>> {
+    let mut builder = Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, mime)
+        // 每次启动重新读盘；禁掉 WebView 缓存，否则换了 web/ 还加载旧 chunk。
+        .header("cache-control", "no-cache");
+    if let Some(csp) = csp {
+        builder = builder.header("content-security-policy", csp);
+    }
+    match builder.body(bytes) {
+        Ok(resp) => resp,
+        Err(_) => plain(StatusCode::INTERNAL_SERVER_ERROR, "bad response"),
+    }
+}
+
+fn plain(status: StatusCode, msg: &'static str) -> Response<Vec<u8>> {
+    Response::builder()
+        .status(status)
+        .header(CONTENT_TYPE, "text/plain; charset=utf-8")
+        .body(msg.as_bytes().to_vec())
+        .unwrap_or_else(|_| Response::new(msg.as_bytes().to_vec()))
 }
 
 #[cfg(test)]
@@ -206,5 +305,14 @@ mod tests {
         assert_eq!(mime_of("assets/app.JS"), "text/javascript");
         assert_eq!(mime_of("a.wasm"), "application/wasm");
         assert_eq!(mime_of("noext"), "application/octet-stream");
+    }
+
+    /// 内嵌兜底的路由判定：只有“末段带扩展名”才当具体文件，其余回落 index.html。
+    #[test]
+    fn spa_route_detection() {
+        assert!(!is_spa_route("index.html"));
+        assert!(is_spa_route("settings/terminal"));
+        assert!(!is_spa_route("assets/index-abc123.js"));
+        assert!(!is_spa_route("fonts/x.woff2"));
     }
 }

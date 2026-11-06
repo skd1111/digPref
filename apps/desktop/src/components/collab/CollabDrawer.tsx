@@ -12,6 +12,7 @@
  */
 import { useCollabStore } from '@/store/collabStore';
 import { TaskDiscussionPanel } from './TaskDiscussionPanel';
+import { CloseIcon, MessageIcon } from '@/components/ui/Icons';
 
 interface CollabDrawerProps {
   /** 强制显示（即使没评论锚点也展示"创建讨论"按钮） */
@@ -63,7 +64,9 @@ export function CollabDrawer({ fallbackCreate }: CollabDrawerProps): JSX.Element
               }}
             >
               <div className="flex items-center gap-2">
-                <span style={{ color: '#6366f1' }}>💬</span>
+                <span className="flex items-center" style={{ color: '#6366f1' }} aria-hidden="true">
+                  <MessageIcon size={13} />
+                </span>
                 <span className="font-semibold uppercase tracking-wider">讨论</span>
                 <span style={{ color: '#616161' }}>· {ctx.comment_count} 条</span>
               </div>
@@ -73,8 +76,9 @@ export function CollabDrawer({ fallbackCreate }: CollabDrawerProps): JSX.Element
                 className="rounded px-2 py-0.5 transition-colors hover:bg-vscode-border"
                 style={{ color: '#616161' }}
                 title="关闭 (Esc)"
+                aria-label="关闭"
               >
-                ✕
+                <CloseIcon size={13} />
               </button>
             </div>
 
@@ -93,7 +97,7 @@ export function CollabDrawer({ fallbackCreate }: CollabDrawerProps): JSX.Element
             onClick={() => {
               // V0 占位：弹个 alert 提示用户用协作中心创建锚点
               alert(
-                '当前选中的任务尚无关联讨论上下文。\n\n请到「💬 协作中心」中创建锚点，或在代码行 / SQL 编辑器中右键"分享到讨论"。',
+                '当前选中的任务尚无关联讨论上下文。\n\n请到「协作中心」中创建锚点，或在代码行 / SQL 编辑器中右键"分享到讨论"。',
               );
             }}
             className="rounded border border-dashed px-3 py-1.5 transition-colors"

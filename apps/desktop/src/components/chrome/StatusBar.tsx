@@ -9,6 +9,16 @@
 import { useEffect, useState } from 'react';
 import { TokenUsageBadge } from '@/components/chrome/TokenUsageBadge';
 import { useUIStore } from '@/store/uiStore';
+import {
+  BellIcon,
+  ErrorCircleIcon,
+  FolderIcon,
+  MessageIcon,
+  RefreshIcon,
+  SearchIcon,
+  WarningIcon,
+  type IconComponent,
+} from '@/components/ui/Icons';
 
 const AGENT_LABEL = {
   idle: 'Agent: 空闲',
@@ -39,16 +49,16 @@ export function StatusBar(): JSX.Element {
     >
       {/* 左侧 */}
       <div className="flex items-center gap-0">
-        <StatusItem icon="⎇" label="main" />
-        <StatusItem icon="↻" label="0 ↓ 0 ↑" />
+        <StatusItem icon={FolderIcon} label="main" />
+        <StatusItem icon={RefreshIcon} label="0 ↓ 0 ↑" />
         <StatusItem
-          icon="❗"
+          icon={ErrorCircleIcon}
           label={errorCount > 0 ? String(errorCount) : '0'}
           onClick={toggleCommandPalette}
         />
-        <StatusItem icon="⚠" label={String(warnCount)} />
-        <StatusItem icon="🔔" label="0" />
-        <StatusItem icon="💬" label={AGENT_LABEL[agentStatus]} />
+        <StatusItem icon={WarningIcon} label={String(warnCount)} />
+        <StatusItem icon={BellIcon} label="0" />
+        <StatusItem icon={MessageIcon} label={AGENT_LABEL[agentStatus]} />
         {/* Token 用量：实时速率（↑上传/↓下载）+ 当日总量，2s 轮询；悬浮向上弹明细卡片 */}
         <span className="flex h-full items-center px-2">
           <TokenUsageBadge placement="top" />
@@ -62,7 +72,7 @@ export function StatusBar(): JSX.Element {
         <StatusItem label="UTF-8" />
         <StatusItem label="LF" />
         <StatusItem label="Markdown" />
-        <StatusItem label="🔍 100%" />
+        <StatusItem icon={SearchIcon} label="100%" />
         <StatusItem
           label={now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
         />
@@ -76,17 +86,22 @@ function StatusItem({
   label,
   onClick,
 }: {
-  icon?: string;
+  icon?: IconComponent;
   label: string;
   onClick?: () => void;
 }): JSX.Element {
+  const Icon = icon;
   return (
     <button
       type="button"
       onClick={onClick}
       className="flex h-full items-center gap-1 px-2 transition-colors hover:bg-gray-200"
     >
-      {icon && <span className="text-[10px]">{icon}</span>}
+      {Icon && (
+        <span className="flex items-center" aria-hidden="true">
+          <Icon size={13} />
+        </span>
+      )}
       <span>{label}</span>
     </button>
   );

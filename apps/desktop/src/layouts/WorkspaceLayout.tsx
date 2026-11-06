@@ -37,6 +37,7 @@ import { RightTraceView } from './RightTraceView';
 import { ProjectFileTree } from '@/components/codenav/ProjectFileTree';
 import { SystemAssetTree } from '@/components/asset-tree/SystemAssetTree';
 import { XtermDrawer } from './XtermDrawer';
+import { ClipboardIcon } from '@/components/ui/Icons';
 import { AuditDashboard } from '@/views/AuditDashboard';
 import { DataWorkbench } from '@/views/DataWorkbench';
 import { CollabCenter } from '@/views/CollabCenter';
@@ -628,7 +629,16 @@ function RightPanel(): JSX.Element {
         className="flex h-[35px] items-center border-b px-4 text-ui font-semibold uppercase tracking-wide"
         style={{ borderColor: '#e0e0e0', color: '#333333' }}
       >
-        <span>{featuresMode ? '📋 需求卡片' : '控制台'}</span>
+        <span className="flex items-center gap-1">
+          {featuresMode ? (
+            <>
+              <ClipboardIcon size={13} />
+              需求卡片
+            </>
+          ) : (
+            '控制台'
+          )}
+        </span>
       </div>
       {/* 内容区允许选中复制（覆盖 workspace-root 的 select-none） */}
       <div className="flex-1 select-text overflow-auto">

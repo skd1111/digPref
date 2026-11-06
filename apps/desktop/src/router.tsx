@@ -13,12 +13,14 @@
  *   /settings/workspace       -> 工作空间（默认安装目录/workspace，可自定义）
  *   /settings/advanced        -> 高级设置（推理模式 + 会话自主性）
  */
-import { createBrowserRouter } from 'react-router-dom';
+import { createBrowserRouter, type RouteObject } from 'react-router-dom';
 import { WorkspaceLayout } from './layouts/WorkspaceLayout';
 import { HomeView } from './views/HomeView';
 import { SettingsView } from './views/SettingsView';
 
-export const router = createBrowserRouter([
+// 路由表单独导出：入口路径回落契约测试（routerEntryFallback.test.tsx）直接对
+// routes 做 matchRoutes，无需实例化整个 App。
+export const routes: RouteObject[] = [
   {
     path: '/',
     element: <WorkspaceLayout />,
@@ -42,6 +44,14 @@ export const router = createBrowserRouter([
       { path: 'settings/toolchain', element: <SettingsView /> },  // Phase 18；2026-08-28 并入原「编译配置」
       { path: 'settings/workspace', element: <SettingsView /> },  // 工作空间路径（下方 advanced 紧跟）
       { path: 'settings/advanced', element: <SettingsView /> },  // 高级设置（2026-08-05）
+      // BUGFIX #194：入口/未知路径回落 HomeView。安装包窗口 url 为
+      // `eaide://localhost/index.html`，WebView 的 location.pathname 就是
+      // `/index.html`，react-router 的 index 路由只匹配精确 `/` → 无匹配时
+      // 默认 errorElement 直接渲染「Unexpected Application Error! 404 Not
+      // Found」整屏。通配子路由兜住入口路径与 SPA 深链，杜绝此类整屏 404。
+      { path: '*', element: <HomeView /> },
     ],
   },
-]);
+];
+
+export const router = createBrowserRouter(routes);

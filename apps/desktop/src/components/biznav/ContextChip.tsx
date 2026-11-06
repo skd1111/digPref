@@ -10,6 +10,7 @@
  */
 import { useChatStore } from '@/store/chatStore';
 import { useBiznavStore } from '@/store/biznavStore';
+import { CloseIcon, ComponentIcon } from '@/components/ui/Icons';
 
 export function ContextChip(): JSX.Element | null {
   const ctx = useChatStore((s) => s.selectedFeatureContext);
@@ -40,7 +41,9 @@ export function ContextChip(): JSX.Element | null {
       }}
       title={active.feature_description.slice(0, 80)}
     >
-      <span>🧩</span>
+      <span className="flex items-center" aria-hidden="true">
+        <ComponentIcon size={12} />
+      </span>
       <span className="flex-1 truncate">
         当前上下文：<strong style={{ color: '#1f1f1f' }}>{active.feature_name}</strong>
       </span>
@@ -52,7 +55,7 @@ export function ContextChip(): JSX.Element | null {
         title="关闭上下文"
         aria-label="关闭上下文"
       >
-        ✕
+        <CloseIcon size={12} />
       </button>
     </div>
   );

@@ -44,6 +44,15 @@ import { useBiznavStore } from '@/store/biznavStore';
 import { useExpertTeamStore } from '@/store/expertTeamStore';
 import { useSkillsStore } from '@/store/skillsStore';
 import { useReqcardStore, buildDoneCardsSnippet } from '@/store/reqcardStore';
+import {
+  BrainIcon,
+  CloseIcon,
+  FileTextIcon,
+  HourglassIcon,
+  MoonIcon,
+  PaperclipIcon,
+  WarningIcon,
+} from '@/components/ui/Icons';
 // 2026-08-05：推理模式 / 会话自主性开关已迁至 设置 → 高级设置
 // （AdvancedSettingsPanel），不再占用发送按钮旁空间；值仍由 chatStore 透传。
 
@@ -789,8 +798,9 @@ export function ChatInput(): JSX.Element {
             title="移除选区"
             className="ml-auto rounded px-1.5 hover:bg-[#e7e5e4]"
             style={{ color: '#6b7280' }}
+            aria-label="移除选区"
           >
-            ✕
+            <CloseIcon size={12} />
           </button>
         </div>
       )}
@@ -809,7 +819,17 @@ export function ChatInput(): JSX.Element {
               }}
               title={a.status === 'error' ? a.error : `${a.chars} 字符${a.truncated ? '（已截断）' : ''}`}
             >
-              <span>{a.status === 'uploading' ? '⏳' : a.status === 'error' ? '⚠️' : a.mode === 'markdown' ? '📄' : '📎'}</span>
+              <span className="flex items-center" aria-hidden="true">
+                {a.status === 'uploading' ? (
+                  <HourglassIcon size={11} />
+                ) : a.status === 'error' ? (
+                  <WarningIcon size={11} />
+                ) : a.mode === 'markdown' ? (
+                  <FileTextIcon size={11} />
+                ) : (
+                  <PaperclipIcon size={11} />
+                )}
+              </span>
               <span className="max-w-[160px] truncate">{a.name}</span>
               {a.status === 'ready' && <span style={{ color: '#9ca3af' }}>{formatChars(a.chars)}</span>}
               {a.status === 'error' && <span className="max-w-[120px] truncate">{a.error || '转换失败'}</span>}
@@ -818,8 +838,9 @@ export function ChatInput(): JSX.Element {
                 onClick={() => removeAttachment(a.id)}
                 title="移除附件"
                 className="rounded px-0.5 hover:opacity-60"
+                aria-label="移除附件"
               >
-                ✕
+                <CloseIcon size={11} />
               </button>
             </span>
           ))}
@@ -845,8 +866,9 @@ export function ChatInput(): JSX.Element {
                   onClick={c.onRemove}
                   title="移除此上下文（重新选择后可再次附加）"
                   className="rounded px-0.5 hover:opacity-60"
+                  aria-label="移除此上下文"
                 >
-                  ✕
+                  <CloseIcon size={11} />
                 </button>
               )}
             </span>
@@ -944,7 +966,7 @@ export function ChatInput(): JSX.Element {
                 color: chatModel ? '#10a37f' : '#6b7280',
               }}
             >
-              <option value="">🤖 默认（模型管理）</option>
+              <option value="">默认（模型管理）</option>
               {modelOptions.map((m) => (
                 <option key={m.name} value={m.name}>
                   {m.label}
@@ -958,6 +980,7 @@ export function ChatInput(): JSX.Element {
                 type="button"
                 onClick={() => setCtxMenuOpen((v) => !v)}
                 disabled={busy}
+                data-testid="ctx-usage-indicator"
                 title={
                   ctxLimit
                     ? `将随下次发送的会话历史 ≈${historyTokens.toLocaleString()} / ${ctxLimit.toLocaleString()} tokens（占用 ${ctxPct}%，达 ${Math.round(CTX_AUTO_COMPRESS_RATIO * 100)}% 会在发送前自动压缩；点击查看清理/压缩）`
@@ -970,7 +993,10 @@ export function ChatInput(): JSX.Element {
                   backgroundColor: historyTokens >= ctxWarnTokens ? '#fffbeb' : '#ffffff',
                 }}
               >
-                🧠 {formatCtxUsage(ctxPct, historyTokens)}
+                <span className="flex items-center gap-1">
+                  <BrainIcon size={12} />
+                  {formatCtxUsage(ctxPct, historyTokens)}
+                </span>
               </button>
               {ctxMenuOpen && (
                 <>
@@ -1025,7 +1051,8 @@ export function ChatInput(): JSX.Element {
                 backgroundColor: cleanMode ? '#f0fdf4' : '#ffffff',
               }}
             >
-              🌙 纯净
+              <MoonIcon size={12} />
+              纯净
             </button>
             {/* 📎 附加文件（2026-08-14）：代码/文本直读，docx/pdf 等后端转 Markdown */}
             <input

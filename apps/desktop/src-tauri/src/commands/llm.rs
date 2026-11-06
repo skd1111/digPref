@@ -174,6 +174,7 @@ pub async fn llm_set_config(settings: State<'_, AppState>, cfg: LLMSettings) -> 
     app_log(&format!("[llm_config] 已写入镜像 {}", p.display()));
 
     // 3. 重启 Agent —— 新进程启动时 active_config 按 env > json邮箱 > db 解析
-    super::agent::agent_restart(settings)?;
+    //    （真重启：kill + spawn + 等 /health 就绪）
+    let _ = super::agent::agent_restart(settings).await?;
     Ok(())
 }

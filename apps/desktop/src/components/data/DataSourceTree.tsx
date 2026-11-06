@@ -10,6 +10,13 @@ import { useEffect, useState, useMemo } from "react";
 import { AssetConfigDialog } from "@/components/asset-tree/AssetConfigDialog";
 import { useAssetStore } from "@/store/assetStore";
 import {
+  BarChartIcon,
+  BulbIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  WarningIcon,
+} from "@/components/ui/Icons";
+import {
   useDataStore,
   type SourceType,
   type DataSource,
@@ -111,14 +118,18 @@ export function DataSourceTree(): JSX.Element {
     >
       {/* 数据源 + 表结构（头部 ⟳ 手动刷新：重拉资产 + 强制重同步全部表结构） */}
       <Section
-        title="📊 数据源 / 表结构"
+        title={
+          <span className="flex items-center gap-1">
+            <BarChartIcon size={12} />
+            数据源 / 表结构
+          </span>
+        }
         right={
           <div className="flex items-center gap-1">
             <button
               type="button"
               onClick={() => setShowAddDialog(true)}
-              className="rounded px-1 text-2xs transition-all hover:brightness-90"
-              style={{ color: "#0e639c" }}
+              className="btn btn-primary btn-icon"
               title="新增数据源（支持配置多个）"
             >
               ＋
@@ -130,8 +141,7 @@ export function DataSourceTree(): JSX.Element {
                 void assetRefresh();
                 void refreshSchemas(dbSources.map((s) => s.id));
               }}
-              className="rounded px-1 text-2xs transition-all hover:brightness-90 disabled:opacity-50"
-              style={{ color: "#0e639c" }}
+              className="btn btn-ghost btn-icon"
               title="刷新表结构（重新同步全部数据源）"
             >
               ⟳
@@ -150,8 +160,9 @@ export function DataSourceTree(): JSX.Element {
           </div>
         )}
         {error && (
-          <div className="px-3 py-2 text-2xs" style={{ color: "#cd3131" }}>
-            ⚠ {error}
+          <div className="flex items-center gap-1 px-3 py-2 text-2xs" style={{ color: "#cd3131" }}>
+            <WarningIcon size={12} />
+            {error}
           </div>
         )}
         {!loading && dbSources.length === 0 && !error && (
@@ -162,8 +173,7 @@ export function DataSourceTree(): JSX.Element {
             <button
               type="button"
               onClick={() => setShowAddDialog(true)}
-              className="w-fit rounded px-2 py-1 text-2xs transition-colors hover:brightness-110"
-              style={{ backgroundColor: "#0e639c", color: "#ffffff" }}
+              className="btn btn-primary btn-sm w-fit"
             >
               ＋ 配置数据源
             </button>
@@ -184,10 +194,10 @@ export function DataSourceTree(): JSX.Element {
                     e.stopPropagation();
                     toggleSource(src.id);
                   }}
-                  className="cursor-pointer pl-2"
-                  style={{ color: "#616161", fontSize: 10 }}
+                  className="flex cursor-pointer items-center pl-2"
+                  style={{ color: "#616161" }}
                 >
-                  {collapsed ? "▸" : "▾"}
+                  {collapsed ? <ChevronRightIcon size={11} /> : <ChevronDownIcon size={11} />}
                 </span>
                 <button
                   type="button"
@@ -246,8 +256,8 @@ export function DataSourceTree(): JSX.Element {
                         style={{ color: tblActive ? "#059669" : "#0b6bcb" }}
                         title={`${tbl.comment ? tbl.comment + " · " : ""}单击看字段，双击预览数据`}
                       >
-                        <span aria-hidden style={{ fontSize: 10 }}>
-                          {tblActive ? "▾" : "▸"}
+                        <span className="flex items-center" aria-hidden="true">
+                          {tblActive ? <ChevronDownIcon size={11} /> : <ChevronRightIcon size={11} />}
                         </span>
                         <span className="truncate font-mono">{tbl.name}</span>
                         <span
@@ -294,7 +304,14 @@ export function DataSourceTree(): JSX.Element {
       </Section>
 
       {/* 历史分析 */}
-      <Section title="💡 历史分析">
+      <Section
+        title={
+          <span className="flex items-center gap-1">
+            <BulbIcon size={12} />
+            历史分析
+          </span>
+        }
+      >
         {history.length === 0 && (
           <div className="px-3 py-2 text-2xs" style={{ color: "#616161" }}>
             暂无历史分析
@@ -333,7 +350,7 @@ function Section({
   right,
   children,
 }: {
-  title: string;
+  title: React.ReactNode;
   right?: React.ReactNode;
   children: React.ReactNode;
 }): JSX.Element {
@@ -350,8 +367,8 @@ function Section({
           className="flex flex-1 items-center gap-1 px-2 text-2xs font-semibold uppercase tracking-wide"
           style={{ color: "#333333" }}
         >
-          <span aria-hidden style={{ fontSize: 10 }}>
-            {open ? "▾" : "▸"}
+          <span className="flex items-center" aria-hidden="true">
+            {open ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
           </span>
           <span>{title}</span>
         </button>

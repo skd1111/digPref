@@ -19,6 +19,7 @@ import { useEffect, useState } from 'react';
 import { ipc } from '@/ipc/invoke';
 import { useRouterStore } from '@/store/routerStore';
 import { ScoringRadar } from './ScoringRadar';
+import { BarChartIcon, PauseIcon } from '@/components/ui/Icons';
 
 interface RoutingDecisionLite {
   request_id: string;
@@ -84,8 +85,9 @@ export function ManualConfirmationPanel(): JSX.Element | null {
       style={{ borderColor: '#795e26', backgroundColor: '#ffffff' }}
       data-testid="manual-confirmation-panel"
     >
-      <div className="text-2xs font-semibold mb-1" style={{ color: '#795e26' }}>
-        ⏸ 手动模式 · 最近路由决策（每 5s 刷新）
+      <div className="mb-1 flex items-center gap-1 text-2xs font-semibold" style={{ color: '#795e26' }}>
+        <PauseIcon size={12} />
+        手动模式 · 最近路由决策（每 5s 刷新）
       </div>
       <p className="text-2xs mb-2" style={{ color: '#616161' }}>
         手动模式下可在下方查看最近 5 条路由决策的候选模型。
@@ -138,7 +140,12 @@ function DecisionRow({ decision }: { decision: RoutingDecisionLite }): JSX.Eleme
         <div className="mt-2">
           <ScoringRadar
             scores={decision.candidates[0]?.scores ?? {}}
-            title={`📊 ${decision.candidates[0]?.backend ?? decision.actual_backend ?? '未知'} 五维评分`}
+            title={
+              <span className="flex items-center gap-1">
+                <BarChartIcon size={12} />
+                {decision.candidates[0]?.backend ?? decision.actual_backend ?? '未知'} 五维评分
+              </span>
+            }
           />
         </div>
       )}

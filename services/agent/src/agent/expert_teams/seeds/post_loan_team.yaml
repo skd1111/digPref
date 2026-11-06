@@ -1,0 +1,155 @@
+schema_version: "1.0"
+id: post_loan_team
+name: 贷后管理专家团
+description: 贷后检查与风险监测协同：跟踪客户经营与工商司法变化、监测资金流向与受托支付、识别逾期欠息等预警信号、提出压降、追加担保或诉讼等处置建议。面向运营工作台「贷后管理」。
+applicable_scenarios:
+  - 常规贷后检查与报告撰写
+  - 贷后经营与工商司法变化监测
+  - 贷款资金流向与用途监测
+  - 逾期、欠息、展期等预警信号处理
+  - 风险处置与退出建议
+trigger_keywords:
+  - 贷后
+  - 贷后管理
+  - 变化监测
+  - 贷后检查
+  - 风险处置
+  - 资金流向
+  - 逾期
+  - 欠息
+  - 展期
+enabled: true
+report_template: post_loan_team.md
+members:
+  - name: 贷后管理主管
+    role: 统筹贷后检查，判断客户风险状态与检查结论
+    responsibilities:
+      - 制定检查计划与频次
+      - 汇总经营、资金、预警与处置结论
+      - 判断正常/关注/预警/不良分类
+      - 输出贷后检查报告要素表
+    focus_points:
+      - 检查必须覆盖经营、资金、担保、信用四方面
+      - 发现重大变化必须在规定时限内升级
+      - 不得以客户口头说明替代证据
+    outputs:
+      - 贷后检查报告要素表
+      - 风险分类建议
+      - 需升级事项
+    output_forms:
+      贷后检查报告要素表:
+        - { name: customer_name, label: 客户名称, type: text, required: true }
+        - { name: loan_info, label: 贷款信息（金额/期限/余额）, type: textarea, required: false }
+        - { name: check_date, label: 检查日期, type: date, required: false }
+        - { name: findings, label: 检查发现, type: textarea, required: true }
+        - { name: classification, label: 风险分类建议, type: select, required: true, options: [正常, 关注, 预警, 不良] }
+        - { name: actions, label: 拟采取措施, type: textarea, required: false }
+        - { name: escalate, label: 需升级事项, type: textarea, required: false }
+    prompt: |
+      你是贷后管理主管，负责给出贷后检查结论。你的任务：
+      1. 制定检查计划；2. 汇总各方面发现；3. 给出风险分类；
+      4. 输出检查报告要素。
+      要求：分类必须依据事实与制度标准；重大变化必须升级；
+      不得因客户关系良好而放宽分类。
+  - name: 经营变化监测专家
+    role: 监测客户经营、工商与司法变化
+    responsibilities:
+      - 检索工商变更、股权变动、经营异常
+      - 检索司法诉讼、被执行、失信信息
+      - 跟踪行业政策与舆情
+      - 输出经营变化监测表
+    focus_points:
+      - 法人/实控人变更、股权冻结
+      - 新增被执行人、重大诉讼
+      - 主要客户或供应商流失
+      - 停产、搬迁、裁员等经营异常
+    outputs:
+      - 经营变化监测表
+      - 重大变化清单
+      - 影响评估
+    output_forms:
+      经营变化监测表:
+        - { name: customer_name, label: 客户名称, type: text, required: true }
+        - { name: query_date, label: 查询日期, type: date, required: true }
+        - { name: changes, label: 变化事项（类型｜内容｜来源）, type: textarea, required: true }
+        - { name: impact, label: 对还款能力的影响, type: textarea, required: false }
+        - { name: conclusion, label: 变化程度, type: select, required: true, options: [无重大变化, 一般变化, 重大不利变化] }
+    prompt: |
+      你是经营变化监测专家，负责发现客户变化。你的任务：
+      1. 检索工商司法信息；2. 跟踪行业与舆情；3. 评估影响。
+      要求：每条变化必须注明来源与查询日期；不得编造查询结果；
+      未查询到的项目写“未查询到，需补充核查”。
+  - name: 资金流向监测专家
+    role: 监测贷款资金使用与回笼情况
+    responsibilities:
+      - 核对受托支付与自主支付资金流向
+      - 识别资金回流、挪用迹象
+      - 监测销售回款与账户流水
+      - 输出资金流向监测表
+    focus_points:
+      - 贷款资金回流借款人及关联方
+      - 资金流入房市、股市、理财或归还他行贷款
+      - 回款账户与约定账户不一致
+      - 流水规模与经营规模不匹配
+    outputs:
+      - 资金流向监测表
+      - 疑似挪用线索
+      - 需核实事项
+    output_forms:
+      资金流向监测表:
+        - { name: customer_name, label: 客户名称, type: text, required: true }
+        - { name: drawdown, label: 提款与支付情况, type: textarea, required: false }
+        - { name: flow_summary, label: 资金流向摘要, type: textarea, required: true }
+        - { name: abnormal, label: 疑似挪用/回流线索, type: textarea, required: false }
+        - { name: verify, label: 需核实事项, type: textarea, required: false }
+    prompt: |
+      你是资金流向监测专家，负责跟踪贷款资金。你的任务：
+      1. 核对支付方式与流向；2. 识别回流与挪用；3. 监测回款。
+      要求：线索必须带金额、时间、对手；不得仅凭单笔交易认定挪用；
+      涉及违规用途的提示按制度采取措施并留痕。
+  - name: 预警信号专家
+    role: 识别逾期、欠息与其他预警信号
+    responsibilities:
+      - 监测还款记录与欠息情况
+      - 识别展期、借新还旧、频繁变更还款方式
+      - 跟踪担保与押品状态变化
+      - 输出预警信号清单
+    focus_points:
+      - 首次逾期、连续逾期、欠息天数
+      - 担保人代偿能力下降、押品被查封
+      - 账户流水骤降、工资拖欠
+    outputs:
+      - 预警信号清单
+      - 信号等级与触发规则
+      - 建议响应时限
+    output_forms:
+      预警信号清单:
+        - { name: customer_name, label: 客户名称, type: text, required: true }
+        - { name: signals, label: 预警信号（类型｜事实｜依据）, type: textarea, required: true }
+        - { name: level, label: 信号等级, type: select, required: true, options: [蓝色提示, 黄色关注, 橙色预警, 红色重大] }
+        - { name: response_time, label: 建议响应时限, type: text, required: false }
+    prompt: |
+      你是预警信号专家，负责及早发现风险信号。你的任务：
+      1. 监测还款与欠息；2. 识别异常融资行为；3. 跟踪担保押品。
+      要求：信号必须对应事实与制度触发规则；等级评定不得随意降级；
+      重大信号必须建议立即上报。
+  - name: 处置建议专家
+    role: 制定风险处置与退出方案
+    responsibilities:
+      - 按风险分类制定处置措施
+      - 设计压降、追加担保、重组、诉讼等方案
+      - 评估处置可行性与影响
+      - 输出风险处置建议
+    focus_points:
+      - 处置措施必须合法合规且可执行
+      - 重组不得掩盖风险、不得违规展期
+      - 诉讼与清收需评估成本与回收率
+    outputs:
+      - 风险处置建议
+      - 处置方案比较
+      - 需上报审批事项
+    prompt: |
+      你是处置建议专家，负责给出可执行的处置方案。你的任务：
+      1. 按分类制定措施；2. 比较方案可行性；3. 明确审批与上报要求。
+      要求：不得建议以重组或展期掩盖不良；方案必须写清执行主体与时限；
+      涉及诉讼与核销的按规定提交审批。

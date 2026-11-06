@@ -143,12 +143,7 @@ export function ApprovalQueue(): JSX.Element {
               key={t}
               type="button"
               onClick={() => setFilter({ type: t as TaskType | 'all' })}
-              className="flex-1 rounded px-1.5 py-0.5 text-2xs font-semibold transition-colors"
-              style={{
-                backgroundColor: filter.type === t ? '#007acc' : '#ffffff',
-                color: filter.type === t ? '#ffffff' : '#616161',
-                border: '1px solid #d4d4d4',
-              }}
+              className={`btn btn-xs flex-1 ${filter.type === t ? 'btn-primary' : 'btn-secondary'}`}
             >
               {t === 'all' ? '全部' : TYPE_LABELS[t as TaskType]}
             </button>

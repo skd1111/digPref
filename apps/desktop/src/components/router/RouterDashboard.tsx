@@ -15,6 +15,7 @@ import { DSparkMetricsCard } from './DSparkMetricsCard';
 import { ManualConfirmationPanel } from './ManualConfirmationPanel';
 import { useRouterStore } from '@/store/routerStore';
 import { ipc } from '@/ipc/invoke';
+import { CompassIcon, SettingsIcon, WalletIcon, ZapIcon } from '@/components/ui/Icons';
 
 export function RouterDashboard(): JSX.Element {
   const budget = useRouterStore((s) => s.budget);
@@ -72,8 +73,9 @@ export function RouterDashboard(): JSX.Element {
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-auto p-4" style={{ backgroundColor: '#ffffff' }}>
-      <h2 className="text-ui font-semibold" style={{ color: '#1f1f1f' }}>
-        🧭 路由仪表盘
+      <h2 className="flex items-center gap-1 text-ui font-semibold" style={{ color: '#1f1f1f' }}>
+        <CompassIcon size={14} />
+        路由仪表盘
       </h2>
 
       {metricsError && (
@@ -90,8 +92,9 @@ export function RouterDashboard(): JSX.Element {
         className="rounded border p-4"
         style={{ backgroundColor: '#f3f3f3', borderColor: '#d4d4d4' }}
       >
-        <h3 className="mb-2 text-ui font-semibold" style={{ color: '#1f1f1f' }}>
-          ⚙️ 执行模式
+        <h3 className="mb-2 flex items-center gap-1 text-ui font-semibold" style={{ color: '#1f1f1f' }}>
+          <SettingsIcon size={13} />
+          执行模式
         </h3>
         <p className="mb-3 text-2xs" style={{ color: '#616161' }}>
           自动 = 按路由结果直接执行；手动 = 弹出候选项让用户确认
@@ -104,13 +107,9 @@ export function RouterDashboard(): JSX.Element {
                 key={m}
                 type="button"
                 onClick={() => setRunMode(m)}
-                className="rounded px-3 py-1 text-ui"
-                style={{
-                  backgroundColor: active ? '#0e639c' : '#ececec',
-                  color: active ? '#ffffff' : '#1f1f1f',
-                }}
+                className={`btn btn-sm ${active ? 'btn-primary' : 'btn-secondary'}`}
               >
-                {m === 'auto' ? '▶ 自动' : '⏸ 手动'}
+                {m === 'auto' ? '自动' : '手动'}
               </button>
             );
           })}
@@ -124,8 +123,9 @@ export function RouterDashboard(): JSX.Element {
           style={{ backgroundColor: '#ffffff' }}
         >
           <div>
-            <div className="text-2xs font-semibold" style={{ color: sparkEnabled ? '#795e26' : '#616161' }}>
-              ⚡ Spark 模式 {sparkEnabled ? '开' : '关'}
+            <div className="flex items-center gap-1 text-2xs font-semibold" style={{ color: sparkEnabled ? '#795e26' : '#616161' }}>
+              <ZapIcon size={12} />
+              Spark 模式 {sparkEnabled ? '开' : '关'}
             </div>
             <div className="text-2xs" style={{ color: '#616161' }}>
               推理模型先打草稿 → 复杂模型继续完善
@@ -147,8 +147,9 @@ export function RouterDashboard(): JSX.Element {
 
       {/* 预算块 */}
       <div className="rounded border p-4" style={{ backgroundColor: '#f3f3f3', borderColor: '#d4d4d4' }}>
-        <h3 className="mb-2 text-ui font-semibold" style={{ color: '#1f1f1f' }}>
-          💰 日预算
+        <h3 className="mb-2 flex items-center gap-1 text-ui font-semibold" style={{ color: '#1f1f1f' }}>
+          <WalletIcon size={13} />
+          日预算
         </h3>
         <div className="mb-2 flex items-center justify-between text-2xs">
           <span style={{ color: '#616161' }}>

@@ -13,6 +13,8 @@ import {
   type CollabCenterTab,
   type CollabContext,
 } from '@/types/collab';
+import { ArchiveIcon, CheckIcon, MessageIcon } from '@/components/ui/Icons';
+import { ANCHOR_TYPE_ICONS } from '@/components/collab/anchorTypeIcons';
 
 interface ContextListProps {
   tab: CollabCenterTab;
@@ -47,6 +49,7 @@ function ContextRow({
   onClick: () => void;
 }): JSX.Element {
   const meta = ANCHOR_LABELS[ctx.anchor_type];
+  const AnchorIcon = ANCHOR_TYPE_ICONS[ctx.anchor_type];
   return (
     <button
       type="button"
@@ -63,7 +66,8 @@ function ContextRow({
           className="flex-shrink-0 rounded px-1.5 py-0.5 text-2xs"
           style={{ backgroundColor: meta.color, color: '#0e0e0e', fontWeight: 600 }}
         >
-          {meta.icon} {meta.label}
+          <AnchorIcon size={11} />
+          {meta.label}
         </span>
         <div className="min-w-0 flex-1">
           <div
@@ -83,19 +87,28 @@ function ContextRow({
           <div className="mt-1.5 flex items-center gap-1.5 text-2xs" style={{ color: '#616161' }}>
             <span>{ctx.target_env ? `[${ctx.target_env}]` : ''}</span>
             <span>·</span>
-            <span>💬 {ctx.comment_count}</span>
+            <span className="flex items-center gap-1">
+              <MessageIcon size={11} />
+              {ctx.comment_count}
+            </span>
             <span>·</span>
             <span>{formatRelativeTime(ctx.updated_at)}</span>
             {ctx.status === 'resolved' && (
               <>
                 <span>·</span>
-                <span style={{ color: '#059669' }}>✓ {STATUS_LABELS.resolved}</span>
+                <span className="flex items-center gap-1" style={{ color: '#059669' }}>
+                  <CheckIcon size={11} />
+                  {STATUS_LABELS.resolved}
+                </span>
               </>
             )}
             {ctx.status === 'archived' && (
               <>
                 <span>·</span>
-                <span style={{ color: '#616161' }}>🗄 {STATUS_LABELS.archived}</span>
+                <span className="flex items-center gap-1" style={{ color: '#616161' }}>
+                  <ArchiveIcon size={11} />
+                  {STATUS_LABELS.archived}
+                </span>
               </>
             )}
           </div>
@@ -189,7 +202,9 @@ export function ContextList({ tab, onSelect }: ContextListProps): JSX.Element {
             className="flex h-full flex-col items-center justify-center p-6 text-center text-2xs"
             style={{ color: '#616161' }}
           >
-            <div className="mb-2 text-3xl">💬</div>
+            <div className="mb-2 flex items-center justify-center text-3xl" aria-hidden="true">
+              <MessageIcon size={36} />
+            </div>
             {labels.empty}
           </div>
         ) : (

@@ -215,8 +215,7 @@ export function McpSettingsPanel(): JSX.Element {
             type="button"
             onClick={() => void save()}
             disabled={!dirty || busy !== null}
-            className="rounded px-3 py-1 text-ui font-semibold disabled:opacity-50"
-            style={{ backgroundColor: '#007acc', color: '#ffffff' }}
+            className="btn btn-primary btn-md"
           >
             {busy === 'save' ? '保存中…' : '💾 保存'}
           </button>
@@ -224,16 +223,14 @@ export function McpSettingsPanel(): JSX.Element {
             type="button"
             onClick={() => void reload()}
             disabled={busy !== null}
-            className="rounded px-3 py-1 text-ui"
-            style={{ backgroundColor: '#ececec', color: '#333333', border: '1px solid #b8b8b8' }}
+            className="btn btn-secondary btn-md"
           >
             {busy === 'reload' ? '重载中…' : '⟳ 热重载'}
           </button>
           <button
             type="button"
             onClick={() => void refresh()}
-            className="rounded px-3 py-1 text-ui"
-            style={{ backgroundColor: '#ececec', color: '#333333', border: '1px solid #b8b8b8' }}
+            className="btn btn-secondary btn-md"
           >
             ↻ 刷新
           </button>
@@ -268,7 +265,7 @@ export function McpSettingsPanel(): JSX.Element {
               key={tpl.key}
               type="button"
               onClick={() => addTemplate(tpl)}
-              className="rounded p-2 text-left transition-colors hover:bg-vscode-border"
+              className="rounded p-2 text-left transition-colors hover:border-[#b8b8b8] hover:bg-[#f0f0f0]"
               style={{ backgroundColor: '#f3f3f3', border: '1px solid #d4d4d4' }}
             >
               <div className="text-ui font-semibold">＋ {tpl.label}</div>
@@ -287,8 +284,7 @@ export function McpSettingsPanel(): JSX.Element {
           <button
             type="button"
             onClick={openCreate}
-            className="rounded px-2 py-0.5 text-2xs"
-            style={{ backgroundColor: '#ececec', color: '#333333', border: '1px solid #d4d4d4' }}
+            className="btn btn-secondary btn-xs"
           >
             ＋ 新增空白
           </button>
@@ -337,24 +333,21 @@ export function McpSettingsPanel(): JSX.Element {
                         type="button"
                         onClick={() => void testServer(name, spec)}
                         disabled={busy !== null}
-                        className="rounded px-2 py-0.5 text-2xs disabled:opacity-50"
-                        style={{ backgroundColor: '#ececec', color: '#333333' }}
+                        className="btn btn-secondary btn-xs"
                       >
                         {busy === `test:${name}` ? '测试中…' : '🔌 测试连接'}
                       </button>
                       <button
                         type="button"
                         onClick={() => openEdit(name)}
-                        className="rounded px-2 py-0.5 text-2xs"
-                        style={{ backgroundColor: '#ececec', color: '#333333' }}
+                        className="btn btn-secondary btn-xs"
                       >
                         编辑
                       </button>
                       <button
                         type="button"
                         onClick={() => removeServer(name)}
-                        className="rounded px-2 py-0.5 text-2xs text-accent-danger"
-                        style={{ backgroundColor: '#ececec' }}
+                        className="btn btn-danger btn-xs"
                       >
                         删除
                       </button>
@@ -530,8 +523,7 @@ function ServerEditorModal({
             <button
               type="button"
               onClick={() => setEnvRows([...envRows, { k: '', v: '' }])}
-              className="rounded px-2 py-0.5 text-2xs"
-              style={{ backgroundColor: '#ececec', color: '#333333' }}
+              className="btn btn-secondary btn-xs"
             >
               ＋ 加一行
             </button>
@@ -562,8 +554,7 @@ function ServerEditorModal({
               <button
                 type="button"
                 onClick={() => setEnvRows(envRows.filter((_, idx) => idx !== i))}
-                className="rounded px-2 text-2xs text-accent-danger"
-                style={{ backgroundColor: '#ececec' }}
+                className="btn btn-danger btn-xs"
               >
                 ✕
               </button>
@@ -609,8 +600,7 @@ function ServerEditorModal({
           <button
             type="button"
             onClick={onCancel}
-            className="rounded px-3 py-1.5 text-ui"
-            style={{ backgroundColor: '#ececec', color: '#333333' }}
+            className="btn btn-secondary btn-md"
           >
             取消
           </button>
@@ -618,8 +608,7 @@ function ServerEditorModal({
             type="button"
             disabled={!canCommit}
             onClick={commit}
-            className="rounded px-3 py-1.5 text-ui font-semibold disabled:opacity-50"
-            style={{ backgroundColor: '#007acc', color: '#ffffff' }}
+            className="btn btn-primary btn-md"
           >
             确定
           </button>

@@ -11,6 +11,7 @@ import { useChatStore } from "@/store/chatStore";
 import { useUIStore } from "@/store/uiStore";
 import { ipc } from "@/ipc/invoke";
 import { STATUS_META, type CardStatus } from "@/types/reqcard";
+import { ClipboardIcon, ComponentIcon, PencilIcon } from "@/components/ui/Icons";
 
 interface RelatedCard {
   id: string;
@@ -102,8 +103,9 @@ export function ReqCardsRightPanel(): JSX.Element {
             <div className="mb-1 text-2xs" style={{ color: "#616161" }}>
               当前功能点
             </div>
-            <div className="text-ui font-semibold" style={{ color: "#1f1f1f" }}>
-              🧩 {feature.name}
+            <div className="flex items-center gap-1 text-ui font-semibold" style={{ color: "#1f1f1f" }}>
+              <ComponentIcon size={13} />
+              {feature.name}
             </div>
             <div
               className="mt-1 line-clamp-2 text-2xs"
@@ -115,28 +117,21 @@ export function ReqCardsRightPanel(): JSX.Element {
               <button
                 type="button"
                 onClick={handleStartReq}
-                className="flex-1 rounded border px-2 py-1 text-2xs font-semibold"
-                style={{
-                  borderColor: "#007acc",
-                  color: "#0451a5",
-                  backgroundColor: "#ffffff",
-                }}
+                className="btn btn-primary btn-sm flex-1"
                 title="把该功能点上下文写入对话，对齐后生成需求卡片"
               >
-                📝 发起改造需求
+                <span className="flex items-center gap-1">
+                  <PencilIcon size={12} />
+                  发起改造需求
+                </span>
               </button>
               <button
                 type="button"
                 onClick={() => openEditor(feature.id)}
-                className="rounded border px-2 py-1 text-2xs"
-                style={{
-                  borderColor: "#e0e0e0",
-                  color: "#1f1f1f",
-                  backgroundColor: "#ffffff",
-                }}
+                className="btn btn-secondary btn-sm"
                 title="编辑功能点（含 Skill 绑定）"
               >
-                ✏️
+                <PencilIcon size={12} />
               </button>
             </div>
           </>
@@ -149,10 +144,11 @@ export function ReqCardsRightPanel(): JSX.Element {
 
       {/* 关联需求卡片 */}
       <div
-        className="flex-shrink-0 border-b px-3 py-2 text-2xs font-semibold uppercase tracking-wider"
+        className="flex flex-shrink-0 items-center gap-1 border-b px-3 py-2 text-2xs font-semibold uppercase tracking-wider"
         style={{ borderColor: "#d4d4d4", color: "#0451a5" }}
       >
-        📋 关联需求卡片{loading ? " …" : ` (${cards.length})`}
+        <ClipboardIcon size={12} />
+        关联需求卡片{loading ? " …" : ` (${cards.length})`}
       </div>
       <div className="flex-1 overflow-auto p-2">
         {!feature ? (

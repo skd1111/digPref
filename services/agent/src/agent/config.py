@@ -131,6 +131,10 @@ class Settings(BaseSettings):
     rag_contextual_prefix_enabled: bool = True
     # 单文件上传大小上限（MB）
     rag_max_file_mb: int = Field(default=50, ge=1, le=500)
+    # 入库（分块+向量化+LLM 增强）并发上限：上传后每个文档一个后台任务，
+    # 批量导入时全部并发会瞬间打爆云端模型（429 速率限制）→ 分类/增强阶段成片失败；
+    # 用信号量限制同时在跑的入库数，其余排队（状态仍为 indexing）。
+    rag_ingest_concurrency: int = Field(default=2, ge=1, le=16)
     # 冷启动预加载（lifespan 后台预热 embedding / reranker / FTS5，best-effort）
     rag_preload_on_startup: bool = True
     # RAG 优先作答（根因修复 2026-09-04）：文档/制度类查询且知识库已 BM25 命中
@@ -258,6 +262,17 @@ class Settings(BaseSettings):
     doc_review_pdf_ocr_scale: float = Field(default=2.0, ge=1.0, le=6.0)
     # 单文档最多 OCR 页数上限（防超大扫描件长时间阻塞；0 = 不限）
     doc_review_pdf_ocr_max_pages: int = Field(default=0, ge=0, le=2000)
+
+    # ---- 运营模式：专家审核前置的系统合规审核（2026-11-05）----
+    # 材料交给 AI 专家验收前，先复用 doc_review 的分类 + 分块风险分析链路过一遍；
+    # 有风险点 → 前端弹「审核报告」（风险点 + 原文证据），无风险不弹窗。
+    # 模型调用走 ops 本地优先三级降级链（材料含 PII，本地可用绝不出域）；
+    # 任何失败/超时只降级为 degraded 报告，绝不阻断专家验收主链路。
+    ops_doc_audit_enabled: bool = True
+    # 参与合规审核的最大字符数（防超长合同把数十个 LLM 单元拖到分钟级）
+    ops_doc_audit_max_chars: int = Field(default=12000, ge=1000, le=40000)
+    # 单份材料的合规审核墙钟上限（超时降级，不弹窗）
+    ops_doc_audit_timeout_sec: float = Field(default=120.0, ge=10.0, le=600.0)
 
     # ---- Phase 7 V0 数据专家模式 ----
     # 数据专家 SQLite 路径（与 audit / router / knowledge / ssh 等 db 物理隔离）

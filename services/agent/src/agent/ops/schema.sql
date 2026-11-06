@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS case_files (
     extracted_fields TEXT NOT NULL DEFAULT '[]',   -- JSON：关键要素 [{field,value,confidence}]（低置信前端标红）
     evidence TEXT NOT NULL DEFAULT '[]',           -- JSON：审核依据原文摘录（证据链，防黑盒）
     reject_marks TEXT NOT NULL DEFAULT '[]',       -- JSON：打回定位 [{quote,advice}]（文档内高亮，BUGFIX #80）
+    risk_report TEXT NOT NULL DEFAULT '{}',        -- JSON：系统合规审核报告 {overall_risk_level,findings[...]原始证据}（2026-11-05）
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );

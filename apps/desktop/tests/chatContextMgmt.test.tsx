@@ -6,7 +6,7 @@
  *   - chatStore.clearTabContext（断点设到最后一条 + 作废旧摘要）
  *   - chatStore.applyTabCompression（摘要 + 断点移到保留消息首条）
  *   - contextBreakpoint / contextSummary 随 tabs 持久化
- *   - ChatInput：🧠 指示器展示占窗口百分比；菜单「清理上下文」「压缩上下文」行为
+ *   - ChatInput：上下文指示器展示占窗口百分比；菜单「清理上下文」「压缩上下文」行为
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
@@ -225,7 +225,7 @@ describe('ChatInput 上下文指示器与清理/压缩菜单', () => {
     return Array.from(el.querySelectorAll('button'));
   }
 
-  it('🧠 指示器展示会话 history 占模型窗口的百分比', async () => {
+  it('上下文指示器展示会话 history 占模型窗口的百分比', async () => {
     // 窗口 40 tok，2 轮 = 8 tok → 占用 20%（窗口已知时按百分比展示，不再是 token 数）
     (ipc.routerGetGenLimits as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       ok: true,
@@ -233,7 +233,8 @@ describe('ChatInput 上下文指示器与清理/压缩菜单', () => {
     });
     setMessages(turns(2)); // 4 条 × 2 tok = 8 tok
     await render();
-    const indicator = allButtons(container).find((b) => b.textContent?.includes('🧠'));
+    // 指示器按钮：图标已改为单色 SVG（aria-hidden），改用 data-testid 定位
+    const indicator = allButtons(container).find((b) => b.dataset.testid === 'ctx-usage-indicator')!;
     expect(indicator).toBeTruthy();
     expect(indicator!.textContent).toContain('20%');
   });
@@ -242,7 +243,8 @@ describe('ChatInput 上下文指示器与清理/压缩菜单', () => {
     setMessages(turns(2));
     await render();
     // 打开菜单
-    const indicator = allButtons(container).find((b) => b.textContent?.includes('🧠'))!;
+    // 指示器按钮：图标已改为单色 SVG（aria-hidden），改用 data-testid 定位
+    const indicator = allButtons(container).find((b) => b.dataset.testid === 'ctx-usage-indicator')!;
     await act(async () => {
       indicator.click();
     });
@@ -262,7 +264,8 @@ describe('ChatInput 上下文指示器与清理/压缩菜单', () => {
   it('压缩上下文：保留最近 5 轮，其余进 LLM 摘要', async () => {
     setMessages(turns(7)); // 14 条；保留 10 条 → 压缩前 4 条（2 轮）
     await render();
-    const indicator = allButtons(container).find((b) => b.textContent?.includes('🧠'))!;
+    // 指示器按钮：图标已改为单色 SVG（aria-hidden），改用 data-testid 定位
+    const indicator = allButtons(container).find((b) => b.dataset.testid === 'ctx-usage-indicator')!;
     await act(async () => {
       indicator.click();
     });
@@ -289,7 +292,8 @@ describe('ChatInput 上下文指示器与清理/压缩菜单', () => {
   it('历史不足 5 轮时压缩按钮禁用', async () => {
     setMessages(turns(4)); // 8 条 ≤ 10
     await render();
-    const indicator = allButtons(container).find((b) => b.textContent?.includes('🧠'))!;
+    // 指示器按钮：图标已改为单色 SVG（aria-hidden），改用 data-testid 定位
+    const indicator = allButtons(container).find((b) => b.dataset.testid === 'ctx-usage-indicator')!;
     await act(async () => {
       indicator.click();
     });
@@ -393,7 +397,8 @@ describe('ChatInput 上下文指示器与清理/压缩菜单', () => {
     chatCompressHistory.mockRejectedValueOnce(new Error('llm down'));
     setMessages(turns(7));
     await render();
-    const indicator = allButtons(container).find((b) => b.textContent?.includes('🧠'))!;
+    // 指示器按钮：图标已改为单色 SVG（aria-hidden），改用 data-testid 定位
+    const indicator = allButtons(container).find((b) => b.dataset.testid === 'ctx-usage-indicator')!;
     await act(async () => {
       indicator.click();
     });

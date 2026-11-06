@@ -6,6 +6,7 @@
 import { useState } from 'react';
 import { MentionInput } from './MentionInput';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { EyeIcon, PencilIcon, WarningIcon } from '@/components/ui/Icons';
 
 interface CommentEditorProps {
   onSubmit: (content: string, mentions: string[]) => void;
@@ -60,7 +61,9 @@ export function CommentEditor({
             color: '#795e26',
           }}
         >
-          <span>⚠</span>
+          <span className="flex-shrink-0" aria-hidden="true">
+            <WarningIcon size={13} />
+          </span>
           <div>
             <strong>检测到可能的 PII（卡号 / 身份证 / 手机号）</strong>。
             真实生产中 <strong>脱敏由后端 redact.py 处理</strong>，前端仅展示。
@@ -111,7 +114,17 @@ export function CommentEditor({
               border: '1px solid #d4d4d4',
             }}
           >
-            {showPreview ? '✏ 编辑' : '👁 预览'}
+            {showPreview ? (
+              <span className="flex items-center gap-1">
+                <PencilIcon size={12} />
+                编辑
+              </span>
+            ) : (
+              <span className="flex items-center gap-1">
+                <EyeIcon size={12} />
+                预览
+              </span>
+            )}
           </button>
         </div>
         <div className="flex gap-2">

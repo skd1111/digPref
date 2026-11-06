@@ -84,6 +84,10 @@ class CaseStorage:
                 "draft.submit_count",
                 "ALTER TABLE case_drafts ADD COLUMN submit_count INTEGER NOT NULL DEFAULT 0",
             ),
+            (
+                "risk_report",
+                "ALTER TABLE case_files ADD COLUMN risk_report TEXT NOT NULL DEFAULT '{}'",
+            ),
         ):
             try:
                 conn.execute(ddl)
@@ -174,6 +178,7 @@ class CaseStorage:
         extracted_fields: str | None = None,
         evidence: str | None = None,
         reject_marks: str | None = None,
+        risk_report: str | None = None,
     ) -> dict | None:
         sets: list[str] = []
         params: list = []
@@ -195,6 +200,9 @@ class CaseStorage:
         if reject_marks is not None:
             sets.append("reject_marks = ?")
             params.append(reject_marks)
+        if risk_report is not None:
+            sets.append("risk_report = ?")
+            params.append(risk_report)
         if not sets:
             return self.get_file(file_id)
         sets.append("updated_at = ?")

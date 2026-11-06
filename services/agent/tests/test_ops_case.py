@@ -42,6 +42,28 @@ def _isolate_sessions_archive(tmp_path, monkeypatch):
     monkeypatch.setattr(ops_api, "_sessions_store", lambda: store)
 
 
+@pytest.fixture(autouse=True)
+def _stub_system_doc_audit(monkeypatch):
+    """专家审核前置的系统合规审核默认返空报告（无风险）：既有用例只关心专家验收主链路。"""
+    from agent.ops import api as ops_api
+
+    async def _empty(file_name, text, *, basis="document", llm=None):
+        return {
+            "audited": True,
+            "degraded": False,
+            "error": "",
+            "basis": basis,
+            "doc_category": "other",
+            "risk_types": [],
+            "overall_risk_level": "",
+            "findings": [],
+            "elapsed_ms": 0,
+            "audited_at": 0,
+        }
+
+    monkeypatch.setattr(ops_api, "run_doc_audit", _empty)
+
+
 def _b64(text: str) -> str:
     return base64.b64encode(text.encode("utf-8")).decode("ascii")
 
@@ -737,6 +759,209 @@ async def test_ask_plain_question_checklist_answer_converts_to_draft(client, mon
     # 气泡不再砸长文，只留简短引导
     assert "草稿表单" in body["qa"]["answer"]
     assert "营业执照副本" not in body["qa"]["answer"]
+
+
+# ---------------------------------------------------------------------------
+# OCR 自动填入（2026-11-05）：所有专家录入表单通用 —— 上传文件 → 本地 OCR/文档解析
+# → 模型抽取字段值 → 前端自动填入（可撤销）。
+# ---------------------------------------------------------------------------
+
+_OCR_FILL_REPLY = json.dumps(
+    {
+        "values": {
+            "corp_name": "某某贸易有限公司",
+            "license_no": "91310000XXXX",
+            "unknown_field": "模板外字段应被丢弃",
+        }
+    },
+    ensure_ascii=False,
+)
+
+
+def _ocr_fill(client: TestClient, draft_id: str, name: str, text: str):
+    return client.post(
+        f"/ops/case/drafts/{draft_id}/ocr-fill",
+        json={"file_name": name, "content_base64": _b64(text)},
+    )
+
+
+@pytest.mark.asyncio
+async def test_draft_ocr_fill_maps_text_to_fields(client, monkeypatch):
+    """上传文本材料 → 模型抽取 → 只返回模板内字段（供前端自动填入）。"""
+    _mock_llm_seq(monkeypatch, [_DRAFT_TEMPLATE_REPLY, _OCR_FILL_REPLY])
+    draft = _ask_template(client)["draft"]
+    r = _ocr_fill(
+        client,
+        draft["id"],
+        "营业执照.txt",
+        "企业名称：某某贸易有限公司\n统一社会信用代码：91310000XXXX",
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["values"]["corp_name"] == "某某贸易有限公司"
+    assert body["values"]["license_no"] == "91310000XXXX"
+    assert "unknown_field" not in body["values"]
+    assert body["filled"] == ["corp_name", "license_no"]
+    assert body["engine"] == "document"
+    assert body["source"] == "llm"
+    assert body["text_chars"] > 0
+    # 不直接写库：草稿填写值仍为空，由前端核对后暂存/提交
+    got = client.get("/ops/case/drafts", params={"case_id": "bank__ops_open"}).json()
+    assert got["drafts"][0]["values"] == {}
+
+
+@pytest.mark.asyncio
+async def test_draft_ocr_fill_llm_down_falls_back_to_label_values(client, monkeypatch):
+    """模型全挂时用「标签：值」正则兑底，绝不空手。"""
+    from agent.ops import api as ops_api
+
+    _mock_llm(monkeypatch, _DRAFT_TEMPLATE_REPLY)
+    draft = _ask_template(client)["draft"]
+
+    async def boom(_messages):
+        raise RuntimeError("all llm down")
+
+    monkeypatch.setattr(ops_api, "_make_summarize_llm", lambda: boom)
+    r = _ocr_fill(
+        client,
+        draft["id"],
+        "执照.txt",
+        "企业名称：某某贸易有限公司\n统一社会信用代码：91310000XXXX",
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["source"] == "regex"
+    assert body["values"]["corp_name"] == "某某贸易有限公司"
+    assert body["values"]["license_no"] == "91310000XXXX"
+
+
+@pytest.mark.asyncio
+async def test_draft_ocr_fill_rejects_unsupported_and_empty(client, monkeypatch):
+    """格式白名单 + 识别不出文字时给友好错误。"""
+    _mock_llm(monkeypatch, _DRAFT_TEMPLATE_REPLY)
+    draft = _ask_template(client)["draft"]
+
+    r = _ocr_fill(client, draft["id"], "virus.exe", "MZ")
+    assert r.status_code == 415
+
+    r = _ocr_fill(client, draft["id"], "空.txt", "   \n  ")
+    assert r.status_code == 422
+    assert "识别出文字" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_draft_ocr_fill_rejects_passed_draft(client, monkeypatch):
+    """已验收通过的草稿不允许再识别填入（不可篡改交付物）。"""
+    _mock_llm_seq(
+        monkeypatch,
+        [
+            _DRAFT_TEMPLATE_REPLY,
+            json.dumps({"verdict": "passed", "note": "ok"}, ensure_ascii=False),
+        ],
+    )
+    draft = _ask_template(client)["draft"]
+    client.put(
+        f"/ops/case/drafts/{draft['id']}",
+        json={"values": {"corp_name": "甲公司", "license_no": "91310000XXXX"}},
+    )
+    r = client.post(f"/ops/case/drafts/{draft['id']}/submit")
+    assert r.json()["draft"]["status"] == "passed"
+
+    r = _ocr_fill(client, draft["id"], "执照.txt", "企业名称：乙公司")
+    assert r.status_code == 400
+    assert "已验收通过" in r.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# 专家审核前置的系统合规审核（2026-11-05）：有风险点随材料落库 → 前端弹审核报告
+# ---------------------------------------------------------------------------
+
+_AUDIT_FINDING = {
+    "finding_id": "F-AUDIT-1",
+    "risk_type": "legal",
+    "risk_level": "high",
+    "title": "单方最终解释权",
+    "description": "条款剥夺相对方解释权，存在无效风险",
+    "suggestion": "删除或改为双方协商解释",
+    "rule_ref": None,
+    "evidence_text": "统一社会信用代码 91310000XXXX",
+    "positions": [{"page_no": 1, "block_id": "p1b1", "start": 0, "end": 12}],
+    "kb_refs": [],
+}
+
+
+def _stub_risky_audit(monkeypatch):
+    """系统合规审核发现 1 个高危风险（验证落库 + 前端弹窗数据源）。"""
+    from agent.ops import api as ops_api
+
+    async def _risky(file_name, text, *, basis="document", llm=None):
+        return {
+            "audited": True,
+            "degraded": False,
+            "error": "",
+            "basis": basis,
+            "doc_category": "contract",
+            "risk_types": ["legal"],
+            "overall_risk_level": "high",
+            "findings": [dict(_AUDIT_FINDING)],
+            "elapsed_ms": 12,
+            "audited_at": 1,
+        }
+
+    monkeypatch.setattr(ops_api, "run_doc_audit", _risky)
+
+
+@pytest.mark.asyncio
+async def test_review_runs_system_audit_and_returns_risk_report(client, monkeypatch):
+    """专家审核前先跑系统合规审核：有风险点 → 响应带结构化报告（含原文证据）。"""
+    _stub_risky_audit(monkeypatch)
+    row = _upload(client)
+    _mock_llm(
+        monkeypatch,
+        json.dumps({"verdict": "passed", "note": "ok", "fields": [], "evidence": []}),
+    )
+    r = client.post(f"/ops/case/files/{row['id']}/review")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    report = body["risk_report"]
+    assert report["audited"] is True
+    assert report["overall_risk_level"] == "high"
+    assert report["findings"][0]["title"] == "单方最终解释权"
+    assert report["findings"][0]["evidence_text"] == "统一社会信用代码 91310000XXXX"
+    assert report["findings"][0]["positions"][0]["page_no"] == 1
+
+
+@pytest.mark.asyncio
+async def test_review_without_audit_risk_returns_empty_findings(client, monkeypatch):
+    """系统审核无风险 → findings 为空（前端不弹窗）。"""
+    row = _upload(client)
+    _mock_llm(monkeypatch, json.dumps({"verdict": "passed", "note": "ok"}))
+    body = client.post(f"/ops/case/files/{row['id']}/review").json()
+    assert body["risk_report"]["findings"] == []
+
+
+@pytest.mark.asyncio
+async def test_draft_submit_carries_risk_report(client, monkeypatch):
+    """填写资料提交（草稿→材料）同样先过系统审核，风险报告随材料返回。"""
+    _stub_risky_audit(monkeypatch)
+    _mock_llm_seq(
+        monkeypatch,
+        [
+            _DRAFT_TEMPLATE_REPLY,
+            json.dumps({"verdict": "passed", "note": "ok"}, ensure_ascii=False),
+        ],
+    )
+    draft = _ask_template(client)["draft"]
+    client.put(
+        f"/ops/case/drafts/{draft['id']}",
+        json={"values": {"corp_name": "甲公司", "license_no": "91310000XXXX"}},
+    )
+    r = client.post(f"/ops/case/drafts/{draft['id']}/submit")
+    assert r.status_code == 200, r.text
+    file_row = r.json()["file"]
+    assert (
+        file_row["risk_report"]["findings"][0]["evidence_text"] == "统一社会信用代码 91310000XXXX"
+    )
 
 
 # ---------------------------------------------------------------------------

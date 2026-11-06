@@ -10,7 +10,8 @@
 专家验收工作流（2026-08-10，取代运营模式的传统大 Chat）：
   GET    /ops/case                  — 获取 Case（材料文件 + 问答记录 + 交付草稿）
   POST   /ops/case/files            — 上传材料给对应专家
-  POST   /ops/case/files/{id}/review   — AI 专家审核验收
+  POST   /ops/case/files/{id}/review   — 先过「系统合规审核」（文档审核同款分类 + 分块分析）
+      → 有风险点随材料落库（前端弹报告，附原文证据）→ 专家按人设验收
   POST   /ops/case/files/{id}/override — 人工改判
   DELETE /ops/case/files/{id}       — 删除材料
   POST   /ops/case/ask              — 向专家提问（模板/清单类请求 → 生成直填草稿）
@@ -20,15 +21,21 @@
   GET    /ops/case/drafts           — 草稿列表
   PUT    /ops/case/drafts/{id}      — 保存填写值
   POST   /ops/case/drafts/{id}/submit — 提交：渲染成材料自动审核，通过即入交付物
+  POST   /ops/case/drafts/{id}/ocr-fill — 上传文件（2026-11-05）：本地 OCR / 文档解析
+      → 模型抽取字段值 → 前端自动填入表单（所有专家草稿表单通用）
 
 LLM 优先级与 biznav/reqflow 一致：本地 Ollama → DB 内网 → DB 云端（三级降级链）。
 """
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import json
 import logging
 import os
+import re
+import tempfile
 import time
 import zipfile
 from pathlib import Path
@@ -38,6 +45,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from agent.config import settings
+from agent.doc_review.llm import LLMFunc
 from agent.paths import data_root
 
 from .cases import (
@@ -51,6 +59,7 @@ from .cases import (
     is_image_file,
     make_case_id,
 )
+from .doc_audit import run_doc_audit
 from .models import ALL_RESULTS
 from .storage import BusinessRecordStorage
 
@@ -448,6 +457,13 @@ class DraftSaveRequest(BaseModel):
     values: dict[str, Any] = Field(default_factory=dict)
 
 
+class DraftOcrFillRequest(BaseModel):
+    """上传文件 OCR 自动填入草稿（2026-11-05：所有专家录入表单通用）。"""
+
+    file_name: str = Field(min_length=1, max_length=512)
+    content_base64: str = Field(min_length=1)
+
+
 class CaseExportRequest(BaseModel):
     case_id: str = Field(min_length=1, max_length=512)
     target_path: str = Field(min_length=1, max_length=4096)
@@ -564,7 +580,10 @@ def _extract_fields_regex(text: str, limit: int = 12) -> list[dict]:
 
 
 def _build_review_messages(
-    member: dict[str, Any] | None, file_name: str, material_text: str
+    member: dict[str, Any] | None,
+    file_name: str,
+    material_text: str,
+    audit_hint: str = "",
 ) -> list[dict[str, str]]:
     persona = (
         member.get("prompt") or f"你是{member.get('name', '审核专家')}，{member.get('role', '')}"
@@ -584,10 +603,64 @@ def _build_review_messages(
             "role": "user",
             "content": (
                 f"材料文件名：{file_name}\n\n材料内容：\n{material_text or '（无可提取文本）'}\n\n"
+                + (f"{audit_hint}\n\n" if audit_hint else "")
                 + _REVIEW_OUTPUT_RULE
             ),
         },
     ]
+
+
+def _format_audit_hint(report: dict[str, Any]) -> str:
+    """系统合规审核结论 → 专家审核提示词参考（无风险返回空串）。"""
+    findings = report.get("findings") or []
+    if not isinstance(findings, list) or not findings:
+        return ""
+    lines = [
+        f"【系统合规审核参考】总体风险：{report.get('overall_risk_level') or 'low'}；"
+        f"发现 {len(findings)} 个风险点："
+    ]
+    for f in findings[:8]:
+        if not isinstance(f, dict):
+            continue
+        lines.append(
+            f"- [{f.get('risk_level', '')}][{f.get('risk_type', '')}] "
+            f"{f.get('title', '')}：{str(f.get('description', ''))[:120]}"
+        )
+    lines.append("请结合你的职责与上述风险判断验收结论；若风险影响交付，请打回并写明补正要求。")
+    return "\n".join(lines)
+
+
+def _ops_audit_llm() -> LLMFunc:
+    """系统合规审核的 LLM：复用 ops 本地优先三级降级链（材料含 PII，本地可用绝不出域）。"""
+    summarize = _make_summarize_llm()
+
+    async def _call(_kind: Any, prompt: str) -> str:
+        return await summarize([{"role": "user", "content": prompt}])
+
+    return _call
+
+
+async def _run_doc_audit_safe(file_name: str, text: str, *, basis: str) -> dict[str, Any]:
+    """专家审核前的系统合规审核（best-effort）：超时/异常都给 degraded 报告，不弹窗。"""
+    try:
+        return await asyncio.wait_for(
+            run_doc_audit(file_name, text, basis=basis, llm=_ops_audit_llm()),
+            timeout=float(settings.ops_doc_audit_timeout_sec),
+        )
+    except Exception as exc:
+        logger.warning("[ops-case] system doc audit unavailable: %s", exc)
+        return {
+            "audited": False,
+            "degraded": True,
+            "error": f"系统合规审核不可用：{exc}",
+            "basis": basis,
+            "doc_category": "",
+            "risk_types": [],
+            "overall_risk_level": "",
+            "findings": [],
+            "elapsed_ms": 0,
+            "audited_at": int(time.time()),
+        }
 
 
 def _parse_review_result(
@@ -674,19 +747,24 @@ def _parse_review_result(
 
 
 def _normalize_file_row(row: dict | None) -> dict:
-    """存储行 → API 响应：extracted_fields/evidence/reject_marks 从 JSON 文本解析为数组。"""
+    """存储行 → API 响应：JSON 字段从文本解析为数组/对象（含系统审核报告）。"""
     if row is None:
         return {}
     out = dict(row)
-    for key in ("extracted_fields", "evidence", "reject_marks"):
+    for key, default in (
+        ("extracted_fields", []),
+        ("evidence", []),
+        ("reject_marks", []),
+        ("risk_report", {}),
+    ):
         val = out.get(key)
         if isinstance(val, str):
             try:
-                out[key] = json.loads(val or "[]")
+                out[key] = json.loads(val or ("[]" if isinstance(default, list) else "{}"))
             except (ValueError, TypeError):
-                out[key] = []
+                out[key] = default
         elif val is None:
-            out[key] = []
+            out[key] = default
     return out
 
 
@@ -747,7 +825,12 @@ async def case_add_file(req: CaseFileAddRequest) -> dict:
 
 
 async def _do_review_file(store: CaseStorage, file_id: str) -> dict:
-    """AI 专家审核单个材料（端点与草稿提交共用，BUGFIX #78）。"""
+    """AI 专家审核单个材料（端点与草稿提交共用，BUGFIX #78）。
+
+    2026-11-05：验收前先过一遍「系统合规审核」（与审核专家·文档审核同一套
+    classify + 分块分析 + 证据定位）；有风险点随材料落库 → 前端弹审核报告，
+    无风险不弹窗。合规审核失败/超时只降级，不阻断专家验收。
+    """
     row = store.get_file(file_id)
     if row is None:
         raise HTTPException(404, f"case file {file_id} not found")
@@ -757,11 +840,12 @@ async def _do_review_file(store: CaseStorage, file_id: str) -> dict:
 
     # 图片类：优先本地 vision；不可用 → 降级为关注点核对清单 + 待人工确认
     source_text = ""
+    basis = "document"
     if is_image_file(str(row["file_name"])):
+        basis = "vision"
         description = await _vision_describe(str(row["file_path"]))
         if description.strip():
             source_text = description
-            messages = _build_review_messages(member, str(row["file_name"]), description)
         else:
             focus = (member or {}).get("focus_points") or []
             note = "本地视觉模型不可用，无法自动识别图片内容。请人工按以下要点核对后改判：\n" + (
@@ -775,6 +859,7 @@ async def _do_review_file(store: CaseStorage, file_id: str) -> dict:
                     "confidence": 0.1,
                 }
             ]
+            risk_report = await _run_doc_audit_safe(str(row["file_name"]), "", basis="vision")
             updated = store.update_file(
                 file_id,
                 status=FILE_PENDING,
@@ -782,6 +867,7 @@ async def _do_review_file(store: CaseStorage, file_id: str) -> dict:
                 reviewed_by="ai",
                 extracted_fields=dump_json(placeholder_fields),
                 evidence="[]",
+                risk_report=dump_json(risk_report),
             )
             await _audit(
                 "ops_case_file_review",
@@ -790,8 +876,19 @@ async def _do_review_file(store: CaseStorage, file_id: str) -> dict:
             return _normalize_file_row(updated)
     else:
         source_text = _extract_material_text(str(row["file_path"]), str(row["file_name"]))
-        messages = _build_review_messages(member, str(row["file_name"]), source_text)
 
+    # ① 系统合规审核先行（有风险点 → 前端弹审核报告；无风险不弹）
+    risk_report = await _run_doc_audit_safe(str(row["file_name"]), source_text, basis=basis)
+    audit_findings = risk_report.get("findings") or []
+    audit_count = len(audit_findings) if isinstance(audit_findings, list) else 0
+
+    # ② 专家按人设验收（合规风险作为参考注入，结论仍由专家职责决定）
+    messages = _build_review_messages(
+        member,
+        str(row["file_name"]),
+        source_text,
+        _format_audit_hint(risk_report),
+    )
     llm_call = _make_summarize_llm()
     try:
         raw = await llm_call(messages)
@@ -803,6 +900,7 @@ async def _do_review_file(store: CaseStorage, file_id: str) -> dict:
             review_note=f"AI 审核不可用：{e}",
             reviewed_by="",
             extracted_fields=dump_json(_extract_fields_regex(source_text)),
+            risk_report=dump_json(risk_report),
         )
         raise HTTPException(502, str(e)) from e
 
@@ -816,10 +914,16 @@ async def _do_review_file(store: CaseStorage, file_id: str) -> dict:
         evidence=dump_json(evidence),
         # 通过时清空旧打回定位；打回时写入新定位（BUGFIX #80）
         reject_marks=dump_json(marks),
+        risk_report=dump_json(risk_report),
     )
     await _audit(
         "ops_case_file_review",
-        {"file_id": file_id, "member_key": row["member_key"], "verdict": status},
+        {
+            "file_id": file_id,
+            "member_key": row["member_key"],
+            "verdict": status,
+            "audit_findings": audit_count,
+        },
     )
     return _normalize_file_row(updated)
 
@@ -1275,6 +1379,36 @@ async def _try_convert_answer_to_draft(
         return None
 
 
+def _match_fields_to_values(fields: list[dict], candidates: dict[str, str]) -> dict[str, str]:
+    """候选键值 → 模板字段（name/label 精确 > label 包含候选 > 候选包含 label）。
+
+    file 类型字段跳过（文件无法由文本填入）。
+    """
+    values: dict[str, str] = {}
+    for field in fields:
+        if str(field.get("type", "")) == "file":
+            continue
+        name = str(field.get("name", ""))
+        label = str(field.get("label", ""))
+        best: tuple[int, str] | None = None
+        for cname, cvalue in candidates.items():
+            if not cname or not cvalue:
+                continue
+            if cname in (name, label):
+                score = 3
+            elif len(cname) >= 2 and cname in label:
+                score = 2
+            elif len(label) >= 2 and label in cname:
+                score = 1
+            else:
+                continue
+            if best is None or score > best[0]:
+                best = (score, cvalue)
+        if best is not None:
+            values[name] = best[1]
+    return values
+
+
 def _prefill_draft_values(materials: list[dict], fields: list[dict]) -> dict[str, str]:
     """把材料已提取要素映射到草稿字段（按 name/label 命中，取高置信优先）。"""
     candidates: dict[str, tuple[float, str]] = {}
@@ -1301,15 +1435,7 @@ def _prefill_draft_values(materials: list[dict], fields: list[dict]) -> dict[str
             prev = candidates.get(fname)
             if prev is None or conf > prev[0]:
                 candidates[fname] = (conf, fvalue)
-    values: dict[str, str] = {}
-    for field in fields:
-        name = str(field.get("name", ""))
-        label = str(field.get("label", ""))
-        for cname, (_conf, cvalue) in candidates.items():
-            if cname in (name, label) or cname in label or label in cname:
-                values[name] = cvalue
-                break
-    return values
+    return _match_fields_to_values(fields, {k: v for k, (_c, v) in candidates.items()})
 
 
 def _normalize_draft_row(row: dict | None) -> dict:
@@ -1337,6 +1463,253 @@ def _render_draft_markdown(title: str, template: list[dict], values: dict) -> st
         lines.append(f"- **{label}**{required_mark}：{value or '【未填写】'}")
     lines += ["", f"生成时间：{time.strftime('%Y-%m-%d %H:%M:%S')}"]
     return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# OCR 自动填入（2026-11-05）：所有专家的录入表单通用。
+# 上传文件 → 本地文字识别（图片 RapidOCR / 文档解析 + PDF 扫描件 OCR 回退）
+# → 模型把文本映射到表单字段 → 前端自动填入（用户核对后提交）。
+# 数据不出域：OCR 全程端侧；字段抽取走本地 Ollama 优先的三级降级链。
+# ---------------------------------------------------------------------------
+
+_DRAFT_OCR_MAX_BYTES = 30 * 1024 * 1024
+_DRAFT_OCR_DOC_SUFFIXES = frozenset(
+    {".pdf", ".doc", ".docx", ".txt", ".md", ".csv", ".html", ".htm", ".xlsx", ".pptx"}
+)
+
+
+async def _extract_upload_text(file_name: str, content_base64: str) -> tuple[str, str]:
+    """上传文件 → (文本, 引擎)。图片走端侧 RapidOCR；文档走 doc_review 解析。
+
+    识别不出文字时返回 ("", "none")，由端点统一报友好错误。
+    """
+    try:
+        raw = base64.b64decode(content_base64, validate=False)
+    except Exception as exc:
+        raise HTTPException(400, "文件内容不是合法的 base64") from exc
+    if not raw:
+        raise HTTPException(400, "文件为空，请重新选择")
+    if len(raw) > _DRAFT_OCR_MAX_BYTES:
+        raise HTTPException(413, "文件过大（上限 30MB），请压缩后重试")
+
+    suffix = Path(file_name).suffix.lower()
+    if not (is_image_file(file_name) or suffix in _DRAFT_OCR_DOC_SUFFIXES):
+        raise HTTPException(
+            415, f"暂不支持 {suffix or '该'} 格式（支持图片 / PDF / Word / Excel / PPT / 文本）"
+        )
+
+    with tempfile.TemporaryDirectory(prefix="eaide-ocr-") as tmp:
+        path = Path(tmp) / f"upload{suffix or '.png'}"
+        path.write_bytes(raw)
+        if is_image_file(file_name):
+            try:
+                from agent.image_processing.ocr import recognize_image_sync
+
+                text, _blocks, _conf = await asyncio.to_thread(recognize_image_sync, str(path))
+                if text.strip():
+                    return text.strip(), "rapidocr"
+            except Exception as exc:
+                logger.info("[ops-case] image OCR unavailable: %s", exc)
+            # 端侧 OCR 不可用 → 本地视觉模型描述兑底（数据仍不出域）
+            vision = await _vision_describe(str(path))
+            if vision.strip():
+                return vision.strip(), "vision"
+            return "", "none"
+        text = await asyncio.to_thread(_extract_material_text, str(path), file_name)
+        return (text.strip(), "document") if text.strip() else ("", "none")
+
+
+_LABEL_VALUE_RE = re.compile(r"^\s*([^\s：:]{2,16})\s*[：:]\s*(.+?)\s*$")
+
+
+def _extract_label_values(text: str, limit: int = 40) -> dict[str, str]:
+    """OCR 文本里「标签：值」形态的键值对（模型不可用时的填表兑底）。"""
+    pairs: dict[str, str] = {}
+    for line in text.splitlines():
+        m = _LABEL_VALUE_RE.match(line)
+        if not m:
+            continue
+        key = m.group(1).strip(" -*•\t")
+        value = m.group(2).strip()
+        if not key or not value or len(value) > 120:
+            continue
+        pairs.setdefault(key, value)
+        if len(pairs) >= limit:
+            break
+    return pairs
+
+
+def _normalize_fill_value(field: dict, value: str) -> str:
+    """识别值落到字段：压空白、截长、select 对齐选项、date 归一到 YYYY-MM-DD。"""
+    v = " ".join(str(value or "").split()).strip(" ：:;；,，。")
+    if not v:
+        return ""
+    if len(v) > 1000:
+        v = v[:1000]
+    ftype = str(field.get("type", ""))
+    if ftype == "select":
+        options = [str(o) for o in (field.get("options") or [])]
+        if v in options:
+            return v
+        for opt in options:
+            if opt and (v in opt or opt in v):
+                return opt
+        return ""
+    if ftype == "date":
+        m = re.search(r"(\d{4})\D{0,3}(\d{1,2})\D{0,3}(\d{1,2})", v)
+        if m:
+            month, day = int(m.group(2)), int(m.group(3))
+            if 1 <= month <= 12 and 1 <= day <= 31:
+                return f"{m.group(1)}-{month:02d}-{day:02d}"
+    return v
+
+
+def _build_ocr_fill_messages(
+    member: dict[str, Any] | None,
+    template: list[dict],
+    text: str,
+) -> list[dict[str, str]]:
+    persona = (
+        member.get("prompt") or f"你是{member.get('name', '业务专家')}，{member.get('role', '')}"
+        if member
+        else "你是银行运营业务专家。"
+    )
+    field_lines: list[str] = []
+    for f in template:
+        name = str(f.get("name", ""))
+        if not name or str(f.get("type", "")) == "file":
+            continue
+        desc = f"- {name}（{f.get('label', name)}"
+        options = [str(o) for o in (f.get("options") or [])]
+        if options:
+            desc += "，可选值：" + " / ".join(options)
+        field_lines.append(desc + "）")
+    return [
+        {
+            "role": "system",
+            "content": "\n".join(
+                [
+                    persona,
+                    "当前场景：客户经理上传了一份材料，需要把材料里的信息自动填入交付表单。",
+                    '请只返回 JSON（不要 Markdown 代码块），格式：{"values": {"字段name": "字段值"}}。',
+                    "硬性要求：只填材料中明确出现的信息，严禁编造；材料里没有的字段直接省略；"
+                    "日期统一 YYYY-MM-DD；金额/编号保留材料原文；select 字段取值必须来自可选值；"
+                    "文件类字段不要填。",
+                    "表单字段：\n" + "\n".join(field_lines),
+                ]
+            ),
+        },
+        {"role": "user", "content": f"材料文本：\n{text[:12000]}"},
+    ]
+
+
+def _parse_ocr_fill_values(raw: str, template: list[dict]) -> dict[str, str]:
+    """解析模型抽取结果（兼容包一层 values 的写法）；只保留模板内字段。"""
+    from agent.llm.json_discipline import extract_json
+
+    data = extract_json(raw)
+    if isinstance(data, dict) and isinstance(data.get("values"), dict):
+        data = data["values"]
+    if not isinstance(data, dict):
+        return {}
+    allowed = {str(f.get("name", "")) for f in template}
+    out: dict[str, str] = {}
+    for k, v in data.items():
+        name = str(k)
+        if name not in allowed:
+            continue
+        val = str(v or "").strip()
+        if val:
+            out[name] = val
+    return out
+
+
+async def _ocr_fill_values(
+    member: dict[str, Any] | None,
+    template: list[dict],
+    text: str,
+) -> tuple[dict[str, str], str]:
+    """文本 → 字段值：模型抽取优先，正则/标签键值兑底（模型不可用也不空手）。"""
+    values: dict[str, str] = {}
+    source = "regex"
+    try:
+        llm_call = _make_summarize_llm()
+        raw = await llm_call(_build_ocr_fill_messages(member, template, text))
+        parsed = _parse_ocr_fill_values(str(raw or ""), template)
+        if parsed:
+            values = parsed
+            source = "llm"
+    except Exception as exc:
+        logger.warning("[ops-case] OCR fill LLM unavailable: %s", exc)
+
+    candidates: dict[str, str] = {}
+    for rf in _extract_fields_regex(text):
+        candidates[str(rf.get("field", ""))] = str(rf.get("value", ""))
+    # 标签键值对更精确，覆盖正则的同类候选
+    candidates.update(_extract_label_values(text))
+    for name, val in _match_fields_to_values(template, candidates).items():
+        values.setdefault(name, val)
+
+    normalized: dict[str, str] = {}
+    for f in template:
+        name = str(f.get("name", ""))
+        raw_value = values.get(name)
+        if not raw_value:
+            continue
+        clean = _normalize_fill_value(f, raw_value)
+        if clean:
+            normalized[name] = clean
+    return normalized, source
+
+
+@router.post("/case/drafts/{draft_id}/ocr-fill")
+async def ocr_fill_case_draft(draft_id: str, req: DraftOcrFillRequest) -> dict:
+    """上传文件 → 本地 OCR/文档解析 → 模型抽取字段 → 返回可合并的填写值。
+
+    不直接写库：前端合并到当前表单（已有值可撤销），用户核对后暂存/提交。
+    """
+    store = _get_case_storage()
+    row = store.get_draft(draft_id)
+    if row is None:
+        raise HTTPException(404, f"draft {draft_id} not found")
+    if str(row.get("status", "")) == "passed":
+        raise HTTPException(400, "草稿已验收通过，无需再识别填入")
+    try:
+        template = json.loads(str(row.get("template_json", "[]")))
+    except (ValueError, TypeError):
+        template = []
+    if not isinstance(template, list) or not template:
+        raise HTTPException(400, "草稿没有可填字段，请重新生成表单")
+
+    text, engine = await _extract_upload_text(req.file_name, req.content_base64)
+    if not text:
+        raise HTTPException(
+            422,
+            "没能从文件里识别出文字：请换一张清晰的图片/扫描件，或直接手动填写。"
+            "（图片 OCR 依赖端侧模型，未安装时会退化为本地视觉描述）",
+        )
+
+    member = _resolve_member(str(row.get("team_id", "")), str(row.get("member_key", "")))
+    values, source = await _ocr_fill_values(member, template, text)
+    await _audit(
+        "ops_case_draft_ocr_fill",
+        {
+            "case_id": str(row.get("case_id", "")),
+            "draft_id": draft_id,
+            "file_name": req.file_name,
+            "engine": engine,
+            "source": source,
+            "filled": sorted(values),
+        },
+    )
+    return {
+        "values": values,
+        "filled": sorted(values),
+        "engine": engine,
+        "source": source,
+        "text_chars": len(text),
+        "text_preview": text[:800],
+    }
 
 
 @router.get("/case/drafts")

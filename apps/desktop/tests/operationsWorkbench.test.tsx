@@ -194,4 +194,27 @@ describe("OperationsWorkbench 选团链路（BUGFIX #76）", () => {
     expect(screen.getAllByText(/尽职调查专家团/).length).toBeGreaterThanOrEqual(1);
     expect(screen.queryAllByText(/专家团准备中/)).toHaveLength(0);
   });
+
+  it("静态模块默认专家团直接命中，不发起 LLM 推荐", async () => {
+    const amlTeam = { ...TEAM, id: "aml_team", name: "反洗钱分析专家团" };
+    (ipc.expertTeamsList as ReturnType<typeof vi.fn>).mockResolvedValue({
+      teams: [amlTeam],
+    });
+    (ipc.expertTeamsRecommend as ReturnType<typeof vi.fn>).mockResolvedValue({
+      team_ids: [],
+      source: "none",
+    });
+
+    // 「反洗钱辅助分析」模块的静态功能点（模块级默认团 = aml_team）
+    // 专家团列表已就绪（真实启动路径：WorkspaceLayout 先 loadTeams）
+    useExpertTeamStore.setState({ teams: [amlTeam] });
+    useOpsNavStore.setState({ selectedItemId: "aml_tasks" });
+    render(<OperationsWorkbench />);
+
+    await waitFor(() => {
+      expect(useExpertTeamStore.getState().selectedTeamIds).toEqual(["aml_team"]);
+    });
+    expect(useExpertTeamStore.getState().selectionSource).toBe("preset");
+    expect(ipc.expertTeamsRecommend).not.toHaveBeenCalled();
+  });
 });

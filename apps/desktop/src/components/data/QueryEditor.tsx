@@ -11,10 +11,18 @@ import { useCallback } from 'react';
 import Editor from '@monaco-editor/react';
 import { useDataStore, isReadOnlySql, type EditorMode } from '@/store/dataStore';
 import { DataChatPanel } from './DataChatPanel';
+import {
+  BracesIcon,
+  LockIcon,
+  MessageIcon,
+  PlayIcon,
+  WarningIcon,
+  type IconComponent,
+} from '@/components/ui/Icons';
 
-const MODES: Array<{ id: EditorMode; label: string; icon: string }> = [
-  { id: 'sql', label: 'SQL', icon: '⌘' },
-  { id: 'chat', label: '对话', icon: '💬' },
+const MODES: Array<{ id: EditorMode; label: string; icon: IconComponent }> = [
+  { id: 'sql', label: 'SQL', icon: BracesIcon },
+  { id: 'chat', label: '对话', icon: MessageIcon },
 ];
 
 export function QueryEditor({ onChatZoom }: { onChatZoom?: () => void }): JSX.Element {
@@ -27,18 +35,15 @@ export function QueryEditor({ onChatZoom }: { onChatZoom?: () => void }): JSX.El
       <div className="flex flex-shrink-0 items-center gap-1 border-b px-2 py-1.5" style={{ borderColor: '#d0d0d0' }}>
         {MODES.map((m) => {
           const active = m.id === mode;
+          const ModeIcon = m.icon;
           return (
             <button
               key={m.id}
               type="button"
               onClick={() => setMode(m.id)}
-              className="rounded px-3 py-1 text-ui font-semibold transition-all"
-              style={{
-                color: active ? '#ffffff' : '#6e6e6e',
-                backgroundColor: active ? '#0e639c' : 'transparent',
-              }}
+              className={`btn btn-sm font-semibold ${active ? 'btn-primary' : 'btn-ghost'}`}
             >
-              <span className="mr-1" aria-hidden>{m.icon}</span>
+              <ModeIcon size={13} />
               {m.label} 模式
             </button>
           );
@@ -83,11 +88,15 @@ function HeavyQueryConfirmDialog(): JSX.Element | null {
           className="flex items-center gap-2 rounded-t-lg px-4 py-2.5 text-ui font-semibold"
           style={{ backgroundColor: '#e8f1fa', color: '#0e639c' }}
         >
-          🔒 重查询确认（只读）
+          <span className="flex items-center gap-1">
+            <LockIcon size={13} />
+            重查询确认（只读）
+          </span>
         </div>
         <div className="space-y-3 px-4 py-3">
-          <p className="text-ui" style={{ color: '#a11d1d' }}>
-            ⚠ {pending.message}
+          <p className="flex items-center gap-1 text-ui" style={{ color: '#a11d1d' }}>
+            <WarningIcon size={13} />
+            {pending.message}
           </p>
           <p className="text-2xs" style={{ color: '#616161' }}>
             该查询可能耗时较长。数据模式为只读（SELECT 白名单），并已强制注入 LIMIT 上限。
@@ -103,16 +112,14 @@ function HeavyQueryConfirmDialog(): JSX.Element | null {
           <button
             type="button"
             onClick={cancelConfirm}
-            className="rounded px-4 py-1.5 text-ui"
-            style={{ backgroundColor: '#ececec', color: '#333333' }}
+            className="btn btn-secondary btn-md"
           >
             取消
           </button>
           <button
             type="button"
             onClick={() => void confirmRun()}
-            className="rounded px-4 py-1.5 text-ui font-semibold"
-            style={{ backgroundColor: '#0e639c', color: '#ffffff' }}
+            className="btn btn-primary btn-md"
           >
             确认执行
           </button>
@@ -257,15 +264,20 @@ function RunBar({
         type="button"
         disabled={!canRun || running}
         onClick={onRun}
-        className="rounded px-4 py-1.5 text-ui font-semibold transition-all"
+        className="btn btn-success btn-md"
         style={{
-          backgroundColor: canRun ? '#059669' : '#ececec',
-          color: canRun ? '#1e1e1e' : '#616161',
           cursor: canRun && !running ? 'pointer' : 'not-allowed',
           opacity: running ? 0.6 : 1,
         }}
       >
-        {running ? '执行中…' : '▶ 执行'}
+        {running ? (
+          '执行中…'
+        ) : (
+          <span className="flex items-center gap-1">
+            <PlayIcon size={13} />
+            执行
+          </span>
+        )}
       </button>
     </div>
   );

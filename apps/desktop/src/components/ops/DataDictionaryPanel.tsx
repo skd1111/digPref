@@ -7,6 +7,13 @@
 import { useEffect, useState } from "react";
 import { useDictStore } from "@/store/dictStore";
 import type { DictItem } from "@/types/datadict";
+import {
+  PencilIcon,
+  PlusIcon,
+  SearchIcon,
+  TrashIcon,
+  WarningIcon,
+} from "@/components/ui/Icons";
 
 interface EditState {
   mode: "create" | "edit";
@@ -94,30 +101,34 @@ export function DataDictionaryPanel(): JSX.Element {
         className="flex-shrink-0 border-b p-2"
         style={{ borderColor: "#d4d4d4" }}
       >
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            void search(e.target.value);
-          }}
-          placeholder="🔍 搜索 key / 名称 / 值…"
-          className="w-full rounded border px-2 py-1 text-2xs outline-none focus:border-[#007acc]"
-          style={{
-            backgroundColor: "#ffffff",
-            borderColor: "#d4d4d4",
-            color: "#1f1f1f",
-          }}
-        />
+        <div className="relative">
+          <span
+            className="pointer-events-none absolute left-2 top-1/2 flex -translate-y-1/2 text-fg-muted"
+            aria-hidden="true"
+          >
+            <SearchIcon size={13} />
+          </span>
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              void search(e.target.value);
+            }}
+            placeholder="搜索 key / 名称 / 值…"
+            className="w-full rounded border py-1 pl-7 pr-2 text-2xs outline-none focus:border-[#007acc]"
+            style={{
+              backgroundColor: "#ffffff",
+              borderColor: "#d4d4d4",
+              color: "#1f1f1f",
+            }}
+          />
+        </div>
         <div className="mt-1.5 flex flex-wrap items-center gap-1">
           <button
             type="button"
             onClick={() => setCategoryFilter("")}
-            className="rounded px-1.5 py-0.5 text-2xs"
-            style={{
-              backgroundColor: !categoryFilter ? "#0e639c" : "#e0e0e0",
-              color: !categoryFilter ? "#ffffff" : "#616161",
-            }}
+            className={`btn btn-xs ${!categoryFilter ? 'btn-primary' : 'btn-secondary'}`}
           >
             全部
           </button>
@@ -126,11 +137,7 @@ export function DataDictionaryPanel(): JSX.Element {
               key={c}
               type="button"
               onClick={() => setCategoryFilter(c === categoryFilter ? "" : c)}
-              className="rounded px-1.5 py-0.5 text-2xs"
-              style={{
-                backgroundColor: categoryFilter === c ? "#0e639c" : "#e0e0e0",
-                color: categoryFilter === c ? "#ffffff" : "#616161",
-              }}
+              className={`btn btn-xs ${categoryFilter === c ? 'btn-primary' : 'btn-secondary'}`}
             >
               {c}
             </button>
@@ -138,11 +145,13 @@ export function DataDictionaryPanel(): JSX.Element {
           <button
             type="button"
             onClick={() => setEdit({ ...EMPTY_EDIT })}
-            className="ml-auto rounded px-2 py-0.5 text-2xs font-semibold"
-            style={{ backgroundColor: "#0e639c", color: "#ffffff" }}
+            className="ml-auto btn btn-primary btn-xs"
             title="新建公共参数"
           >
-            ＋ 新建
+            <span className="flex items-center gap-1">
+              <PlusIcon size={12} />
+              新建
+            </span>
           </button>
         </div>
       </div>
@@ -156,7 +165,10 @@ export function DataDictionaryPanel(): JSX.Element {
             color: "#cd3131",
           }}
         >
-          ⚠ {error}
+          <span className="flex items-center gap-1" aria-hidden="true">
+            <WarningIcon size={12} />
+          </span>
+          {error}
           <button
             type="button"
             onClick={clearError}
@@ -174,10 +186,20 @@ export function DataDictionaryPanel(): JSX.Element {
           style={{ borderColor: "#d4d4d4", backgroundColor: "#ffffff" }}
         >
           <div
-            className="mb-1.5 text-2xs font-semibold"
+            className="mb-1.5 flex items-center gap-1 text-2xs font-semibold"
             style={{ color: "#0451a5" }}
           >
-            {edit.mode === "create" ? "＋ 新建公共参数" : `✏️ 编辑 ${edit.key}`}
+            {edit.mode === "create" ? (
+              <span className="flex items-center gap-1">
+                <PlusIcon size={12} />
+                新建公共参数
+              </span>
+            ) : (
+              <span className="flex items-center gap-1">
+                <PencilIcon size={12} />
+                编辑 {edit.key}
+              </span>
+            )}
           </div>
           <div className="grid grid-cols-2 gap-1.5">
             {edit.mode === "create" && (
@@ -244,8 +266,7 @@ export function DataDictionaryPanel(): JSX.Element {
             <button
               type="button"
               onClick={() => setEdit(null)}
-              className="rounded px-2 py-0.5 text-2xs"
-              style={{ backgroundColor: "#e0e0e0", color: "#1f1f1f" }}
+              className="btn btn-secondary btn-xs"
             >
               取消
             </button>
@@ -253,8 +274,7 @@ export function DataDictionaryPanel(): JSX.Element {
               type="button"
               onClick={() => void handleSave()}
               disabled={saving}
-              className="rounded px-2 py-0.5 text-2xs font-semibold"
-              style={{ backgroundColor: "#0e639c", color: "#ffffff" }}
+              className="btn btn-primary btn-xs"
             >
               {saving ? "保存中…" : "保存"}
             </button>
@@ -366,20 +386,18 @@ function DictItemRow({
           <button
             type="button"
             onClick={onEdit}
-            className="rounded px-1.5 py-0.5 text-2xs hover:bg-vscode-border"
-            style={{ color: "#0451a5" }}
+            className="btn btn-secondary btn-xs"
             title="编辑"
           >
-            ✏️
+            <PencilIcon size={12} />
           </button>
           <button
             type="button"
             onClick={onDelete}
-            className="rounded px-1.5 py-0.5 text-2xs hover:bg-vscode-border"
-            style={{ color: "#cd3131" }}
+            className="btn btn-danger btn-xs"
             title="删除"
           >
-            ✕
+            <TrashIcon size={12} />
           </button>
         </div>
       </div>

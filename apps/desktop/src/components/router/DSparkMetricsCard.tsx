@@ -17,6 +17,7 @@
 import { useEffect, useState } from 'react';
 import { REASON_COLOR, type DSparkDecisionRecord } from '@eaide/shared-protocol';
 import { ipc } from '@/ipc/invoke';
+import { CircleIcon, ZapIcon } from '@/components/ui/Icons';
 
 const CATEGORY_COLOR: Record<string, string> = {
   intent: '#cd3131',
@@ -73,19 +74,16 @@ export function DSparkMetricsCard(): JSX.Element {
       style={{ backgroundColor: '#f3f3f3', borderColor: '#d4d4d4' }}
     >
       <div className="mb-2 flex items-center justify-between">
-        <h3 className="text-ui font-semibold" style={{ color: '#1f1f1f' }}>
-          ⚡ DSpark 推测解码（V0）
+        <h3 className="flex items-center gap-1 text-ui font-semibold" style={{ color: '#1f1f1f' }}>
+          <ZapIcon size={13} />
+          DSpark 推测解码（V0）
         </h3>
         <button
           type="button"
           onClick={() => void refresh()}
           disabled={loading}
-          className="rounded px-2 py-0.5 text-2xs"
-          style={{
-            backgroundColor: '#ececec',
-            color: loading ? '#616161' : '#333333',
-            cursor: loading ? 'wait' : 'pointer',
-          }}
+          className="btn btn-secondary btn-xs"
+          style={{ cursor: loading ? 'wait' : 'pointer' }}
         >
           {loading ? '⟳' : '刷新'}
         </button>
@@ -189,8 +187,8 @@ export function DSparkMetricsCard(): JSX.Element {
                   className="flex items-center gap-2 rounded px-2 py-1 text-2xs"
                   style={{ backgroundColor: '#ffffff' }}
                 >
-                  <span style={{ color: r.speculative_enabled ? '#059669' : '#616161' }}>
-                    {r.speculative_enabled ? '⚡' : '○'}
+                  <span className="flex items-center" style={{ color: r.speculative_enabled ? '#059669' : '#616161' }}>
+                    {r.speculative_enabled ? <ZapIcon size={12} /> : <CircleIcon size={12} />}
                   </span>
                   <span className="font-mono" style={{ color: CATEGORY_COLOR[r.task_category] ?? '#0b6bcb' }}>
                     {r.task_category}

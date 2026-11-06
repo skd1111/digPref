@@ -116,25 +116,63 @@ pub async fn agent_get_version(state: State<'_, AppState>) -> CmdResult<serde_js
     }
 }
 
-/// 手动重启 Agent：杀掉 :8765 占用者后等下一次 spawn 自动起。
-/// EAIDE 启动时已经会自动 kill + 重起；这条命令给「手动想刷新」用。
-#[tauri::command]
-pub async fn agent_restart_now(state: State<'_, AppState>) -> CmdResult<serde_json::Value> {
+/// 手动重启 Agent：**杀掉旧进程并重新 spawn**，等 /health 就绪后返回。
+///
+/// 历史 Bug（2026-11-06 复现）：旧实现**只 kill 不 spawn**，依赖「下次请求会
+/// 触发 spawn」——但请求侧并没有懒启动逻辑，于是点完按钮 Agent 永远不再起来，
+/// 界面一直「未连接」，日志停在 `kill_agent_process_tree: 兜底 taskkill` 之后。
+/// 现改为真重启：kill 端口占用者 → spawn 新进程 → 等端口 → 等 /health 就绪。
+///
+/// `agent_restart_now`（前端按钮）与 `agent_restart`（保存 LLM 配置后内部调用）
+/// 共用本函数，避免两处实现漂移。
+pub async fn restart_agent_and_wait(state: State<'_, AppState>) -> CmdResult<serde_json::Value> {
+    // 1. 清掉 :8765 占用者（含非本进程 spawn 的外部 Agent）
     crate::agent_manager::kill_agent_process_tree();
-    // 等待端口释放
     let host = std::env::var("EAIDE_AGENT_HOST").unwrap_or_else(|_| "127.0.0.1".into());
     let port = std::env::var("EAIDE_AGENT_PORT").unwrap_or_else(|_| "8765".into());
     for _ in 0..30 {
         if !crate::agent_manager::is_port_open_pub(&host, &port) {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
-    let _ = state;
+
+    // 2. 真重启：spawn 新 Agent 子进程（内部含后台 30s 健康检查）
+    //    放到 blocking 线程，避免同步 spawn 阻塞 async runtime worker
+    let _spawned = tauri::async_runtime::spawn_blocking(crate::agent_manager::restart_agent_process)
+        .await
+        .map_err(err)?;
+
+    // 3. 等端口重新监听（最多 30s）
+    let mut port_up = false;
+    for _ in 0..300 {
+        if crate::agent_manager::is_port_open_pub(&host, &port) {
+            port_up = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    // 4. 再等 /health 2xx（最多 30s）：端口开放 != 应用 startup 完成
+    let health = agent_wait_ready(Some(30.0), state).await?;
+    let ready = health
+        .get("ready")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     Ok(serde_json::json!({
-        "ok": true,
-        "port_freed": !crate::agent_manager::is_port_open_pub(&host, &port),
+        "ok": ready,
+        "restarted": true,
+        "port_freed": true,
+        "port_up": port_up,
+        "ready": ready,
+        "health": health,
     }))
+}
+
+/// 手动重启 Agent（前端「重启 Agent」按钮入口）。
+#[tauri::command]
+pub async fn agent_restart_now(state: State<'_, AppState>) -> CmdResult<serde_json::Value> {
+    restart_agent_and_wait(state).await
 }
 
 /// 读取 EAIDE 主日志末尾 N 行（默认 60）—— 诊断 Agent 启动失败。

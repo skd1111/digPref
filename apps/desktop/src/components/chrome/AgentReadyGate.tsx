@@ -20,6 +20,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { useUIStore } from '@/store/uiStore';
+import { ChevronDownIcon, ChevronUpIcon, ErrorCircleIcon, RefreshIcon } from '@/components/ui/Icons';
 import {
   BOOT_FIRST_TIMEOUT_S,
   BOOT_REPROBE_INTERVAL_MS,
@@ -172,8 +173,9 @@ export function AgentReadyGate(): JSX.Element | null {
       >
         {failed ? (
           <>
-            <p className="text-ui font-semibold" style={{ color: '#cd3131' }}>
-              ✗ Agent 未就绪
+            <p className="flex items-center gap-1 text-ui font-semibold" style={{ color: '#cd3131' }}>
+              <ErrorCircleIcon size={14} />
+              Agent 未就绪
             </p>
             <p className="mt-2 break-all text-2xs" style={{ color: '#616161' }}>
               {bootError ?? '未知原因'}
@@ -191,7 +193,14 @@ export function AgentReadyGate(): JSX.Element | null {
                 className="rounded border px-2.5 py-1"
                 style={btn(busy === 'retry' ? '#9e9e9e' : '#b25c1a')}
               >
-                {busy === 'retry' ? '等待中…' : `↻ 重试（再等 ${BOOT_FIRST_TIMEOUT_S}s）`}
+                {busy === 'retry' ? (
+                  '等待中…'
+                ) : (
+                  <span className="flex items-center gap-1">
+                    <RefreshIcon size={13} />
+                    重试（再等 {BOOT_FIRST_TIMEOUT_S}s）
+                  </span>
+                )}
               </button>
               <button
                 type="button"
@@ -200,7 +209,14 @@ export function AgentReadyGate(): JSX.Element | null {
                 className="rounded border px-2.5 py-1"
                 style={btn(busy === 'restart' ? '#9e9e9e' : '#1f1f1f')}
               >
-                {busy === 'restart' ? '重启中…' : '⟳ 重启 Agent'}
+                {busy === 'restart' ? (
+                  '重启中…'
+                ) : (
+                  <span className="flex items-center gap-1">
+                    <RefreshIcon size={13} />
+                    重启 Agent
+                  </span>
+                )}
               </button>
               <button
                 type="button"
@@ -208,7 +224,10 @@ export function AgentReadyGate(): JSX.Element | null {
                 className="rounded border px-2.5 py-1"
                 style={btn('#616161')}
               >
-                {logOpen ? '▴ 收起日志' : '▾ 查看日志'}
+                <span className="flex items-center gap-1">
+                  {logOpen ? <ChevronUpIcon size={13} /> : <ChevronDownIcon size={13} />}
+                  {logOpen ? '收起日志' : '查看日志'}
+                </span>
               </button>
               <button
                 type="button"

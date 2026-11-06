@@ -11,6 +11,7 @@
  *   - 抽屉打开时禁用全局 Tab 切换，避免焦点被劫持
  */
 import { useEffect, useRef } from 'react';
+import { CloseIcon } from '@/components/ui/Icons';
 
 interface XtermDrawerProps {
   open: boolean;
@@ -63,8 +64,9 @@ export function XtermDrawer({ open, onClose }: XtermDrawerProps): JSX.Element {
             onClick={onClose}
             title="关闭 (Esc)"
             className="rounded px-2 py-0.5 text-fg-muted transition-colors hover:bg-vscode-border hover:text-fg"
+            aria-label="关闭"
           >
-            ✕
+            <CloseIcon size={13} />
           </button>
         </div>
 

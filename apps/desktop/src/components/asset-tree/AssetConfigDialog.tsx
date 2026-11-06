@@ -13,6 +13,8 @@ import { useState, useCallback } from "react";
 import { useAssetStore, type AssetNode } from "@/store/assetStore";
 import { ipc } from "@/ipc/invoke";
 import { useDictOptions, type DictOption } from "@/hooks/useDictOptions";
+import { ASSET_TYPE_ICONS } from "@/components/asset-tree/assetTypeIcons";
+import { ComponentIcon, PlugIcon, type IconComponent } from "@/components/ui/Icons";
 
 interface Props {
   /** 编辑模式传入现有节点；新增模式传 null */
@@ -23,11 +25,15 @@ interface Props {
 }
 
 // 内置兜底（数据字典不可用时降级）
-const FALLBACK_TYPE_OPTIONS: Array<{ value: AssetNode["type"]; label: string; icon?: string }> = [
-  { value: "database", label: "数据库", icon: "🗄" },
-  { value: "rest", label: "REST API", icon: "🌐" },
-  { value: "ssh", label: "SSH", icon: "🔐" },
-  { value: "rpa", label: "RPA", icon: "🤖" },
+const FALLBACK_TYPE_OPTIONS: Array<{
+  value: AssetNode['type'];
+  label: string;
+  icon: IconComponent;
+}> = [
+  { value: 'database', label: '数据库', icon: ASSET_TYPE_ICONS.database },
+  { value: 'rest', label: 'REST API', icon: ASSET_TYPE_ICONS.rest },
+  { value: 'ssh', label: 'SSH', icon: ASSET_TYPE_ICONS.ssh },
+  { value: 'rpa', label: 'RPA', icon: ASSET_TYPE_ICONS.rpa },
 ];
 
 // ---- 数据库类型注册表（主流 + 国产/信创）------------------------------------------
@@ -193,7 +199,11 @@ export function AssetConfigDialog({
   const { options: dictTypeOpts } = useDictOptions('资产类型');
   const { options: dictDbOpts } = useDictOptions('数据库类型');
   const typeOptions = dictTypeOpts.length > 0
-    ? dictTypeOpts.map((o) => ({ value: o.value as AssetNode["type"], label: o.label, icon: o.meta?.icon ? String(o.meta.icon) : undefined }))
+    ? dictTypeOpts.map((o) => ({
+        value: o.value as AssetNode['type'],
+        label: o.label,
+        icon: ASSET_TYPE_ICONS[o.value as AssetNode['type']] ?? ComponentIcon,
+      }))
     : FALLBACK_TYPE_OPTIONS;
   const dbTypes: DbTypeInfo[] = dictDbOpts.length > 0
     ? dictDbOpts.map(dictOptionToDbTypeInfo)
@@ -269,22 +279,26 @@ export function AssetConfigDialog({
         <div className="mb-3">
           <Label text="类型" />
           <div className="flex gap-2">
-            {typeOptions.map((opt) => (
+            {typeOptions.map((opt) => {
+              const TypeIcon = opt.icon;
+              return (
               <button
                 key={opt.value}
                 type="button"
                 disabled={!!node}
                 onClick={() => setType(opt.value)}
-                className="rounded px-2 py-1 text-2xs transition-all"
+                className="flex items-center gap-1 rounded px-2 py-1 text-2xs transition-all"
                 style={{
                   backgroundColor: type === opt.value ? "#0e639c" : "#ececec",
                   color: type === opt.value ? "#fff" : "#6e6e6e",
                   opacity: node ? 0.7 : 1,
                 }}
               >
+                <TypeIcon size={12} />
                 {opt.label}
               </button>
-            ))}
+              );
+            })}
           </div>
         </div>
 
@@ -567,7 +581,14 @@ function TestConnectionButton({
           color: testing ? "#6e6e6e" : "#fff",
         }}
       >
-        {testing ? "测试中…" : "🔌 测试连接"}
+        {testing ? (
+          "测试中…"
+        ) : (
+          <span className="flex items-center gap-1">
+            <PlugIcon size={12} />
+            测试连接
+          </span>
+        )}
       </button>
       {testResult && (
         <span

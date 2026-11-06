@@ -12,6 +12,15 @@ import Editor from '@monaco-editor/react';
 import { useSkillsStore } from '@/store/skillsStore';
 import { useExpertTeamStore } from '@/store/expertTeamStore';
 import type { Skill } from '@/types/skill';
+import {
+  BracesIcon,
+  CloseIcon,
+  FileTextIcon,
+  PencilIcon,
+  PlusIcon,
+  WarningIcon,
+  type IconComponent,
+} from '@/components/ui/Icons';
 
 type TabId = 'form' | 'yaml';
 
@@ -113,16 +122,17 @@ export function SkillEditorModal(): JSX.Element | null {
           className="flex flex-shrink-0 items-center justify-between border-b px-4 py-2"
           style={{ borderColor: '#d4d4d4', backgroundColor: '#f3f3f3' }}
         >
-          <h3 className="text-ui font-semibold" style={{ color: '#1f1f1f' }}>
-            ✏️ 编辑 Skill：{skill.name}
+          <h3 className="flex items-center gap-1 text-ui font-semibold" style={{ color: '#1f1f1f' }}>
+            <PencilIcon size={14} />
+            编辑 Skill：{skill.name}
           </h3>
           <button
             type="button"
             onClick={closeEditor}
-            className="rounded px-2 py-0.5 text-2xs"
-            style={{ color: '#616161' }}
+            className="btn btn-ghost btn-icon"
+            aria-label="关闭"
           >
-            ✕
+            <CloseIcon size={13} />
           </button>
         </div>
 
@@ -132,17 +142,18 @@ export function SkillEditorModal(): JSX.Element | null {
         >
           {(
             [
-              { id: 'form', label: '📝 表单' },
-              { id: 'yaml', label: '</> YAML 源' },
-            ] as Array<{ id: TabId; label: string }>
+              { id: 'form', label: '表单', icon: FileTextIcon },
+              { id: 'yaml', label: 'YAML 源', icon: BracesIcon },
+            ] as Array<{ id: TabId; label: string; icon: IconComponent }>
           ).map((t) => {
             const active = t.id === tab;
+            const TabIcon = t.icon;
             return (
               <button
                 key={t.id}
                 type="button"
                 onClick={() => setTab(t.id)}
-                className="px-4 py-1.5 text-ui transition-colors"
+                className="flex items-center gap-1 px-4 py-1.5 text-ui transition-colors hover:bg-[#f3f3f3]"
                 style={{
                   color: active ? '#0451a5' : '#616161',
                   backgroundColor: active ? '#ffffff' : 'transparent',
@@ -150,13 +161,15 @@ export function SkillEditorModal(): JSX.Element | null {
                   fontWeight: active ? 600 : 400,
                 }}
               >
+                <TabIcon size={13} />
                 {t.label}
               </button>
             );
           })}
           {tab === 'yaml' && (
-            <span className="ml-2 self-center text-2xs" style={{ color: '#795e26' }}>
-              ⚠️ V0 YAML Tab 只读，请切回表单 Tab 编辑
+            <span className="ml-2 flex items-center gap-1 self-center text-2xs" style={{ color: '#795e26' }}>
+              <WarningIcon size={12} />
+              V0 YAML Tab 只读，请切回表单 Tab 编辑
             </span>
           )}
         </div>
@@ -229,20 +242,22 @@ export function SkillEditorModal(): JSX.Element | null {
                   <button
                     type="button"
                     onClick={() => setField('trigger_keywords', draft.trigger_keywords.filter((_, idx) => idx !== i))}
-                    className="rounded px-1 text-2xs"
-                    style={{ color: '#cd3131' }}
+                    className="btn btn-danger btn-xs"
+                    aria-label="删除关键词"
                   >
-                    ✕
+                    <CloseIcon size={12} />
                   </button>
                 </div>
               ))}
               <button
                 type="button"
                 onClick={() => setField('trigger_keywords', [...draft.trigger_keywords, ''])}
-                className="rounded px-2 py-0.5 text-2xs"
-                style={{ backgroundColor: '#0e639c20', color: '#0451a5', border: '1px dashed #0e639c' }}
+                className="btn btn-secondary btn-xs"
               >
-                + 增加关键词
+                <span className="flex items-center gap-1">
+                  <PlusIcon size={12} />
+                  增加关键词
+                </span>
               </button>
             </div>
 
@@ -281,20 +296,22 @@ export function SkillEditorModal(): JSX.Element | null {
                           draft.required_expert_team_ids.filter((_, idx) => idx !== i),
                         )
                       }
-                      className="rounded px-1 text-2xs"
-                      style={{ color: '#cd3131' }}
+                      className="btn btn-danger btn-xs"
+                      aria-label="移除专家团"
                     >
-                      ✕
+                      <CloseIcon size={12} />
                     </button>
                   </div>
                 ))}
                 <button
                   type="button"
                   onClick={() => setField('required_expert_team_ids', [...draft.required_expert_team_ids, ''])}
-                  className="rounded px-2 py-0.5 text-2xs"
-                  style={{ backgroundColor: '#0e639c20', color: '#0451a5', border: '1px dashed #0e639c' }}
+                  className="btn btn-secondary btn-xs"
                 >
-                  + 增加专家团
+                  <span className="flex items-center gap-1">
+                    <PlusIcon size={12} />
+                    增加专家团
+                  </span>
                 </button>
                 {expertTeams.length === 0 && (
                   <span className="ml-2 text-[10px]" style={{ color: '#795e26' }}>
@@ -378,8 +395,7 @@ export function SkillEditorModal(): JSX.Element | null {
           <button
             type="button"
             onClick={closeEditor}
-            className="rounded px-3 py-1 text-ui"
-            style={{ backgroundColor: '#ececec', color: '#1f1f1f' }}
+            className="btn btn-secondary btn-md"
           >
             取消
           </button>
@@ -387,12 +403,7 @@ export function SkillEditorModal(): JSX.Element | null {
             type="button"
             onClick={handleSave}
             disabled={!dirty || tab === 'yaml'}
-            className="rounded px-3 py-1 text-ui font-semibold"
-            style={{
-              backgroundColor: !dirty || tab === 'yaml' ? '#ececec' : '#0e639c',
-              color: !dirty || tab === 'yaml' ? '#616161' : '#ffffff',
-              cursor: !dirty || tab === 'yaml' ? 'not-allowed' : 'pointer',
-            }}
+            className="btn btn-primary btn-md"
           >
             保存
           </button>

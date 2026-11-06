@@ -13,16 +13,17 @@
  */
 import { useMemo } from 'react';
 import type { TodoItem } from '@eaide/shared-protocol';
+import { CheckIcon, CircleIcon, ClipboardIcon, type IconComponent } from '@/components/ui/Icons';
 
 interface Props {
   /** TodoItem[] 的 JSON 字符串（ChatMessage.content） */
   itemsJson: string;
 }
 
-const STATUS_ICON: Record<TodoItem['status'], string> = {
-  pending: '○',
-  in_progress: '',
-  done: '✓',
+const STATUS_ICON: Record<TodoItem['status'], IconComponent> = {
+  pending: CircleIcon,
+  in_progress: CircleIcon,
+  done: CheckIcon,
 };
 
 const STATUS_COLOR: Record<TodoItem['status'], string> = {
@@ -58,8 +59,9 @@ export function TodoCard({ itemsJson }: Props): JSX.Element {
     >
       {/* 标题行：图标 + 完成计数（竖向下不再和进度条挤同一行） */}
       <div className="mb-1.5 flex items-center gap-2">
-        <span className="text-xs font-semibold" style={{ color: '#374151' }}>
-          📋 任务进度
+        <span className="flex items-center gap-1 text-xs font-semibold" style={{ color: '#374151' }}>
+          <ClipboardIcon size={13} />
+          任务进度
         </span>
         <span className="text-2xs" style={{ color: '#6b7280' }}>
           {done}/{items.length}
@@ -89,11 +91,14 @@ export function TodoCard({ itemsJson }: Props): JSX.Element {
               />
             ) : (
               <span
-                className="flex-shrink-0 font-bold"
+                className="flex flex-shrink-0 items-center"
                 style={{ color: STATUS_COLOR[t.status] ?? '#9ca3af' }}
                 aria-hidden="true"
               >
-                {STATUS_ICON[t.status] ?? '○'}
+                {(() => {
+                  const StatusIcon = STATUS_ICON[t.status] ?? CircleIcon;
+                  return <StatusIcon size={12} />;
+                })()}
               </span>
             )}
             <span

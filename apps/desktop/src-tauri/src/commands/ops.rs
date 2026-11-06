@@ -343,6 +343,29 @@ pub async fn ops_case_draft_submit(
     json_or_err(resp).await
 }
 
+/// POST /ops/case/drafts/{id}/ocr-fill —— 上传文件 OCR 识别并抽取字段值。
+/// 端侧 OCR + 文档解析 + 模型抽取链路较慢（扫描件可达数十秒），超时放宽到 300s。
+#[tauri::command]
+pub async fn ops_case_draft_ocr_fill(
+    draft_id: String,
+    body: serde_json::Value,
+    state: State<'_, AppState>,
+) -> CmdResult<serde_json::Value> {
+    let url = agent_url(
+        &state,
+        &format!("/ops/case/drafts/{}/ocr-fill", urlencoding(&draft_id)),
+    );
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&url)
+        .timeout(std::time::Duration::from_secs(300))
+        .json(&body)
+        .send()
+        .await
+        .map_err(err)?;
+    json_or_err(resp).await
+}
+
 /// POST /ops/case/export —— 全部验收后打包导出交付物 zip 到 target_path。
 #[tauri::command]
 pub async fn ops_case_export(

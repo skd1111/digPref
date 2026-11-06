@@ -104,12 +104,33 @@ pub fn run() {
         std::env::var("EAIDE_AGENT_AUTO_START").ok(),
     ));
 
-    // 5. Tauri builder —— setup 永不返回 Err，所有失败走 fallback
+    // 5. 前端加载方式（runbook §6 接线）：
+    //    生产态窗口 url 为 `eaide://localhost/`（path=/，归一化后命中 index.html），
+    //    由 web_loader 从磁盘 web/
+    //    提供（versions/web/<active> 覆盖 → 出厂 web → 内嵌兜底），所以只替换前端
+    //    文件就能生效，不用重编 Rust。
+    //    dev 模式必须回到 `WebviewUrl::App`：CustomProtocol 不会被 devUrl 覆盖
+    //    （tauri manager/webview.rs），不改这里 `pnpm tauri dev` 会白屏、HMR 失效。
+    let mut context = tauri::generate_context!();
+    if tauri::is_dev() {
+        for window in context.config_mut().app.windows.iter_mut() {
+            window.url = tauri::WebviewUrl::App("index.html".into());
+        }
+    }
+
+    // 6. Tauri builder —— setup 永不返回 Err，所有失败走 fallback
     app_log("[lib.rs] 构造 Tauri::Builder，准备进入 Builder.run");
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new().build())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_dialog::init())
+        // 前端协议：磁盘 web/ 优先、内嵌 dist 兜底。读盘放 worker 线程，
+        // 不阻塞协议线程；任何失败都回 Response（吞 responder 会让请求悬挂）。
+        .register_asynchronous_uri_scheme_protocol("eaide", |ctx, request, responder| {
+            let path = request.uri().path().to_string();
+            let app = ctx.app_handle().clone();
+            std::thread::spawn(move || responder.respond(web_loader::serve(&app, &path)));
+        })
         .setup(|app| {
             app_log("[setup] Tauri setup hook 进入 —— 准备初始化 AppState");
             match AppState::try_init(app.handle()) {
@@ -232,6 +253,7 @@ pub fn run() {
             commands::expert_teams::expert_teams_recommend,
             commands::expert_teams::expert_teams_import_package,
             commands::expert_teams::expert_teams_export_package,
+            commands::expert_teams::expert_teams_import_seeds,
             // Phase 2C V0
             commands::router::router_get_metrics,
             commands::router::router_get_decisions,
@@ -330,6 +352,7 @@ pub fn run() {
             commands::ops::ops_case_draft_save,
             commands::ops::ops_case_draft_direct,
             commands::ops::ops_case_draft_submit,
+            commands::ops::ops_case_draft_ocr_fill,
             commands::ops::ops_case_export,
             commands::ops::ops_case_crosscheck,
             commands::datadict::dict_list_items,
@@ -439,9 +462,9 @@ pub fn run() {
             // 增量更新状态只读命令（versions 目录/激活指针探测）
             commands::update::app_update_status,
         ])
-        .run(tauri::generate_context!());
+        .run(context);
 
-    // 6. builder.run 返回 Err 也要落盘再结束
+    // 7. builder.run 返回 Err 也要落盘再结束
     match result {
         Ok(()) => app_log("[run] tauri::Builder::run 正常退出"),
         Err(e) => {

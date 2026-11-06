@@ -13,6 +13,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ChatMessage } from '@eaide/shared-protocol';
 import { ExecutionRow } from './ExecutionBlock';
+import { ChevronDownIcon, ChevronRightIcon } from '@/components/ui/Icons';
 
 export interface ExecutionTreeItem {
   message: ChatMessage;
@@ -151,8 +152,8 @@ export function ExecutionTree({ items }: ExecutionTreeProps): JSX.Element {
             · {(totalMs / 1000).toFixed(1)}s
           </span>
         )}
-        <span className="flex-shrink-0" style={{ color: '#9ca3af' }}>
-          {open ? '▾' : '▸'}
+        <span className="flex flex-shrink-0 items-center" style={{ color: '#9ca3af' }} aria-hidden="true">
+          {open ? <ChevronDownIcon size={13} /> : <ChevronRightIcon size={13} />}
         </span>
       </button>
 

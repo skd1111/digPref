@@ -14,6 +14,7 @@
  */
 import { useUIStore } from '@/store/uiStore';
 import { useExpertTeamStore } from '@/store/expertTeamStore';
+import { UsersIcon } from '@/components/ui/Icons';
 
 const SOURCE_LABEL: Record<string, string> = {
   preset: '业务预设',
@@ -57,8 +58,9 @@ export function ExpertTeamSelector(): JSX.Element | null {
       style={{ borderColor: '#e7e5e4', backgroundColor: '#fafaf9', minWidth: 104 }}
       title="选择处理本业务的专家团（自动 = 跟随业务预设 / AI 推荐）"
     >
-      <span className="text-[10px]" style={{ color: '#9ca3af' }}>
-        👥 专家团
+      <span className="flex items-center gap-1 text-[10px]" style={{ color: '#9ca3af' }}>
+        <UsersIcon size={11} />
+        专家团
       </span>
       <select
         value={isAuto ? (current || '') : current}

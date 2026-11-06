@@ -64,21 +64,15 @@ pub async fn doc_review(args: Value) -> AppResult<Value> {
         .timeout(Duration::from_secs(timeout_secs))
         .build()
         .map_err(|e| AppError::Config(format!("reqwest client: {}", e)))?;
-    let req = match method {
-        "GET" => client.get(&url),
-        "POST" => client.post(&url).json(&body.unwrap_or(json!({}))),
-        "DELETE" => client.delete(&url),
-        _ => return Err(AppError::Config(format!("unsupported method: {}", method))),
-    };
-    let resp = req.send().await.map_err(|e| AppError::Config(format!("doc_review.http: {}", e)))?;
-    let status = resp.status();
-    let text = resp.text().await.map_err(|e| AppError::Config(format!("doc_review.read_body: {}", e)))?;
-    if !status.is_success() {
-        return Err(AppError::Config(format!("doc_review: agent returned HTTP {} body={}", status, text)));
+    let payload = body.unwrap_or_else(|| json!({}));
+    // 幂等 GET（list/get/findings/status）才重试；register/analyze/delete 单次，不重试。
+    use crate::commands::agent_http::send_json;
+    match method {
+        "GET" => send_json("doc_review", 3, || client.get(&url)).await,
+        "POST" => send_json("doc_review", 1, || client.post(&url).json(&payload)).await,
+        "DELETE" => send_json("doc_review", 1, || client.delete(&url)).await,
+        _ => Err(AppError::Config(format!("unsupported method: {}", method))),
     }
-    serde_json::from_str(&text).map_err(|e| AppError::Config(format!(
-        "doc_review: invalid JSON response: {} (body={})", e, text
-    )))
 }
 
 fn urlencode(s: &str) -> String {

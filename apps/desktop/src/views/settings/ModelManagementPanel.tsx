@@ -8,6 +8,7 @@
 import { useEffect, useState } from 'react';
 import { DSparkConfigSection } from './DSparkConfigSection';
 import { useDictOptions } from '@/hooks/useDictOptions';
+import { FileIcon, PlusIcon, RefreshIcon, SearchIcon } from '@/components/ui/Icons';
 
 type BackendType = 'local' | 'private' | 'cloud';
 type Residency = 'local' | 'private' | 'cloud';
@@ -344,18 +345,18 @@ export function ModelManagementPanel(): JSX.Element {
     }
   };
 
-  /** 手动重启 Agent：杀 :8765 占用者，下一次请求会自动 spawn 新的。 */
+  /** 手动重启 Agent：杀掉旧进程并立即 spawn 新进程，等 /health 就绪。 */
   const restartAgent = async (): Promise<void> => {
-    if (!window.confirm('杀掉当前 :8765 占用者，下次 EAIDE 调用会触发 spawn 新的 Agent。继续？')) {
+    if (!window.confirm('立即重启 Agent 进程？进行中的请求会中断。')) {
       return;
     }
     try {
       const { ipc } = await import('@/ipc/invoke');
       const r = await ipc.agentRestartNow();
-      if (r.ok && r.port_freed) {
-        flash('✓ 已杀掉 :8765 占用者，下次请求会触发新 Agent 启动', 'ok');
+      if (r.ok) {
+        flash('✓ Agent 已重启并就绪', 'ok');
       } else {
-        flash('⚠ 已发重启请求，但端口尚未释放（等待 3s 后重试）', 'err');
+        flash('⚠ 已发出重启请求，但 Agent 未在 30s 内就绪（详见 eaide.log）', 'err');
       }
     } catch (e) {
       flash(`⚠ 重启 Agent 失败 · ${String(e)}`, 'err');
@@ -461,45 +462,53 @@ export function ModelManagementPanel(): JSX.Element {
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
-      <header className="flex items-start justify-between">
-        <div>
-          <h1 className="text-ui-lg font-semibold">模型管理</h1>
+      <header className="flex flex-wrap items-start justify-between gap-2">
+        <div className="shrink-0">
+          <h1 className="whitespace-nowrap text-ui-lg font-semibold">模型管理</h1>
         </div>
-        <div className="flex flex-shrink-0 gap-2">
+        <div className="flex flex-shrink-0 flex-wrap gap-2">
           <button
             type="button"
             onClick={() => void showAgentVersion()}
-            className="rounded px-3 py-1.5 text-ui"
-            style={{ backgroundColor: '#ececec', color: '#333333' }}
+            className="btn btn-secondary btn-md"
             title="查看 Agent 版本指纹（诊断 404）"
           >
-            🔍 Agent 版本
+            <span className="flex items-center gap-1">
+              <SearchIcon size={13} />
+              Agent 版本
+            </span>
           </button>
           <button
             type="button"
             onClick={() => void showAgentLog()}
-            className="rounded px-3 py-1.5 text-ui"
-            style={{ backgroundColor: '#ececec', color: '#333333' }}
+            className="btn btn-secondary btn-md"
             title="读 eaide.log 末尾（devtools console 拿完整）"
           >
-            📋 日志
+            <span className="flex items-center gap-1">
+              <FileIcon size={13} />
+              日志
+            </span>
           </button>
           <button
             type="button"
             onClick={() => void restartAgent()}
-            className="rounded px-3 py-1.5 text-ui"
-            style={{ backgroundColor: '#ececec', color: '#cd3131' }}
+            className="btn btn-danger btn-md"
             title="杀掉 :8765 占用者，下一次请求触发重启"
           >
-            🔄 重启 Agent
+            <span className="flex items-center gap-1">
+              <RefreshIcon size={13} />
+              重启 Agent
+            </span>
           </button>
           <button
             type="button"
             onClick={() => setCreating(true)}
-            className="rounded px-3 py-1.5 text-ui font-semibold"
-            style={{ backgroundColor: '#007acc', color: '#fff' }}
+            className="btn btn-primary btn-md"
           >
-            ＋ 新增模型
+            <span className="flex items-center gap-1">
+              <PlusIcon size={13} />
+              新增模型
+            </span>
           </button>
         </div>
       </header>
@@ -524,23 +533,18 @@ export function ModelManagementPanel(): JSX.Element {
                   </span>
                   <span className="text-2xs" style={{ color: cb.color }}>{cb.label}</span>
                   <span className="ml-auto flex items-center gap-1.5">
-                    <button type="button" onClick={() => void testConn(b)} disabled={testing === b.name} className="rounded px-2 py-0.5 text-2xs" style={{ backgroundColor: '#ececec', color: '#333333', opacity: testing === b.name ? 0.6 : 1, cursor: testing === b.name ? 'wait' : 'pointer' }}>
+                    <button type="button" onClick={() => void testConn(b)} disabled={testing === b.name} className="btn btn-secondary btn-xs" style={{ opacity: testing === b.name ? 0.6 : 1, cursor: testing === b.name ? 'wait' : 'pointer' }}>
                       {testing === b.name ? '探测中…' : '测试连接'}
                     </button>
-                    <button type="button" onClick={() => setEditing(b)} className="rounded px-2 py-0.5 text-2xs" style={{ backgroundColor: '#ececec', color: '#333333' }}>编辑</button>
-                    <button type="button" onClick={() => void doDeleteBackend(b.name)} className="rounded px-2 py-0.5 text-2xs" style={{ backgroundColor: '#ececec', color: '#cd3131' }}>删除</button>
+                    <button type="button" onClick={() => setEditing(b)} className="btn btn-secondary btn-xs">编辑</button>
+                    <button type="button" onClick={() => void doDeleteBackend(b.name)} className="btn btn-danger btn-xs">删除</button>
                     {/* 用于代码导航 单选（互斥）：点亮表示作为 codenav 默认 backend */}
                     {b.enabled && (
                       <button
                         type="button"
                         onClick={() => void (codenavBound === b.name ? unbindCodenav() : bindForCodenav(b.name))}
                         title={codenavBound === b.name ? '点击解绑' : '点击设为代码导航默认'}
-                        className="rounded px-1.5 py-0.5 text-2xs"
-                        style={{
-                          backgroundColor: codenavBound === b.name ? '#0e639c' : '#ececec',
-                          color: codenavBound === b.name ? '#ffffff' : '#059669',
-                          border: `1px solid ${codenavBound === b.name ? '#0e639c' : '#059669'}`,
-                        }}
+                        className={`btn btn-xs ${codenavBound === b.name ? 'btn-primary' : 'btn-secondary'}`}
                       >
                         {codenavBound === b.name ? '✓ 代码导航' : '用于代码导航'}
                       </button>
@@ -756,8 +760,8 @@ function BackendEditModal({
           {err && <div className="text-2xs" style={{ color: '#cd3131' }}>{err}</div>}
         </div>
         <div className="flex justify-end gap-2 border-t px-4 py-2" style={{ borderColor: '#d4d4d4' }}>
-          <button type="button" onClick={onCancel} className="rounded px-3 py-1.5 text-ui" style={{ backgroundColor: '#ececec', color: '#333333' }}>取消</button>
-          <button type="button" onClick={() => void submit()} className="rounded px-3 py-1.5 text-ui font-semibold" style={{ backgroundColor: '#007acc', color: '#fff' }}>保存</button>
+          <button type="button" onClick={onCancel} className="btn btn-secondary btn-md">取消</button>
+          <button type="button" onClick={() => void submit()} className="btn btn-primary btn-md">保存</button>
         </div>
       </div>
     </div>
@@ -857,12 +861,7 @@ function ContextSizePicker({
               key={p}
               type="button"
               onClick={() => pickPreset(p)}
-              className="rounded px-2.5 py-1 text-2xs font-mono font-semibold transition-colors"
-              style={{
-                backgroundColor: selected ? '#0e639c' : '#ececec',
-                color: selected ? '#ffffff' : '#333333',
-                border: `1px solid ${selected ? '#0e639c' : '#1f1f1f'}`,
-              }}
+              className={`btn btn-xs font-mono font-semibold ${selected ? 'btn-primary' : 'btn-secondary'}`}
               title={
                 p === 'custom'
                   ? '自定义 tokens（256 ~ 2,000,000）'

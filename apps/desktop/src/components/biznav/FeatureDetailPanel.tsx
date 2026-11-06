@@ -14,6 +14,17 @@ import { useUIStore } from '@/store/uiStore';
 import { ipc } from '@/ipc/invoke';
 import { STATUS_META, type CardStatus } from '@/types/reqcard';
 import type { Feature, FeatureRisk } from '@/types/biznav';
+import {
+  ChevronLeftIcon,
+  ClipboardIcon,
+  CloseIcon,
+  ComponentIcon,
+  DatabaseIcon,
+  FolderIcon,
+  PencilIcon,
+  PlugIcon,
+  type IconComponent,
+} from '@/components/ui/Icons';
 
 const RISK_ICON: Record<FeatureRisk, string> = {
   high: '🔴',
@@ -34,20 +45,21 @@ const METHOD_COLOR: Record<string, { bg: string; fg: string }> = {
 };
 
 function SectionTitle({
-  icon,
+  icon: Icon,
   label,
   color,
 }: {
-  icon: string;
+  icon: IconComponent;
   label: string;
   color: string;
 }): JSX.Element {
   return (
     <div
-      className="mb-1.5 text-2xs font-semibold uppercase tracking-wider"
+      className="mb-1.5 flex items-center gap-1 text-2xs font-semibold uppercase tracking-wider"
       style={{ color }}
     >
-      {icon} {label}
+      <Icon size={12} />
+      {label}
     </div>
   );
 }
@@ -84,7 +96,7 @@ function FeatureBody({
       {/* 业务规则 */}
       {feature.business_rules.length > 0 && (
         <div className="mb-3">
-          <SectionTitle icon="📋" label="业务规则" color="#dcdcaa" />
+          <SectionTitle icon={ClipboardIcon} label="业务规则" color="#dcdcaa" />
           <ul className="space-y-1">
             {feature.business_rules.map((r, i) => (
               <li key={i} className="text-2xs" style={{ color: '#1f1f1f' }}>
@@ -98,7 +110,7 @@ function FeatureBody({
       {/* 关联 API */}
       {feature.related_apis.length > 0 && (
         <div className="mb-3">
-          <SectionTitle icon="🔌" label="关联 API" color="#569cd6" />
+          <SectionTitle icon={PlugIcon} label="关联 API" color="#569cd6" />
           {feature.related_apis.map((a, i) => {
             const c = METHOD_COLOR[a.method] ?? { bg: '#ececec', fg: '#1f1f1f' };
             return (
@@ -127,7 +139,7 @@ function FeatureBody({
       {/* 关联表 */}
       {feature.related_tables.length > 0 && (
         <div className="mb-3">
-          <SectionTitle icon="🗄" label="关联表" color="#c586c0" />
+          <SectionTitle icon={DatabaseIcon} label="关联表" color="#c586c0" />
           {feature.related_tables.map((t, i) => (
             <div key={i} className="mb-1 text-2xs">
               <span className="font-mono" style={{ color: '#0b6bcb' }}>
@@ -142,7 +154,7 @@ function FeatureBody({
       {/* 关联文件 */}
       {feature.related_files.length > 0 && (
         <div className="mb-3">
-          <SectionTitle icon="📂" label="关联文件" color="#616161" />
+          <SectionTitle icon={FolderIcon} label="关联文件" color="#616161" />
           {feature.related_files.map((file, i) => (
             <div
               key={i}
@@ -177,23 +189,23 @@ function FeatureBody({
         <button
           type="button"
           onClick={onEdit}
-          className="flex-1 rounded px-3 py-1.5 text-ui font-semibold transition-colors"
-          style={{ backgroundColor: '#0e639c', color: '#ffffff' }}
+          className="btn btn-primary btn-sm flex-1"
         >
-          ✏️ 编辑此功能点
+          <span className="flex items-center gap-1">
+            <PencilIcon size={12} />
+            编辑此功能点
+          </span>
         </button>
         <button
           type="button"
           onClick={onStartReq}
-          className="flex-1 rounded px-3 py-1.5 text-ui font-semibold transition-colors"
-          style={{
-            backgroundColor: '#ffffff',
-            color: '#0451a5',
-            border: '1px solid #007acc',
-          }}
+          className="btn btn-secondary btn-sm flex-1"
           title="基于此功能点与 AI 对齐改造需求，生成需求卡片"
         >
-          📝 发起改造需求
+          <span className="flex items-center gap-1">
+            <PencilIcon size={12} />
+            发起改造需求
+          </span>
         </button>
       </div>
     </div>
@@ -287,10 +299,11 @@ export function FeatureDetailPanel(): JSX.Element {
           style={{ borderColor: '#d4d4d4' }}
         >
           <span
-            className="text-2xs font-semibold uppercase tracking-wider"
+            className="flex items-center gap-1 text-2xs font-semibold uppercase tracking-wider"
             style={{ color: '#333333' }}
           >
-            🧩 功能点详情
+            <ComponentIcon size={13} />
+            功能点详情
           </span>
           <button
             type="button"
@@ -300,7 +313,7 @@ export function FeatureDetailPanel(): JSX.Element {
             title="关闭"
             aria-label="关闭"
           >
-            ✕
+            <CloseIcon size={13} />
           </button>
         </div>
 
@@ -318,10 +331,11 @@ export function FeatureDetailPanel(): JSX.Element {
                 style={{ borderColor: '#d4d4d4' }}
               >
                 <div
-                  className="mb-1 text-2xs font-semibold uppercase tracking-wider"
+                  className="mb-1 flex items-center gap-1 text-2xs font-semibold uppercase tracking-wider"
                   style={{ color: '#0451a5' }}
                 >
-                  📋 关联需求卡片
+                  <ClipboardIcon size={12} />
+                  关联需求卡片
                 </div>
                 {relatedCards.map((c) => (
                   <button
@@ -351,10 +365,13 @@ export function FeatureDetailPanel(): JSX.Element {
           </div>
         ) : (
           <div
-            className="flex h-full flex-col items-center justify-center p-6 text-center text-2xs"
+            className="flex h-full flex-col items-center justify-center gap-1 p-6 text-center text-2xs"
             style={{ color: '#616161' }}
           >
-            ← 从左侧选择业务功能点
+            <span className="flex items-center" aria-hidden="true">
+              <ChevronLeftIcon size={13} />
+            </span>
+            从左侧选择业务功能点
           </div>
         )}
       </div>

@@ -11,6 +11,17 @@
 import { useState } from 'react';
 import type { TraceStep } from '@eaide/shared-protocol';
 import { fmtDuration } from '@/lib/format';
+import {
+  ChevronDownIcon,
+  ChevronRightIcon,
+  ClipboardIcon,
+  DotIcon,
+  MessageIcon,
+  SearchIcon,
+  ShieldIcon,
+  WrenchIcon,
+  type IconComponent,
+} from '@/components/ui/Icons';
 
 interface Props {
   step: TraceStep;
@@ -18,13 +29,13 @@ interface Props {
 }
 
 // Visual treatment per node
-const NODE_META: Record<string, { icon: string; label: string; tone: string }> = {
-  intent:      { icon: '🔍', label: 'Intent',     tone: 'text-accent' },
-  planner:     { icon: '📋', label: 'Plan',       tone: 'text-accent' },
-  tool_runner: { icon: '🔧', label: 'Tool',       tone: 'text-fg' },
-  hitl_gate:   { icon: '✋', label: 'HITL',       tone: 'text-accent-warn' },
-  repair:      { icon: '🛠',  label: 'Repair',     tone: 'text-accent-warn' },
-  responder:   { icon: '💬', label: 'Answer',     tone: 'text-accent-approval' },
+const NODE_META: Record<string, { icon: IconComponent; label: string; tone: string }> = {
+  intent:      { icon: SearchIcon,    label: 'Intent',     tone: 'text-accent' },
+  planner:     { icon: ClipboardIcon, label: 'Plan',       tone: 'text-accent' },
+  tool_runner: { icon: WrenchIcon,    label: 'Tool',       tone: 'text-fg' },
+  hitl_gate:   { icon: ShieldIcon,    label: 'HITL',       tone: 'text-accent-warn' },
+  repair:      { icon: WrenchIcon,    label: 'Repair',     tone: 'text-accent-warn' },
+  responder:   { icon: MessageIcon,   label: 'Answer',     tone: 'text-accent-approval' },
 };
 
 const STATUS_TONE: Record<string, string> = {
@@ -36,8 +47,9 @@ const STATUS_TONE: Record<string, string> = {
 
 export function TraceNode({ step, index }: Props): JSX.Element {
   const meta = NODE_META[step.node] ?? {
-    icon: '•', label: step.node, tone: 'text-fg',
+    icon: DotIcon, label: step.node, tone: 'text-fg',
   };
+  const NodeIcon = meta.icon;
   const statusTone = STATUS_TONE[step.status] ?? 'text-fg-muted';
   const [expanded, setExpanded] = useState(false);
   const hasError = step.status === 'fail' || step.error;
@@ -67,7 +79,9 @@ export function TraceNode({ step, index }: Props): JSX.Element {
       {/* ---- Main row ---- */}
       <div className="relative flex items-center gap-2">
         <span className="font-mono text-fg-dim">#{index + 1}</span>
-        <span className="text-base" title={meta.label}>{meta.icon}</span>
+        <span className="flex items-center" title={meta.label} aria-hidden="true">
+          <NodeIcon size={14} />
+        </span>
         <div className="flex-1">
           <div className="flex items-center gap-2">
             <span className={`font-mono text-sm ${meta.tone}`}>{meta.label}</span>
@@ -107,7 +121,7 @@ export function TraceNode({ step, index }: Props): JSX.Element {
             className="ml-1 text-fg-dim hover:text-fg"
             aria-label={expanded ? '收起' : '展开'}
           >
-            {expanded ? '▾' : '▸'}
+            {expanded ? <ChevronDownIcon size={13} /> : <ChevronRightIcon size={13} />}
           </button>
         )}
       </div>

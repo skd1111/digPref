@@ -39,6 +39,7 @@ const FIELDS: FieldDef[] = [
   { key: 'rag_rrf_k', label: 'RRF 常数 k', desc: '倒数排名融合经验常数（越大越平滑）。', kind: 'int', min: 1, max: 500 },
   { key: 'rag_rerank_top_n', label: '重排候选数', desc: '送入 reranker 的候选条数上限。', kind: 'int', min: 1, max: 100 },
   { key: 'rag_max_file_mb', label: '上传大小上限（MB）', desc: '单个参考资料文件的大小上限。', kind: 'int', min: 1, max: 500 },
+  { key: 'rag_ingest_concurrency', label: '入库并发数', desc: '同时进行的后台入库（分块 + 向量化 + LLM 增强）任务数上限。批量导入时若云端模型限流（429）就把这里调小到 1；调大可加快入库但更易触发限流。保存即生效，不需重建索引。', kind: 'int', min: 1, max: 16 },
   { key: 'rag_preload_on_startup', label: '冷启动预加载', desc: '启动时后台预热向量/重排模型与索引，降低首次检索延迟。', kind: 'bool' },
   { key: 'rag_llm_enhance_enabled', label: '大模型知识库验证', desc: '总开关：关闭时文档审核/聊天检索只走本地混合检索（BM25+向量+RRF+reranker），全程不调大模型；开启后下面三项增强才按各自开关生效。', kind: 'bool' },
   { key: 'rag_llm_contextual_enabled', label: 'LLM 上下文前缀（实验）', desc: '入库期用大模型为分块生成上下文前缀；需先开启「大模型知识库验证」总开关。属索引期参数，改后需重建。', kind: 'bool', experimental: true },
@@ -127,7 +128,12 @@ export function KnowledgeRagPanel(): JSX.Element {
         if (Boolean(cfg.config[f.key]) !== Boolean(dv)) patch[f.key] = Boolean(dv);
         continue;
       }
-      const num = Number(String(dv).trim());
+      const raw = String(dv ?? '').trim();
+      if (raw === '') {
+        // 空值：该参数在当前 Agent 版本尚不存在（老库无此键）且用户未填写 → 跳过，不产生噪音 patch
+        continue;
+      }
+      const num = Number(raw);
       if (!Number.isFinite(num)) {
         flash(`「${f.label}」需为数字`, 'err');
         return;
@@ -172,8 +178,13 @@ export function KnowledgeRagPanel(): JSX.Element {
   const restart = async (): Promise<void> => {
     if (!window.confirm('重启 Agent 使新参数生效？进行中的分析会中断。')) return;
     try {
-      await ipc.agentRestartNow();
-      flash('✓ 已发送重启请求，稍候自动恢复', 'ok');
+      const r = await ipc.agentRestartNow();
+      flash(
+        r.ok
+          ? '✓ Agent 已重启并就绪，新参数已生效'
+          : '⚠ 已发出重启请求，但 Agent 未在 30s 内就绪（详见 eaide.log）',
+        r.ok ? 'ok' : 'err',
+      );
     } catch (e) {
       flash(`⚠ 重启失败 · ${String(e)}`, 'err');
     }
@@ -244,8 +255,7 @@ export function KnowledgeRagPanel(): JSX.Element {
             type="button"
             onClick={() => void reindex()}
             disabled={reindexing}
-            className="rounded px-3 py-1 text-2xs text-white disabled:opacity-50"
-            style={{ backgroundColor: '#0e639c' }}
+            className="btn btn-primary btn-sm"
           >
             {reindexing ? '重建中…' : '重建向量索引'}
           </button>
@@ -313,8 +323,7 @@ export function KnowledgeRagPanel(): JSX.Element {
         <button
           type="button"
           onClick={() => void restart()}
-          className="rounded px-3 py-1.5 text-ui disabled:opacity-50"
-          style={{ backgroundColor: '#ececec', color: '#333333' }}
+          className="btn btn-secondary btn-md"
         >
           🔄 重启 Agent
         </button>
@@ -322,8 +331,7 @@ export function KnowledgeRagPanel(): JSX.Element {
           type="button"
           onClick={() => void save()}
           disabled={!dirty() || saving}
-          className="rounded px-4 py-1.5 text-ui text-white disabled:opacity-50"
-          style={{ backgroundColor: '#0e639c' }}
+          className="btn btn-primary btn-md"
         >
           {saving ? '保存中…' : '保存（立即生效）'}
         </button>

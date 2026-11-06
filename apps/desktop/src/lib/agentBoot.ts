@@ -108,8 +108,9 @@ export function runAgentBootGate(timeoutS: number = BOOT_FIRST_TIMEOUT_S): Promi
 }
 
 /**
- * 失败态遮罩的「重启 Agent」：杀掉 :8765 占用者让 Tauri 重新 spawn，
- * 再走一轮完整等待。重启命令本身失败也要继续等（旧进程可能已自行恢复）。
+ * 失败态遮罩的「重启 Agent」：杀掉旧进程并立即 spawn 新的（agent_restart_now
+ * 内部会等 /health 就绪），再走一轮完整等待。重启命令本身失败也要继续等
+ * （旧进程可能已自行恢复）。
  */
 export async function restartAgentForGate(): Promise<void> {
   stopReprobe();

@@ -65,10 +65,10 @@ describe('DataWorkbench 横向布局 + 面板缩放（2026-08-17 重构）', () 
     expect(screen.getByText('历史分析')).toBeTruthy();
     // 上行编辑区（对话已合并为其中页签，不再是独立横向栏）
     expect(screen.getByText('编辑器占位')).toBeTruthy();
-    expect(screen.queryByText('💬 AI 对话')).toBeNull();
+    expect(screen.queryByTestId('panel-chat')).toBeNull();
     // 下行结果区：默认页签为数据网格，图表未渲染（页签切换而非并排）
-    expect(screen.getByText('📋 数据网格')).toBeTruthy();
-    expect(screen.queryByText('📈 可视化图表')).toBeNull();
+    expect(screen.getByTestId('panel-data-grid')).toBeTruthy();
+    expect(screen.queryByTestId('panel-chart')).toBeNull();
     expect(screen.getByText('导出栏')).toBeTruthy();
   });
 
@@ -76,15 +76,15 @@ describe('DataWorkbench 横向布局 + 面板缩放（2026-08-17 重构）', () 
     seedResult();
     render(<DataWorkbench />);
     // 默认网格页签
-    expect(screen.getByText('📋 数据网格')).toBeTruthy();
-    expect(screen.queryByText('📈 可视化图表')).toBeNull();
+    expect(screen.getByTestId('panel-data-grid')).toBeTruthy();
+    expect(screen.queryByTestId('panel-chart')).toBeNull();
     // 切到图表页签
     fireEvent.click(screen.getByText('可视化图表'));
-    expect(screen.getByText('📈 可视化图表')).toBeTruthy();
-    expect(screen.queryByText('📋 数据网格')).toBeNull();
+    expect(screen.getByTestId('panel-chart')).toBeTruthy();
+    expect(screen.queryByTestId('panel-data-grid')).toBeNull();
     // 切回网格页签
     fireEvent.click(screen.getByText('数据网格'));
-    expect(screen.getByText('📋 数据网格')).toBeTruthy();
+    expect(screen.getByTestId('panel-data-grid')).toBeTruthy();
   });
 
   it('数据网格 ⛶ 放大 → 全屏放大视图，Esc 关闭', () => {
@@ -94,16 +94,16 @@ describe('DataWorkbench 横向布局 + 面板缩放（2026-08-17 重构）', () 
     expect(screen.getAllByTitle('放大查看').length).toBe(1);
 
     // 精确定位网格面板内的放大按钮（避免 DOM 顺序假设）
-    const gridHeader = screen.getByText('📋 数据网格').closest('div')?.parentElement;
+    const gridHeader = screen.getAllByTestId('panel-data-grid')[0];
     expect(gridHeader).toBeTruthy();
     fireEvent.click(within(gridHeader as HTMLElement).getByTitle('放大查看'));
-    expect(screen.getByText('📋 数据网格 · 放大视图')).toBeTruthy();
+    expect(screen.getByText('数据网格 · 放大视图')).toBeTruthy();
     // 放大视图内按钮变为「退出放大」
     expect(screen.getAllByTitle('退出放大').length).toBeGreaterThanOrEqual(1);
 
     // Esc 关闭
     fireEvent.keyDown(window, { key: 'Escape' });
-    expect(screen.queryByText('📋 数据网格 · 放大视图')).toBeNull();
+    expect(screen.queryByText('数据网格 · 放大视图')).toBeNull();
   });
 
   it('对话页签 ⛶ 放大 → 放大视图显示对话内容', () => {
@@ -113,7 +113,7 @@ describe('DataWorkbench 横向布局 + 面板缩放（2026-08-17 重构）', () 
     render(<DataWorkbench />);
     // 对话放大入口在编辑区页签内（经 onChatZoom 回调触发）
     fireEvent.click(screen.getByText('对话页签放大'));
-    expect(screen.getByText('💬 AI 对话 · 放大视图')).toBeTruthy();
+    expect(screen.getByText('AI 对话 · 放大视图')).toBeTruthy();
     expect(screen.getAllByText('对比上月各分行坏账率').length).toBeGreaterThanOrEqual(1);
   });
 });

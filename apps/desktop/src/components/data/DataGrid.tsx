@@ -9,6 +9,7 @@
 import { useRef, useCallback } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useDataStore, cellFor } from '@/store/dataStore';
+import { TableIcon, MaximizeIcon } from '@/components/ui/Icons';
 
 export function DataGrid({
   zoomed = false,
@@ -64,7 +65,13 @@ export function DataGrid({
   return (
     <div className="flex h-full flex-col overflow-hidden" style={{ backgroundColor: '#ffffff' }}>
       <PanelHeader
-        title="📋 数据网格"
+        title={
+          <span className="flex items-center gap-1">
+            <TableIcon size={12} />
+            数据网格
+          </span>
+        }
+        testId="panel-data-grid"
         right={
           <div className="flex items-center gap-2">
             {result ? (
@@ -77,11 +84,11 @@ export function DataGrid({
               <button
                 type="button"
                 onClick={onZoom}
-                className="rounded px-1.5 text-2xs transition-all hover:brightness-95"
-                style={{ backgroundColor: '#ececec', color: '#333333' }}
+                className="btn btn-ghost btn-icon"
                 title={zoomed ? '退出放大' : '放大查看'}
+                aria-label={zoomed ? '退出放大' : '放大查看'}
               >
-                ⛶
+                <MaximizeIcon size={13} />
               </button>
             ) : null}
           </div>
@@ -162,9 +169,19 @@ export function DataGrid({
   );
 }
 
-export function PanelHeader({ title, right }: { title: string; right?: React.ReactNode }): JSX.Element {
+export function PanelHeader({
+  title,
+  right,
+  testId,
+}: {
+  title: React.ReactNode;
+  right?: React.ReactNode;
+  /** 测试定位用（data-testid） */
+  testId?: string;
+}): JSX.Element {
   return (
     <div
+      data-testid={testId}
       className="flex h-[30px] flex-shrink-0 items-center justify-between border-b px-3"
       style={{ borderColor: '#d0d0d0' }}
     >

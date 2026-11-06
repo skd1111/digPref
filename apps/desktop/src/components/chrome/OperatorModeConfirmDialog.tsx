@@ -110,8 +110,7 @@ export function AdvancedModeConfirmDialog({
           <button
             type="button"
             onClick={onCancel}
-            className="rounded px-3 py-1.5 text-ui transition-colors hover:brightness-110"
-            style={{ backgroundColor: '#ececec', color: '#333333' }}
+            className="btn btn-secondary btn-md"
           >
             取消
           </button>
@@ -119,11 +118,10 @@ export function AdvancedModeConfirmDialog({
             ref={confirmRef}
             type="button"
             onClick={() => onConfirm(dontShowAgain)}
-            className="rounded px-3 py-1.5 text-ui font-semibold transition-all hover:brightness-110"
+            className="btn btn-md"
             style={{
               backgroundColor: accent,
               color: '#ffffff',
-              boxShadow: '0 1px 2px rgba(0,0,0,0.4)',
             }}
           >
             确认切换

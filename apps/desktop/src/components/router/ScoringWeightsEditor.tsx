@@ -11,6 +11,7 @@
 import { useEffect, useState } from 'react';
 import { useRouterStore, DEFAULT_WEIGHTS } from '@/store/routerStore';
 import { ipc } from '@/ipc/invoke';
+import { BarChartIcon } from '@/components/ui/Icons';
 
 const DIMENSIONS = [
   { key: 'capability' as const, label: '能力', color: '#0451a5' },
@@ -83,8 +84,9 @@ export function ScoringWeightsEditor(): JSX.Element {
 
   return (
     <div className="rounded border p-4" style={{ backgroundColor: '#f3f3f3', borderColor: '#d4d4d4' }}>
-      <h3 className="mb-2 text-ui font-semibold" style={{ color: '#1f1f1f' }}>
-        📊 评分权重
+      <h3 className="mb-2 flex items-center gap-1 text-ui font-semibold" style={{ color: '#1f1f1f' }}>
+        <BarChartIcon size={13} />
+        评分权重
       </h3>
       <p className="mb-3 text-2xs" style={{ color: '#616161' }}>
         五维评分权重之和需等于 1，保存后后端热生效。
@@ -133,12 +135,7 @@ export function ScoringWeightsEditor(): JSX.Element {
             type="button"
             onClick={() => void handleReset()}
             disabled={saving}
-            className="rounded px-2 py-0.5 text-2xs"
-            style={{
-              backgroundColor: saving ? '#ececec' : '#fdeaea',
-              color: saving ? '#616161' : '#cd3131',
-              cursor: saving ? 'not-allowed' : 'pointer',
-            }}
+            className="btn btn-danger btn-sm"
           >
             恢复默认
           </button>
@@ -146,12 +143,7 @@ export function ScoringWeightsEditor(): JSX.Element {
             type="button"
             onClick={() => void handleSave()}
             disabled={saving || !sumValid}
-            className="rounded px-2 py-0.5 text-2xs"
-            style={{
-              backgroundColor: saving || !sumValid ? '#ececec' : '#0e639c',
-              color: saving || !sumValid ? '#616161' : '#ffffff',
-              cursor: saving || !sumValid ? 'not-allowed' : 'pointer',
-            }}
+            className="btn btn-primary btn-sm"
           >
             {saving ? '保存中…' : '保存'}
           </button>

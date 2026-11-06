@@ -1420,3 +1420,174 @@ Rust：`cargo check --lib` 零错误零警告；`cargo test --lib logs::` 1 例�
 「静默吞 IO 错误（`let _ =`）+ 只读安装目录」是 macOS 打包应用的经典组合坑：功能看似正常（进程起来了、UI 能渲染），但所有持久化副作用全部丢失，且无任何报错，用户与开发者都无从排查。凡「写安装目录」的逻辑必须按平台区分可写性（macOS .app 包 / Windows Program Files 均可能只读），统一重定向到用户数据目录；且**日志路径必须与子进程 cwd 对齐**，否则两路日志散落、排障成本翻倍。给用户一个「一键导出全部日志 + MANIFEST 清单」的自助入口，比让支持人员远程猜路径高效得多。
 
 
+
+---
+
+### #194 安装包整屏「Unexpected Application Error! 404 Not Found」—— 窗口 url 带 index.html 后缀，react-router 无匹配路由
+
+| 字段 | 内容 |
+|---|---|
+| **是否修复** | 已修复 |
+| **修复时间** | 2026-11-04 |
+| **发现方式** | 用户反馈：v2.141（前端 dist 热替换接线）全量重打包安装后，主窗口整屏显示「Unexpected Application Error! / 404 Not Found」；覆盖重装、重新打包均复现 |
+| **涉及文件** | `apps/desktop/src/router.tsx`、`apps/desktop/src-tauri/tauri.conf.json`、`apps/desktop/src-tauri/src/lib.rs`（注释）、`apps/desktop/src-tauri/src/web_loader.rs`（注释）；测试 `apps/desktop/tests/routerEntryFallback.test.ts`（新增）、`apps/desktop/tests/frontendDiskLoader.test.ts`（护栏期望更新） |
+
+**现象**
+
+后端完全正常（eaide.log 里 Agent spawn、/health 200、executor ready 一条龙），但窗口整屏只有两行裸文本「Unexpected Application Error!」+ 斜体「404 Not Found」。重装安装包、清理手工覆盖的 web/ 后依旧复现——说明不是资产损坏，而是必现逻辑 bug。
+
+**问题原因**
+
+「Unexpected Application Error!」是 react-router `createBrowserRouter` 未配置 errorElement 时的**默认错误页**，404 即内部 `ErrorResponse(404, "Not Found")`——唯一来源是「当前 URL 没有任何路由匹配」。
+
+v2.141 把主窗口 url 配成 `eaide://localhost/index.html`（CustomProtocol 的 path 原样透传，不会被改写成 `/`），于是 WebView 里 `location.pathname === '/index.html'`。而 router.tsx 的首页是 `{ index: true }` 路由，**只匹配精确 `/`**，路由表没有 `index.html` 条目也没有通配兜底 → 入口即 404。dev 模式（`pnpm tauri dev`）url 走 devUrl 根路径 `/`，所以开发时从未暴露。
+
+**根因与修复**
+
+① `tauri.conf.json` 窗口 url 改为 `eaide://localhost/`：path=/，web_loader `normalize_rel` 空路径归一化为 index.html（该行为已有 Rust 单测 factory_web_used_when_no_active 覆盖），磁盘热替换链路不变。
+
+② `router.tsx` 根路由 children 末尾新增 `{ path: '*', element: <HomeView /> }` 通配兜底：即使入口 URL 带 `/index.html` 后缀（老安装包、外部唤起等场景）也渲染首页，未知 SPA 深链不再整屏 404。同步导出 `routes` 供契约测试做 `matchRoutes`。
+
+③ 护栏与契约测试：`frontendDiskLoader.test.ts` 的 url 断言更新为 `eaide://localhost/`（它本次确实拦下了改动，防止两处失配）；新增 `routerEntryFallback.test.ts` 3 例——先临时摘掉通配路由复现失败（2 failed），恢复后全绿。
+
+**验证**
+
+`pnpm vitest run` 63 文件 / 403 例全绿；`tsc --noEmit`、改动文件 eslint 零告警；`cargo clippy --all-targets` 通过；`cargo test --lib web_loader` 7 例全绿。**真机验收需重新 `pnpm tauri build` 并安装**（用户自行执行）。
+
+**教训**
+
+自定义协议接管窗口加载时，URL 的 **path 部分会原样成为 WebView 的 pathname**——入口必须给「路由根」（`/`），不要把具体文件名写进窗口 url；同时 SPA 路由表要有 `path: '*'` 兜底，否则任何入口路径偏差都是一整屏默认 404 错误页。dev 模式与打包态的 URL 形态不同（devUrl vs CustomProtocol），此类问题只有安装包能暴露，护栏测试应同时锁「协议 url」与「路由可匹配性」两端。
+
+
+
+---
+
+### #195 交付草稿切页签就弹全屏 —— 全屏状态存在草稿卡内 + `lastDirectDraftId` 全程不清
+
+| 字段 | 内容 |
+|---|---|
+| **是否修复** | 已修复 |
+| **修复时间** | 2026-11-05 |
+| **发现方式** | 用户反馈：交付草稿区有两份草稿（资料预审意见书 / 资料预审信息及补件申请表），在页签间来回切换时，切到「资料预审意见书」就整屏弹全屏表单 |
+| **涉及文件** | `apps/desktop/src/components/ops/ExpertWorkflowPanel.tsx`；测试 `apps/desktop/tests/expertWorkflow.test.tsx`（新增回归用例） |
+
+**现象**
+
+草稿区里只是点页签切换「看另一份草稿」，但切到曾「点交付物直开」过的那份草稿时，草稿卡自动变成 `fixed inset-0 z-40` 的全屏填写页，遮住整个工作区；退出全屏后再切走、切回，依旧再次全屏。
+
+**问题原因**
+
+两个缺陷叠加：
+
+① `DraftFormCard` 内部 `useState(initialExpanded)` 只认首次挂载的 prop；而页签切换时父级用 `key={activeDraft.id}` 强制重新挂载，于是每次切回都重新按 prop 初始化 → 又开全屏。
+
+② 「直开草稿」标记 `opsCaseStore.lastDirectDraftId` 只在 `loadCase`/`reset` 时清空，同一业务会话内**一直保留**；父级把它写成 `initialExpanded={activeDraft.id === lastDirectDraftId}`，于是这份草稿在整个会话里都被判定为「该弹全屏」。
+
+**根因与修复**
+
+把「是否全屏」从草稿卡内部状态提升到面板层，按草稿 id 记账（`expandedDraftId`）：
+
+① 面板新增 `expandedDraftId` + `autoExpandedDraftRef`：监听 `lastDirectDraftId`，**首次**见到某 id 才 `setExpandedDraftId(id)` 一次（消费即标记），之后页签来回切换只改 `activeDraftId`，不再改全屏状态 → 直开草稿的「弹出表单」感知保留，切页签回来保持紧凑卡。
+
+② `DraftFormCard` 的 `expanded` 改为受控 prop，`initialExpanded` 删除：`expanded={activeDraft.id === expandedDraftId}` + `onExpandedChange={(v) => setExpandedDraftId(v ? activeDraft.id : "")}`，卡片内「⛶ 全屏」「✕ 退出全屏」两个按钮改为回调。
+
+**验证**
+
+新增回归用例「直开草稿只自动全屏一次」：两份草稿 + `lastDirectDraftId=DR-A` → 首屏仍自动全屏；退出后切到 DR-B 再切回 DR-A，断言无「✕ 退出全屏」、只有「⛶ 全屏」。`pnpm vitest run tests/expertWorkflow.test.tsx` 21 例全绿；`tsc --noEmit`、改动文件 `eslint` 零告警。真机验证需用户自行 `pnpm tauri build`。
+
+**教训**
+
+弹层/全屏这类「一次性提示型」UI 状态，不能靠 `useState(prop)` + `key` 重挂载来表达——重挂载会把「已经关过了」这件事忘掉；一次性意图（直开草稿、新消息滚底等）必须显式消费（ref/标记位清标），且状态要存在不会被重挂载重置的父层或 store 里。同时「最近一次直开草稿」这类标记位要回答「它何时失效」，否则会长期误命中。
+
+---
+
+### #196 「重启 Agent」只杀不启 —— 点完按钮后 Agent 永远不再起来，界面一直未连接
+
+| 字段 | 内容 |
+|---|---|
+| **是否修复** | 已修复 |
+| **修复时间** | 2026-11-06 |
+| **发现方式** | 用户反馈：在「知识库 / RAG 参数」页点「重启 Agent 使新参数生效」后一直未连接，日志目录 `C:\Users\79834\AppData\Local\Enterprise AI IDE\logs` |
+| **涉及文件** | `apps/desktop/src-tauri/src/commands/router.rs`；`apps/desktop/src-tauri/src/commands/agent.rs`；`apps/desktop/src-tauri/src/commands/llm.rs`；`apps/desktop/src-tauri/src/agent_manager.rs`；`apps/desktop/src/ipc/invoke.ts`；`apps/desktop/src/views/settings/KnowledgeRagPanel.tsx`；`apps/desktop/src/views/settings/ModelManagementPanel.tsx`；`apps/desktop/src/lib/agentBoot.ts` |
+
+**现象**
+
+点「重启 Agent」后 Agent 进程消失，状态栏始终「未连接」，再点多少次都没用，只能退出重开 EAIDE。桌面端进程仍存活（`eaide-desktop`），8765 端口无人监听（只剩桌面端 SYN_SENT）。
+
+日志特征极其明确：`eaide.log` 停在
+
+    [agent_manager] 端口 127.0.0.1:8765 仍被 PID=28148 占用，强杀
+    [agent_manager] kill_agent_process_tree: 兜底 taskkill /IM eaide-agent.exe
+
+之后**再无任何 `准备启动新 Agent` / `新 Agent 已 spawn` 记录**；`agent.log` 也停在被杀前的最后一条。
+
+**问题原因**
+
+`agent_restart_now` 命令（`commands/router.rs`）只「杀」不「启」：
+
+    crate::agent_manager::kill_agent_process_tree();
+    // 等待端口释放 …… 然后就没有然后了
+    Ok(json!({"ok": true, "port_freed": ...}))
+
+其原注释写的是「杀掉 :8765 占用者后等下一次 spawn 自动起」，但**请求侧根本没有懒启动逻辑**：`AgentManager::start()` 只在桌面端 setup 时调用一次，HTTP 请求失败就是失败，不会触发 spawn。于是「下一次 spawn」永远不来，Agent 被杀后无人拉起。
+
+附带发现两个同源缺陷：
+
+① `restart_agent_process()`（真正会 spawn 的那个）只认打包版 exe（`resolve_agent_exe`），解析不到直接 `return` —— 开发模式（uv run）下点重启同样会变成「只杀不启」。
+
+② `restart_agent_process()` 注入的 env 缺 `EAIDE_HOST` / `EAIDE_PORT` / `EAIDE_LOG_LEVEL`，与首次启动 `AgentManager::start` 的注入清单不一致 —— 改过端口的环境下，重启后 Agent 可能监听在另一个端口。
+
+③ `agent_restart`（`commands/agent.rs`）与 `agent_restart_now` 是两个同义但实现不同的命令：前者真重启、被 `llm_set_config` 内部调用但不等就绪；后者只杀、被前端三个入口调用。前端按钮实际点到的恰恰是那个残缺实现。
+
+**根因与修复**
+
+① `commands/router.rs` 抽出公共函数 `restart_agent_and_wait(state)`，闭环四步：kill 端口占用者 → `spawn_blocking(restart_agent_process)` 真 spawn → 等端口重新监听（最多 30s）→ 等 `/health` 2xx（最多 30s），返回 `{ok, restarted, port_freed, port_up, ready, health}`。
+
+② `agent_restart_now` 与 `agent_restart` 全部改为委托 `restart_agent_and_wait`，消除两处实现漂移；`agent_restart` 由同步 fn 改 async，`llm_set_config` 相应 `await` —— 保存 LLM 配置后等 Agent 就绪再返回，避免下一个请求撞上未就绪进程。
+
+③ `agent_manager.rs::restart_agent_process()` 返回 `bool`（是否成功 spawn），并补齐解析链：打包版 exe 解析不到时回退开发模式（`uv run uvicorn agent.main:app`，与 `AgentManager::start` 同策略）；env 集合补齐 `EAIDE_HOST` / `EAIDE_PORT` / `EAIDE_LOG_LEVEL` 与首次启动对齐；同步等待由 `std::thread::sleep` 改为 async `tokio::time::sleep`（原实现在 async command 里阻塞 runtime worker）。
+
+④ 前端三处调用点文案与判定改为「真重启 + 就绪结果」：成功显示「Agent 已重启并就绪」，30s 未就绪显示「未就绪（详见 eaide.log）」，不再谎报「下次请求会触发新 Agent 启动」。
+
+**验证**
+
+`cargo check` 通过；`cargo clippy --all-targets -- -D warnings` 零告警通过；前端 `tsc --noEmit` 通过；改动文件 `eslint` 零告警。真机验证需用户自行 `pnpm tauri build`：点「重启 Agent」后 `eaide.log` 应出现 `[agent_manager] restart: 新 Agent 已 spawn (pid=…)` 与 `Agent 就绪 (x.xs) — http://127.0.0.1:8765/health 返回 2xx`，状态栏恢复「已连接」。
+
+**临时恢复手段（未打包前）**
+
+退出并重新打开 EAIDE —— 桌面端启动时 `AgentManager::start()` 会 kill + spawn Agent，连接即恢复。
+
+**教训**
+
+「重启」类命令必须闭环：kill 之后要有明确的 spawn 路径，不能依赖「下次请求会懒启动」这种并不存在的隐式约定 —— 命令注释里的假设若没有对应代码，就是定时炸弹。同义命令长期分叉（一个真重启、一个只杀）且恰好被前端调到残缺的那个，最终表现为「按钮点了没用」；对外暴露的重启入口应统一到一个实现，并且返回值必须携带「是否真的就绪」，让前端能如实报错而不是自我安慰。诊断这类「进程消失」问题先看两侧日志的**缺口**：杀进程的记录在、spawn 的记录不在，比任何断言都有力。
+
+### #197 知识库面板偶发「读取知识库失败 · knowledge.read_body: error decoding response body」
+
+**现象**
+
+批量导入法规文档期间，知识库面板顶部偶发红字「读取知识库失败 · config: knowledge.read_body: error decoding response body」。日志里对应 `/knowledge/v1/docs`、`/knowledge/v1/status` 都拿到了 `200 OK`，但前端仍报错——说明状态码到了、body 没读全。
+
+**根因**
+
+三层叠加把 Agent 单 worker 打满，导致个别 GET 的连接在响应体传完前被中断，reqwest `resp.text()` 抛 `is_decode`/`is_body` 类错误：
+
+① 导入高峰期 MiniMax 云端模型成片 429（Token Plan 速率限制）+ 退避重试，后台入库任务无并发上限地全部并发；
+② 前端 `KbPanel` 多个 `useEffect` 各挂 1.5s `setInterval` 轮询，且无在飞闸门——慢响应下定时器叠加未完成请求，实测放大到 26 req/s，反过来加剧 worker 拥塞；
+③ Rust 转发命令 `knowledge.rs` 对 `read_body` 无重试，一次截断即冒泡成用户可见错误（`doc_review.rs` / `audit_expert.rs` 同模式）。
+
+（reranker / ONNX embedding 本身已 `asyncio.to_thread` 卸载，不阻塞事件循环，非本次元凶。）
+
+**修复**
+
+① 新增 `commands/agent_http.rs::send_json(err_prefix, max_attempts, make)`：封装「发送 → 读 body → 校验状态 → 解析 JSON」，对**快速失败的瞬时错误**（`is_connect`/`is_request`/`is_body`/`is_decode`）做有界线性退避重试；刻意排除 `is_timeout`，避免长超时 op（doc_review get/findings 90s）因真超时重试放大到分钟级。`make` 每次返回全新 RequestBuilder（builder 被 `send` 消费，重试须重建）。
+② `knowledge.rs` / `doc_review.rs` / `audit_expert.rs` 三处改用 `send_json`：**幂等 GET 重试 3 次，POST/DELETE 单次**——审批类 HITL 写操作绝不重试，杜绝重复副作用。
+③ 前端 `KbPanel.refresh` 加 `inflightRef` 在飞闸门（重入直接丢弃，掐掉请求风暴放大），并区分 `silent`：后台轮询遇瞬时错误静默跳过、保留上次数据、下一轮自动重试，仅用户主动/初始化刷新才提示红字；成功后 `setError(null)` 让偶发抖动横幅自愈。
+④ 后端入库并发闸门 `rag_ingest_concurrency`（默认 2）+ 分类预判的并发/分批/429 退避由本次功能分支一并落地，从源头削减 worker 过载。
+
+**验证**
+
+`cargo check` 通过；`cargo test --lib` 中 `commands::agent_http` 及 knowledge/doc_review/audit_expert 相关用例全绿（仅 `builtin::tests::test_shell_*` 因本机 shell 环境失败，与本改动无关）；前端 `pnpm vitest run tests/kbPanel.test.tsx` 21 用例全过。真机验证由用户自行 `pnpm tauri build`：批量导入期间知识库面板不应再出现 read_body 红字，`eaide.log` 里偶发截断会被重试吞掉。
+
+**教训**
+
+「转发型」命令把后端 HTTP 细节一比一映射成用户可见错误时，任何瞬时连接抖动都会穿透成红字。对幂等 GET 加有界重试是廉价且安全的兜底，但边界必须划清：写操作/审批永不自动重试。前端轮询一定要带在飞闸门，否则 `setInterval` 在慢响应下不是「保持节奏」而是「无上限叠加」，自己就成了压垮后端的那根稻草——排查这类问题要同时看后端**过载源**（429/并发）与前端**请求放大**（轮询叠加），二者常互为因果。

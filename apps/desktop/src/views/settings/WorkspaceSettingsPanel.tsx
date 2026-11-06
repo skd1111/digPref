@@ -114,8 +114,7 @@ export function WorkspaceSettingsPanel(): JSX.Element {
               type="button"
               onClick={() => void save()}
               disabled={saving || loading}
-              className="rounded px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
-              style={{ backgroundColor: '#059669' }}
+              className="btn btn-primary btn-md"
             >
               {saving ? '保存中…' : '保存'}
             </button>

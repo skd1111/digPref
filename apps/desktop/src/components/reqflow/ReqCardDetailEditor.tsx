@@ -15,6 +15,7 @@ import {
   type ReqCard,
 } from '@/types/reqcard';
 import { useReqcardStore } from '@/store/reqcardStore';
+import { SaveIcon, TrashIcon } from '@/components/ui/Icons';
 
 const INPUT_STYLE: React.CSSProperties = {
   backgroundColor: '#ffffff',
@@ -279,11 +280,10 @@ export function ReqCardDetailEditor({ card }: { card: ReqCard }): JSX.Element {
                 key={s}
                 type="button"
                 onClick={() => void handleStatus(s)}
-                className="rounded border px-2 py-0.5 transition-colors hover:brightness-95"
+                className="btn btn-xs"
                 style={{
                   borderColor: STATUS_META[s].color,
                   color: STATUS_META[s].color,
-                  backgroundColor: '#ffffff',
                 }}
               >
                 {STATUS_META[s].icon} → {STATUS_META[s].label}
@@ -299,19 +299,23 @@ export function ReqCardDetailEditor({ card }: { card: ReqCard }): JSX.Element {
           <button
             type="button"
             onClick={() => void handleSave()}
-            className="flex-1 rounded px-2 py-1 font-semibold transition-colors hover:brightness-110"
-            style={{ backgroundColor: '#0e639c', color: '#ffffff' }}
+            className="btn btn-primary btn-sm flex-1"
           >
-            💾 保存修改
+            <span className="flex items-center gap-1">
+              <SaveIcon size={12} />
+              保存修改
+            </span>
           </button>
           {card.status === 'draft' && (
             <button
               type="button"
               onClick={() => void handleDelete()}
-              className="rounded border px-2 py-1 transition-colors hover:brightness-95"
-              style={{ borderColor: '#cd3131', color: '#cd3131' }}
+              className="btn btn-danger btn-sm"
             >
-              🗑 删除
+              <span className="flex items-center gap-1">
+                <TrashIcon size={12} />
+                删除
+              </span>
             </button>
           )}
         </div>

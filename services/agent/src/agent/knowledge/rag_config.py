@@ -45,6 +45,8 @@ _RAG_FIELDS: dict[str, tuple[str, float | None, float | None]] = {
     "rag_vector_enabled": ("bool", None, None),
     "rag_contextual_prefix_enabled": ("bool", None, None),
     "rag_max_file_mb": ("int", 1, 500),
+    # 入库并发闸门（运行期参数：保存即热应用，不需重建索引）
+    "rag_ingest_concurrency": ("int", 1, 16),
     "rag_preload_on_startup": ("bool", None, None),
     "rag_rerank_enabled": ("bool", None, None),
     "rag_rerank_top_n": ("int", 1, 100),

@@ -86,15 +86,17 @@ describe('AgentReadyGate', () => {
     render(<AgentReadyGate />);
 
     const dialog = await screen.findByRole('dialog', { name: 'Agent 启动异常' });
-    expect(dialog.textContent).toContain('✗ Agent 未就绪');
+    // 图标已改为单色 SVG（aria-hidden），可访问名/文本只剩文字
+    expect(dialog.textContent).toContain('Agent 未就绪');
     expect(dialog.textContent).toContain('error sending request');
     expect(dialog.textContent).toContain('等待 30.0s');
     expect(useUIStore.getState().agentBootState).toBe('failed');
     // 仍未就绪 → 遮罩不撤、模糊不放
     expect(document.body.classList.contains('agent-booting')).toBe(true);
     expect(screen.getByRole('button', { name: /重试/ })).toBeTruthy();
-    expect(screen.getByRole('button', { name: '⟳ 重启 Agent' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: '▾ 查看日志' })).toBeTruthy();
+    // 图标已改为单色 SVG（aria-hidden），可访问名只剩文字
+    expect(screen.getByRole('button', { name: '重启 Agent' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '查看日志' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '跳过闸门' })).toBeTruthy();
   });
 
@@ -117,7 +119,7 @@ describe('AgentReadyGate', () => {
       .mockResolvedValue({ ready: true, elapsed_ms: 3000 });
     render(<AgentReadyGate />);
 
-    fireEvent.click(await screen.findByRole('button', { name: '⟳ 重启 Agent' }));
+    fireEvent.click(await screen.findByRole('button', { name: '重启 Agent' }));
     await waitFor(() => expect(agentRestartNow).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(useUIStore.getState().agentBootState).toBe('ready');
@@ -133,7 +135,7 @@ describe('AgentReadyGate', () => {
     });
     render(<AgentReadyGate />);
 
-    fireEvent.click(await screen.findByRole('button', { name: '▾ 查看日志' }));
+    fireEvent.click(await screen.findByRole('button', { name: '查看日志' }));
     expect(await screen.findByText(/spawn python failed/)).toBeTruthy();
     expect(agentReadLog).toHaveBeenCalledWith(60);
   });

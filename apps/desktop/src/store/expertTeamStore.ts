@@ -40,6 +40,8 @@ interface ExpertTeamState {
   importTeamYamlText: (content: string) => Promise<{ ok: boolean; error?: string }>;
   /** 导入专家团资产包 zip（team.yaml 提示词 + templates/ 交付物模板，2026-08-10） */
   importTeamPackage: (file: File) => Promise<{ ok: boolean; error?: string }>;
+  /** 一键导入内置种子专家团（已存在同名团跳过）；返回本次导入数量 */
+  importBuiltinSeeds: () => Promise<{ ok: boolean; imported: number; error?: string }>;
   toggleEnabled: (id: string) => void;
 
   /** 自动选择（业务预设 / AI 推荐）；manual 模式下调用方应自行跳过。
@@ -138,6 +140,16 @@ export const useExpertTeamStore = create<ExpertTeamState>((set) => ({
       return { ok: true };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  },
+
+  importBuiltinSeeds: async () => {
+    try {
+      const r = await ipc.expertTeamsImportSeeds();
+      await useExpertTeamStore.getState().loadTeams();
+      return { ok: true, imported: r.imported?.length ?? r.count ?? 0 };
+    } catch (e) {
+      return { ok: false, imported: 0, error: e instanceof Error ? e.message : String(e) };
     }
   },
 

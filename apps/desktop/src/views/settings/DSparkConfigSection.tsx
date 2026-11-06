@@ -11,6 +11,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { DSparkRuntimeConfig } from '@eaide/shared-protocol';
 import { ipc } from '@/ipc/invoke';
+import { ZapIcon } from '@/components/ui/Icons';
 
 export function DSparkConfigSection(): JSX.Element {
   const [cfg, setCfg] = useState<DSparkRuntimeConfig | null>(null);
@@ -34,14 +35,14 @@ export function DSparkConfigSection(): JSX.Element {
       style={{ backgroundColor: '#f3f3f3', borderColor: '#d4d4d4' }}
     >
       <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-ui font-semibold" style={{ color: '#1f1f1f' }}>
-          ⚡ 推测解码（DSpark）
+        <h3 className="flex items-center gap-1 text-ui font-semibold" style={{ color: '#1f1f1f' }}>
+          <ZapIcon size={13} />
+          推测解码（DSpark）
         </h3>
         <button
           type="button"
           onClick={() => navigate('/settings/dspark')}
-          className="rounded px-2.5 py-0.5 text-2xs"
-          style={{ backgroundColor: '#0e639c', color: '#ffffff' }}
+          className="btn btn-primary btn-xs"
           title="打开 DSpark 完整设置（草稿模型路径 / 上下文 / GPU / 策略表）"
         >
           打开设置 →

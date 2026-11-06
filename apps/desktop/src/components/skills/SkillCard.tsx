@@ -2,6 +2,7 @@
  * SkillCard —— 单个 skill 卡片。
  */
 import type { Skill } from '@/types/skill';
+import { PencilIcon, TrashIcon } from '@/components/ui/Icons';
 
 const RISK_ICON = { high: '🔴', medium: '🟡', low: '🟢' } as const;
 const RISK_COLOR = { high: '#cd3131', medium: '#795e26', low: '#059669' } as const;
@@ -83,18 +84,22 @@ export function SkillCard({
           <button
             type="button"
             onClick={onEdit}
-            className="rounded px-2 py-0.5 transition-colors hover:bg-vscode-border"
-            style={{ color: '#0451a5' }}
+            className="btn btn-secondary btn-xs"
           >
-            ✏️ 编辑
+            <span className="flex items-center gap-1">
+              <PencilIcon size={12} />
+              编辑
+            </span>
           </button>
           <button
             type="button"
             onClick={onDelete}
-            className="rounded px-2 py-0.5 transition-colors hover:bg-vscode-border"
-            style={{ color: '#cd3131' }}
+            className="btn btn-danger btn-xs"
           >
-            🗑 删除
+            <span className="flex items-center gap-1">
+              <TrashIcon size={12} />
+              删除
+            </span>
           </button>
         </div>
       </div>

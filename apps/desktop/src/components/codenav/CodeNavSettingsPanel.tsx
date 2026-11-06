@@ -120,7 +120,7 @@ export function CodeNavSettingsPanel(): JSX.Element {
           <button
             type="button"
             onClick={refresh}
-            className="text-xs px-2 py-1 rounded bg-bg-3 hover:bg-bg-active text-fg"
+            className="btn btn-secondary btn-sm"
           >
             ⟳ 刷新
           </button>
@@ -194,7 +194,7 @@ export function CodeNavSettingsPanel(): JSX.Element {
               <button
                 type="button"
                 onClick={refresh}
-                className="text-xs px-2 py-1 rounded bg-bg-3 hover:bg-bg-active text-fg"
+                className="btn btn-secondary btn-sm"
               >
                 ⟳ 刷新
               </button>

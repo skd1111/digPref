@@ -8,6 +8,7 @@ import { create } from "zustand";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
 import { ipc } from "@/ipc/invoke";
+import type { OfficePreviewAnchor } from "@/components/office/officeAnchor";
 
 export type OfficePreviewMode = "html" | "screenshot" | "markdown" | "text" | "pdf";
 /** 预览来源：office = OfficeCLI 后端渲染；local-html = 直读本地 HTML；local-text = 直读本地 md/txt/csv；local-pdf = WebView 内嵌 PDF */
@@ -29,8 +30,15 @@ interface OfficePreviewState {
   /** local-pdf 模式：经 convertFileSrc 得到的 asset URL（iframe src 展示） */
   pdfUrl: string | null;
   page: number;
+  /** 版式预览定位锚点（审核证据 → 原文列/段高亮，html 模式注入渲染页） */
+  anchors: OfficePreviewAnchor[];
 
-  openPreview: (path: string, mode?: "html" | "screenshot", page?: number) => Promise<void>;
+  openPreview: (
+    path: string,
+    mode?: "html" | "screenshot",
+    page?: number,
+    anchors?: OfficePreviewAnchor[],
+  ) => Promise<void>;
   /** 直读本地 HTML 文件预览（视觉演示稿；不产生后端会话） */
   openHtml: (path: string) => Promise<void>;
   /** 直读本地文本（md/txt/csv）预览：markdown 走渲染，其余走等宽纯文本（不产生后端会话） */
@@ -54,8 +62,9 @@ export const useOfficePreviewStore = create<OfficePreviewState>()((set, get) => 
   imageBase64: null,
   pdfUrl: null,
   page: 1,
+  anchors: [],
 
-  openPreview: async (path, mode = "html", page = 1) => {
+  openPreview: async (path, mode = "html", page = 1, anchors = []) => {
     // 覆盖旧会话前先停掉（best-effort，不阻塞新请求）
     const prev = get().sessionId;
     if (prev) {
@@ -72,6 +81,7 @@ export const useOfficePreviewStore = create<OfficePreviewState>()((set, get) => 
       html: null,
       imageBase64: null,
       page,
+      anchors,
     });
     try {
       const res = await ipc.officePreviewRender(path, mode, page);
@@ -106,6 +116,7 @@ export const useOfficePreviewStore = create<OfficePreviewState>()((set, get) => 
       html: null,
       imageBase64: null,
       page: 1,
+      anchors: [],
     });
     try {
       const content = await ipc.readTextFile(path);
@@ -133,6 +144,7 @@ export const useOfficePreviewStore = create<OfficePreviewState>()((set, get) => 
       html: null,
       imageBase64: null,
       page: 1,
+      anchors: [],
     });
     try {
       const content = await ipc.readTextFile(path);
@@ -168,6 +180,7 @@ export const useOfficePreviewStore = create<OfficePreviewState>()((set, get) => 
         imageBase64: null,
         pdfUrl: null,
         page: 1,
+        anchors: [],
       });
       return;
     }
@@ -183,6 +196,7 @@ export const useOfficePreviewStore = create<OfficePreviewState>()((set, get) => 
       imageBase64: null,
       pdfUrl: url,
       page: 1,
+      anchors: [],
     });
   },
 
@@ -196,7 +210,13 @@ export const useOfficePreviewStore = create<OfficePreviewState>()((set, get) => 
     } else if (source === "local-pdf") {
       get().openPdf(path);
     } else {
-      await get().openPreview(path, mode === "screenshot" ? "screenshot" : "html", page);
+      // 重渲染后仍需重新注入定位锚点（刷新会重建渲染页）
+      await get().openPreview(
+        path,
+        mode === "screenshot" ? "screenshot" : "html",
+        page,
+        get().anchors,
+      );
     }
   },
 
@@ -215,6 +235,7 @@ export const useOfficePreviewStore = create<OfficePreviewState>()((set, get) => 
       html: null,
       imageBase64: null,
       pdfUrl: null,
+      anchors: [],
     });
   },
 }));

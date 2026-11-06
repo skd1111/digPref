@@ -185,8 +185,7 @@ export function TaskCleanupCard({ message }: { message: ChatMessageT }): JSX.Ele
             type="button"
             onClick={() => void cleanup()}
             disabled={busy || !loaded || intermediates.length === 0}
-            className="rounded border px-2 py-1 text-2xs transition-colors hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-40"
-            style={{ borderColor: '#0b6bcb', color: '#0b6bcb', backgroundColor: '#ffffff' }}
+            className="btn btn-secondary btn-sm"
           >
             {busy ? '⏳ 清理中…' : '🧹 清理中间文件（保留产物）'}
           </button>
@@ -194,8 +193,7 @@ export function TaskCleanupCard({ message }: { message: ChatMessageT }): JSX.Ele
             type="button"
             onClick={keepAll}
             disabled={busy || !loaded}
-            className="rounded border px-2 py-1 text-2xs transition-colors hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-40"
-            style={{ borderColor: '#e2e8f0', color: '#475569', backgroundColor: '#ffffff' }}
+            className="btn btn-secondary btn-sm"
           >
             全部保留
           </button>

@@ -154,27 +154,14 @@ pub async fn audit_decide(args: Value) -> AppResult<Value> {
         .build()
         .map_err(|e| AppError::Config(format!("reqwest client: {}", e)))?;
 
-    let req = match method {
-        "GET" => client.get(&url),
-        "POST" => client.post(&url).json(&body.unwrap_or(json!({}))),
-        _ => return Err(AppError::Config(format!("unsupported method: {}", method))),
-    };
-
-    let resp = req.send().await.map_err(|e| AppError::Config(format!("audit_decide.http: {}", e)))?;
-    let status = resp.status();
-    let text = resp.text().await.map_err(|e| AppError::Config(format!("audit_decide.read_body: {}", e)))?;
-
-    if !status.is_success() {
-        return Err(AppError::Config(format!(
-            "audit_decide: agent returned HTTP {} body={}",
-            status, text
-        )));
+    let payload = body.unwrap_or_else(|| json!({}));
+    // 只读 GET（verify/totp/public_key/stats）才重试；审批 POST 绝不重试（避免重复副作用）。
+    use crate::commands::agent_http::send_json;
+    match method {
+        "GET" => send_json("audit_decide", 3, || client.get(&url)).await,
+        "POST" => send_json("audit_decide", 1, || client.post(&url).json(&payload)).await,
+        _ => Err(AppError::Config(format!("unsupported method: {}", method))),
     }
-
-    // 解析 JSON 返回
-    serde_json::from_str(&text).map_err(|e| AppError::Config(format!(
-        "audit_decide: invalid JSON response: {} (body={})", e, text
-    )))
 }
 
 

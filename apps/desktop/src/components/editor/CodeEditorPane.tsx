@@ -19,6 +19,7 @@ import * as monacoEditor from 'monaco-editor';
 import { ipc } from '@/ipc/invoke';
 import { useCodeNavStore } from '@/store/codeNavStore';
 import { useCodeNavExtension, revealAndFlash } from './CodeNavExtension';
+import { CloseIcon } from '@/components/ui/Icons';
 
 /** 语法检查支持的后缀（与后端 language_registry 对齐） */
 const SYNTAX_CHECK_EXT = /\.(java|py|ts|tsx)$/i;
@@ -210,8 +211,9 @@ export function CodeEditorPane(): JSX.Element {
                 className="ml-1 rounded px-1 opacity-0 group-hover:opacity-100 hover:bg-gray-200"
                 style={{ color: '#333333' }}
                 title="关闭"
+                aria-label="关闭"
               >
-                ✕
+                <CloseIcon size={13} />
               </button>
             </div>
           );

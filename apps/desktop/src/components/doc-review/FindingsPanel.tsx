@@ -1,13 +1,23 @@
 import { useEffect, useMemo, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { ipc } from "@/ipc/invoke";
-import { previewLocalFile } from "@/store/officePreviewStore";
+import { previewLocalFile, useOfficePreviewStore } from "@/store/officePreviewStore";
+import { OFFICE_RENDERABLE_EXTS } from "@/components/office/officeAnchor";
 import {
   useDocReviewStore,
   DOC_REVIEW_RISK_COLORS,
 } from "@/store/docReviewStore";
 import type { DocFinding } from "@eaide/shared-protocol";
 import { computeLineNumber, jumpToBlock } from "./DocTextViewer";
+import {
+  BookIcon,
+  BulbIcon,
+  CloseIcon,
+  FlagIcon,
+  MapPinIcon,
+  MaximizeIcon,
+  SearchIcon,
+} from "@/components/ui/Icons";
 
 /** 点击依据→预览命中的知识原文件（md/txt/html 内置预览，pdf/doc 等走系统默认程序）。 */
 async function openRefFile(path: string): Promise<void> {
@@ -17,6 +27,9 @@ async function openRefFile(path: string): Promise<void> {
     window.alert(`打开依据原文件失败：${path}\n${String(e)}`);
   }
 }
+
+/** OfficeCLI 可渲染的格式（版式预览 + 风险定位高亮） */
+const OFFICE_RENDERABLE = OFFICE_RENDERABLE_EXTS;
 
 function KbRefBlock({ finding }: { finding: DocFinding }): JSX.Element | null {
   const refs = finding.kb_refs ?? [];
@@ -43,10 +56,16 @@ function KbRefBlock({ finding }: { finding: DocFinding }): JSX.Element | null {
                   void openRefFile(ref.file_path);
                 }}
               >
-                📖 {ref.source}
+                <span className="flex items-center gap-1">
+                  <BookIcon size={12} />
+                  {ref.source}
+                </span>
               </button>
             ) : (
-              <>📖 {ref.source}</>
+              <span className="flex items-center gap-1">
+                <BookIcon size={12} />
+                {ref.source}
+              </span>
             )}
             {" · "}
             {ref.heading}
@@ -77,7 +96,10 @@ function HoverHint({ x, y }: { x: number; y: number }): JSX.Element {
         color: "#ffffff",
       }}
     >
-      🔍 点击查看完整风险详情
+      <span className="flex items-center gap-1">
+        <SearchIcon size={12} />
+        点击查看完整风险详情
+      </span>
     </div>
   );
 }
@@ -92,6 +114,7 @@ function FindingDetailModal({
 }): JSX.Element {
   const selectFinding = useDocReviewStore((s) => s.selectFinding);
   const pages = useDocReviewStore((s) => s.detail?.pages ?? []);
+  const docDetail = useDocReviewStore((s) => s.detail);
   const colors = DOC_REVIEW_RISK_COLORS[finding.risk_level];
 
   const locations = useMemo(
@@ -113,6 +136,25 @@ function FindingDetailModal({
     }
     selectFinding(finding.finding_id);
     onClose();
+  };
+
+  // 在 Office 版式原文（OfficeCLI 渲染）中定位并高亮该风险所在列/段落
+  const officeLocatable =
+    !!docDetail && OFFICE_RENDERABLE.has(docDetail.format) && !!docDetail.file_path;
+  const openInOffice = async (): Promise<void> => {
+    if (!docDetail || !officeLocatable) return;
+    try {
+      await useOfficePreviewStore.getState().openPreview(docDetail.file_path, "html", 1, [
+        {
+          id: finding.finding_id,
+          text: finding.evidence_text,
+          level: finding.risk_level,
+        },
+      ]);
+      onClose();
+    } catch (e) {
+      window.alert(`打开 Office 版式原文失败：${String(e)}`);
+    }
   };
 
   return (
@@ -145,11 +187,10 @@ function FindingDetailModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded px-1.5 text-ui"
-            style={{ color: "#616161" }}
+            className="btn btn-ghost btn-icon"
             aria-label="关闭"
           >
-            ✕
+            <CloseIcon size={13} />
           </button>
         </div>
         {/* 正文：完整展示，可滚动、可选中复制 */}
@@ -171,11 +212,10 @@ function FindingDetailModal({
               <button
                 type="button"
                 onClick={locateSource}
-                className="rounded border px-2 py-0.5 text-2xs font-mono"
+                className="btn btn-xs font-mono"
                 style={{
                   borderColor: "#0b6bcb",
                   color: "#0b6bcb",
-                  backgroundColor: "#f0f7ff",
                 }}
                 title="点击跳转到原文对应位置"
               >
@@ -190,8 +230,9 @@ function FindingDetailModal({
           )}
           {finding.suggestion && (
             <>
-              <p className="mt-3 text-2xs font-bold" style={{ color: "#059669" }}>
-                💡 处理建议
+              <p className="mt-3 flex items-center gap-1 text-2xs font-bold" style={{ color: "#059669" }}>
+                <BulbIcon size={12} />
+                处理建议
               </p>
               <p className="mt-1 text-ui" style={{ color: "#1f1f1f", lineHeight: 1.7 }}>
                 {finding.suggestion}
@@ -200,8 +241,9 @@ function FindingDetailModal({
           )}
           {finding.evidence_text && (
             <>
-              <p className="mt-3 text-2xs font-bold" style={{ color: "#cd3131" }}>
-                📌 原文证据
+              <p className="mt-3 flex items-center gap-1 text-2xs font-bold" style={{ color: "#cd3131" }}>
+                <FlagIcon size={12} />
+                原文证据
               </p>
               <div
                 className="mt-1 rounded border-l-2 p-2 text-ui"
@@ -230,17 +272,34 @@ function FindingDetailModal({
         >
           <button
             type="button"
-            onClick={locateSource}
-            className="rounded border px-3 py-1 text-2xs"
-            style={{ borderColor: "#0b6bcb", color: "#0b6bcb", backgroundColor: "#ffffff" }}
+            onClick={() => void openInOffice()}
+            disabled={!officeLocatable}
+            className="btn btn-secondary btn-sm"
+            title={
+              officeLocatable
+                ? "用 OfficeCLI 渲染的版式原文打开，自动滚动到风险所在列/段落并高亮"
+                : "该格式无内置版式渲染器（仅 docx / xlsx / pptx 支持），请用左侧原文视图定位"
+            }
           >
-            📍 定位原文高亮
+            <span className="flex items-center gap-1">
+              <MapPinIcon size={13} />
+              在 Office 版式中定位
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={locateSource}
+            className="btn btn-secondary btn-sm"
+          >
+            <span className="flex items-center gap-1">
+              <MapPinIcon size={13} />
+              定位原文高亮
+            </span>
           </button>
           <button
             type="button"
             onClick={onClose}
-            className="rounded border px-3 py-1 text-2xs"
-            style={{ borderColor: "#d4d4d4", color: "#616161", backgroundColor: "#ffffff" }}
+            className="btn btn-secondary btn-sm"
           >
             关闭
           </button>
@@ -309,8 +368,7 @@ export function FindingsPanel(): JSX.Element {
             disabled={exporting}
             onClick={() => void onExport("risks_only")}
             title="只导出风险点 + 对应原文摘录，结构化报告"
-            className="rounded border px-1.5 py-0.5 text-2xs"
-            style={{ borderColor: "#0b6bcb", color: "#0b6bcb", backgroundColor: "#ffffff" }}
+            className="btn btn-secondary btn-xs"
           >
             导出风险报告
           </button>
@@ -319,8 +377,7 @@ export function FindingsPanel(): JSX.Element {
             disabled={exporting}
             onClick={() => void onExport("full")}
             title="导出全部原文，风险点以 Word 批注形式标注在对应位置"
-            className="rounded border px-1.5 py-0.5 text-2xs"
-            style={{ borderColor: "#0b6bcb", color: "#0b6bcb", backgroundColor: "#ffffff" }}
+            className="btn btn-secondary btn-xs"
           >
             导出全文批注
           </button>
@@ -357,8 +414,9 @@ export function FindingsPanel(): JSX.Element {
               >
                 {f.risk_type} · {f.risk_level}
               </span>
-              <span className="ml-auto text-2xs" style={{ color: "#9e9e9e" }}>
-                🔍 点击放大
+              <span className="ml-auto flex items-center gap-1 text-2xs" style={{ color: "#9e9e9e" }}>
+                <MaximizeIcon size={12} />
+                点击放大
               </span>
             </div>
             <p className="mt-1 text-ui font-medium" style={{ color: "#1f1f1f" }}>
@@ -372,10 +430,11 @@ export function FindingsPanel(): JSX.Element {
             </p>
             {f.suggestion && (
               <p
-                className="finding-card-clamp mt-1 text-2xs"
+                className="finding-card-clamp mt-1 flex items-start gap-1 text-2xs"
                 style={{ color: "#059669" }}
               >
-                💡 {f.suggestion}
+                <BulbIcon size={12} className="mt-px flex-shrink-0" />
+                {f.suggestion}
               </p>
             )}
             <KbRefBlock finding={f} />

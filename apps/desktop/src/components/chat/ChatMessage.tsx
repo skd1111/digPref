@@ -19,6 +19,7 @@ import { Markdown } from './Markdown';
 import { AiSearchIndicator } from './AiStatus';
 import { TaskCleanupCard } from './TaskCleanupCard';
 import { FeedbackButtons } from './FeedbackButtons';
+import { FileIcon, PencilIcon, RefreshIcon } from '@/components/ui/Icons';
 
 interface Props {
   message: ChatMessageT;
@@ -273,10 +274,12 @@ function ErrorBubble({ message }: { message: ChatMessageT }): JSX.Element {
         <button
           type="button"
           onClick={() => window.dispatchEvent(new CustomEvent(CHAT_RETRY_EVENT))}
-          className="ml-auto flex-shrink-0 rounded border px-3 py-0.5 text-2xs font-semibold transition-colors"
-          style={{ borderColor: '#dc2626', color: '#dc2626', backgroundColor: '#ffffff' }}
+          className="ml-auto flex-shrink-0 btn btn-danger btn-xs"
         >
-          ↻ 重试
+          <span className="flex items-center gap-1">
+            <RefreshIcon size={12} />
+            重试
+          </span>
         </button>
       </div>
     </div>
@@ -333,8 +336,9 @@ function ChangedFilesCard({ message }: { message: ChatMessageT }): JSX.Element {
         className="rounded-lg border p-2"
         style={{ backgroundColor: '#f8fafc', borderColor: '#dbe4ee' }}
       >
-        <div className="mb-1.5 text-2xs font-semibold" style={{ color: '#334155' }}>
-          📝 本次任务改动的文件（{files.length}）· 点击打开
+        <div className="mb-1.5 flex items-center gap-1 text-2xs font-semibold" style={{ color: '#334155' }}>
+          <PencilIcon size={12} />
+          本次任务改动的文件（{files.length}）· 点击打开
         </div>
         <ul className="space-y-0.5">
           {files.map((f) => (
@@ -346,7 +350,9 @@ function ChangedFilesCard({ message }: { message: ChatMessageT }): JSX.Element {
                 className="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-2xs transition-colors hover:bg-[#e8f0fe]"
                 style={{ color: '#1f2937' }}
               >
-                <span className="flex-shrink-0">📄</span>
+                <span className="flex flex-shrink-0 items-center" aria-hidden="true">
+                  <FileIcon size={12} />
+                </span>
                 <span className="font-mono font-semibold" style={{ color: '#0451a5' }}>
                   {baseName(f)}
                 </span>

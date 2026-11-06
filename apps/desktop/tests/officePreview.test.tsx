@@ -53,6 +53,7 @@ function resetStore() {
     imageBase64: null,
     pdfUrl: null,
     page: 1,
+    anchors: [],
   });
   invokeCalls.length = 0;
 }
@@ -288,5 +289,20 @@ describe("OfficePreviewPanel", () => {
     });
     expect(useOfficePreviewStore.getState().open).toBe(false);
     expect(invokeCalls.some((c) => c.cmd === "office_preview_stop")).toBe(true);
+  });
+
+  it("openPreview 携带定位锚点：渲染页注入定位脚本（自动滑到对应列并高亮）", async () => {
+    await act(async () => {
+      await useOfficePreviewStore.getState().openPreview("C:/报告.docx", "html", 1, [
+        { id: "f1", text: "违约金上限为合同金额的 100%。", level: "high" },
+      ]);
+    });
+    expect(useOfficePreviewStore.getState().anchors).toHaveLength(1);
+    await mount();
+    const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+    const src = iframe.getAttribute("srcdoc") ?? "";
+    expect(src).toContain("eaide-anchor-result");
+    expect(src).toContain("违约金上限为合同金额的 100%。");
+    expect(src).toContain("eaide-hl");
   });
 });

@@ -16,6 +16,7 @@ import { useSessionsStore } from '@/store/sessionsStore';
 import { formatRelativeTime } from '@/store/collabStore';
 import { SessionDetailDialog } from './SessionDetailDialog';
 import { ImportDialog } from './ImportDialog';
+import { DownloadIcon, GitForkIcon, HourglassIcon, RefreshIcon, WarningIcon } from '@/components/ui/Icons';
 
 interface Props {
   onSessionSelected?: (sessionId: string) => void;
@@ -113,19 +114,19 @@ export function SessionsPanel({ onSessionSelected }: Props): JSX.Element {
           <button
             type="button"
             onClick={() => setShowImport(true)}
-            className="px-2 py-1 text-xs hover:bg-[#333]"
+            className="btn btn-ghost btn-icon"
             title="导入 .eas 会话"
           >
-            📥
+            <DownloadIcon size={14} />
           </button>
           <button
             type="button"
             onClick={() => void loadList()}
             disabled={loading}
-            className="px-2 py-1 text-xs hover:bg-[#333]"
+            className="btn btn-ghost btn-icon"
             title="刷新"
           >
-            {loading ? '⏳' : '🔄'}
+            {loading ? <HourglassIcon size={13} /> : <RefreshIcon size={13} />}
           </button>
         </div>
       </div>
@@ -136,7 +137,7 @@ export function SessionsPanel({ onSessionSelected }: Props): JSX.Element {
           type="search"
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
-          placeholder="🔍 FTS5 搜索标题 / 消息 / 工具"
+          placeholder="FTS5 搜索标题 / 消息 / 工具"
           className="w-full rounded px-2 py-1 text-xs"
           style={{
             backgroundColor: '#ececec',
@@ -149,10 +150,11 @@ export function SessionsPanel({ onSessionSelected }: Props): JSX.Element {
       {/* 错误提示 */}
       {error && (
         <div
-          className="px-3 py-2 text-xs"
+          className="flex items-center gap-1 px-3 py-2 text-xs"
           style={{ backgroundColor: '#fdeaea', color: '#cd3131' }}
         >
-          ⚠️ {error}
+          <WarningIcon size={13} />
+          {error}
         </div>
       )}
 
@@ -180,7 +182,11 @@ export function SessionsPanel({ onSessionSelected }: Props): JSX.Element {
           >
             <div className="flex items-center justify-between">
               <span className="truncate font-medium">{s.title}</span>
-              {s.parent_session_id && <span title="分支会话">🔀</span>}
+              {s.parent_session_id && (
+                <span title="分支会话" className="flex items-center" aria-label="分支会话">
+                  <GitForkIcon size={12} />
+                </span>
+              )}
             </div>
             <div className="mt-1 flex items-center gap-2 text-xs" style={{ color: '#616161' }}>
               <span>{s.owner}</span>
@@ -251,8 +257,7 @@ export function SessionsPanel({ onSessionSelected }: Props): JSX.Element {
               <button
                 type="button"
                 onClick={handleCreate}
-                className="flex-1 rounded px-2 py-1 text-xs"
-                style={{ backgroundColor: '#0e639c', color: '#fff' }}
+                className="btn btn-primary btn-sm flex-1"
               >
                 创建
               </button>
@@ -262,7 +267,7 @@ export function SessionsPanel({ onSessionSelected }: Props): JSX.Element {
                   setShowCreate(false);
                   setNewTitle('');
                 }}
-                className="rounded px-2 py-1 text-xs hover:bg-[#333]"
+                className="btn btn-secondary btn-sm"
               >
                 取消
               </button>
@@ -272,7 +277,7 @@ export function SessionsPanel({ onSessionSelected }: Props): JSX.Element {
           <button
             type="button"
             onClick={() => setShowCreate(true)}
-            className="w-full rounded px-2 py-1 text-xs hover:bg-[#333]"
+            className="btn btn-secondary btn-sm w-full"
           >
             + 新会话
           </button>

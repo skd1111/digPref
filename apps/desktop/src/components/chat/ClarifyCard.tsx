@@ -11,6 +11,12 @@
  */
 import { useMemo, useState } from 'react';
 import type { ClarifyQuestion } from '@/lib/clarify';
+import {
+  CheckSquareIcon,
+  CircleIcon,
+  DotIcon,
+  SquareIcon,
+} from '@/components/ui/Icons';
 
 interface Props {
   questions: ClarifyQuestion[];
@@ -121,6 +127,7 @@ export function ClarifyCard({ questions, busy, onSend }: Props): JSX.Element {
               key={oi}
               type="button"
               onClick={() => pickOption(tab, oi)}
+              aria-pressed={selected}
               className="rounded border px-2.5 py-1.5 text-left text-ui transition-colors"
               style={{
                 borderColor: selected ? '#007acc' : '#d4d4d4',
@@ -129,8 +136,14 @@ export function ClarifyCard({ questions, busy, onSend }: Props): JSX.Element {
               }}
             >
               <span className="flex items-center gap-1.5">
-                <span style={{ color: selected ? '#007acc' : '#8a8a8a' }}>
-                  {isMulti ? (selected ? '☑' : '☐') : selected ? '◉' : '○'}
+                <span className="flex items-center" style={{ color: selected ? '#007acc' : '#8a8a8a' }} aria-hidden="true">
+                  {isMulti ? (
+                    selected ? <CheckSquareIcon size={13} /> : <SquareIcon size={13} />
+                  ) : selected ? (
+                    <DotIcon size={13} />
+                  ) : (
+                    <CircleIcon size={13} />
+                  )}
                 </span>
                 <span className="font-medium">{opt.text}</span>
                 {opt.recommended && (
@@ -173,8 +186,7 @@ export function ClarifyCard({ questions, busy, onSend }: Props): JSX.Element {
           type="button"
           onClick={handleSend}
           disabled={!allAnswered || busy}
-          className="rounded px-3 py-1 text-2xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
-          style={{ backgroundColor: '#007acc' }}
+          className="btn btn-primary btn-sm"
         >
           发送回答
         </button>

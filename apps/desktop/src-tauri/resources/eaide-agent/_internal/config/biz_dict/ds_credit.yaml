@@ -1,0 +1,9 @@
+# 信贷系统（ds_credit）源级业务术语字典
+# 贷款五级分类 + 逾期口径
+正常类: "five_class='1'"
+关注类: "five_class='2'"
+次级类: "five_class='3'"
+可疑类: "five_class='4'"
+损失类: "five_class='5'"
+坏账: "five_class IN ('4','5')"
+逾期: "overdue_days > 0"

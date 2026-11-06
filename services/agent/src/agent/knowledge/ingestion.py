@@ -140,19 +140,52 @@ class KnowledgeIngestion:
             f"文档内容（前 2000 字）：\n{full_text[:2000]}"
         )
         try:
-            raw = await llm("kb_classify", prompt)
+            raw: str = await llm("kb_classify", prompt)
             result = (raw or "").strip().split()[0].strip().lower() if raw else ""
             if result in valid_keys:
                 return result
             # LLM 可能返回 label 而非 key，尝试反向匹配
             for c in categories:
                 if c["label"] in (raw or ""):
-                    return c["key"]
-            logger.debug("auto_classify: LLM returned unrecognized %r", raw)
+                    return str(c["key"])
+            logger.warning("auto_classify: LLM 返回无法识别的分类 %r", raw)
             return ""
         except Exception as exc:
-            logger.debug("auto_classify skipped: %s", exc)
+            # 限流 429 / 后端不可用等：告警级别（不再 debug 静默），便于定位“未分类”原因
+            logger.warning("auto_classify skipped (LLM 不可用或限流): %s", exc)
             return ""
+
+    async def classify_with_fallback(
+        self, full_text: str, title: str, file_name: str, llm: Any | None = None
+    ) -> tuple[str, str]:
+        """分类判定：优先 LLM，失败（限流/不可用/无法判定）时按文件名启发式兜底。
+
+        返回 ``(category, source)``，source ∈ {"llm", "heuristic", ""}。
+        """
+        category = await self._auto_classify(full_text, title, file_name, llm)
+        if category:
+            return category, "llm"
+        try:
+            from agent.knowledge.category import guess_category
+
+            guess = guess_category(file_name, full_text)
+        except Exception as exc:  # pragma: no cover - 兜底失败不应阻断
+            logger.debug("guess_category failed: %s", exc)
+            guess = ""
+        if guess:
+            logger.info("auto-classify fallback(启发式) file=%s → %s", file_name, guess)
+            return guess, "heuristic"
+        return "", ""
+
+    async def classify_text(
+        self, full_text: str, title: str, file_name: str
+    ) -> tuple[str, str]:
+        """对外的分类判定入口（导入前预判用；LLM 优先 + 启发式兜底）。
+
+        返回 ``(category, source)``；无法判定 → ("", "")。
+        """
+        result, source = await self.classify_with_fallback(full_text, title, file_name, None)
+        return result, source
 
     async def _extract_entities(
         self, parent_text: str, llm: Any | None
@@ -287,20 +320,23 @@ class KnowledgeIngestion:
             if not full_text.strip():
                 raise IngestionError("未提取到文本（可能为扫描件）")
 
-            # 自动分类（category 为空 + 总开关 + 子开关均开启时 LLM 判定）
+            # 自动分类（category 为空 + 总开关 + 子开关均开启时判定；LLM 失败走启发式兜底）
             if (
                 not category
                 and settings.rag_llm_enhance_enabled
                 and settings.rag_auto_classify_enabled
             ):
-                auto_cat = await self._auto_classify(
+                auto_cat, cat_source = await self.classify_with_fallback(
                     full_text, src.stem, src.name, llm
                 )
                 if auto_cat:
                     category = auto_cat
                     self.storage.set_category(doc_id, category)
                     logger.info(
-                        "auto-classified doc_id=%s → %s", doc_id, category
+                        "auto-classified doc_id=%s → %s (source=%s)",
+                        doc_id,
+                        category,
+                        cat_source,
                     )
 
             result = self._chunk(

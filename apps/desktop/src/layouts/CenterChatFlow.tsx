@@ -35,6 +35,18 @@ import { CodeEditorPane } from "@/components/editor/CodeEditorPane";
 import { LivePreviewPanel } from "@/components/preview/LivePreviewPanel";
 import { PreviewButton } from "@/components/preview/PreviewButton";
 import { usePreviewStore } from "@/store/previewStore";
+import {
+  BookIcon,
+  ClipboardIcon,
+  CheckIcon,
+  CloseIcon,
+  ColumnsIcon,
+  DatabaseIcon,
+  LayoutIcon,
+  RowsIcon,
+  SearchIcon,
+  type IconComponent,
+} from "@/components/ui/Icons";
 import { AiThinkingIndicator } from "@/components/chat/AiStatus";
 
 export function CenterChatFlow(): JSX.Element {
@@ -109,7 +121,7 @@ export function CenterChatFlow(): JSX.Element {
               setSearchOpen(!searchOpen);
               if (searchOpen) setSearchText("");
             }}
-            label="🔍"
+            icon={SearchIcon}
             title="会话内搜索"
           />
           {searchOpen && (
@@ -152,7 +164,7 @@ export function CenterChatFlow(): JSX.Element {
             setPreviewOpen(!previewOpen);
             if (!previewOpen && !editorSplit) setEditorSplit("vertical");
           }}
-          label="◧"
+          icon={LayoutIcon}
           title="预览面板（内嵌模式）"
         />
         <SplitButton
@@ -160,7 +172,7 @@ export function CenterChatFlow(): JSX.Element {
           onClick={() =>
             setEditorSplit(editorSplit === "vertical" ? null : "vertical")
           }
-          label="⇆"
+          icon={ColumnsIcon}
           title="左右拆分"
         />
         <SplitButton
@@ -168,14 +180,14 @@ export function CenterChatFlow(): JSX.Element {
           onClick={() =>
             setEditorSplit(editorSplit === "horizontal" ? null : "horizontal")
           }
-          label="⇅"
+          icon={RowsIcon}
           title="上下拆分"
         />
         {editorSplit && (
           <SplitButton
             active={false}
             onClick={() => setEditorSplit(null)}
-            label="✕"
+            icon={CloseIcon}
             title="合并"
           />
         )}
@@ -241,11 +253,11 @@ export function CenterChatFlow(): JSX.Element {
 // ---- 子组件 --------------------------------------------------------------
 
 /** 欢迎页快捷提问示例（2026-08-07）：点击直接走 ChatInput 发送管道 */
-const QUICK_PROMPTS: Array<{ icon: string; text: string }> = [
-  { icon: "📖", text: "介绍下当前项目的业务功能" },
-  { icon: "🔍", text: "帮我审核一份合同文档的风险" },
-  { icon: "🗄️", text: "帮我写一个数据查询 SQL" },
-  { icon: "📋", text: "把我的想法整理成需求卡片" },
+const QUICK_PROMPTS: Array<{ icon: IconComponent; text: string }> = [
+  { icon: BookIcon, text: '介绍下当前项目的业务功能' },
+  { icon: SearchIcon, text: '帮我审核一份合同文档的风险' },
+  { icon: DatabaseIcon, text: '帮我写一个数据查询 SQL' },
+  { icon: ClipboardIcon, text: '把我的想法整理成需求卡片' },
 ];
 
 function Pane({
@@ -393,7 +405,9 @@ function Pane({
             </div>
             {/* 快捷提问示例卡（aicss 风格，2026-08-10：图标软底 + 圆角卡） */}
             <div className="grid grid-cols-2 gap-2">
-              {QUICK_PROMPTS.map((p) => (
+              {QUICK_PROMPTS.map((p) => {
+                const PromptIcon = p.icon;
+                return (
                 <button
                   key={p.text}
                   type="button"
@@ -415,11 +429,12 @@ function Pane({
                     style={{ backgroundColor: "#10a37f14" }}
                     aria-hidden="true"
                   >
-                    {p.icon}
+                    <PromptIcon size={15} />
                   </span>
                   <span className="truncate">{p.text}</span>
                 </button>
-              ))}
+                );
+              })}
             </div>
           </div>
         ) : (
@@ -453,8 +468,9 @@ function Pane({
         <ThinkingIndicator messages={tab?.messages ?? []} tabId={tab?.id ?? ""} />
         {/* 整轮耗时（2026-08-07）：上一轮 done 后展示 */}
         {!busy && lastRunMs != null && messages.length > 0 && (
-          <div className="mt-1 text-center text-[10px]" style={{ color: "#9ca3af" }}>
-            ✓ 本轮耗时 {(lastRunMs / 1000).toFixed(1)}s
+          <div className="mt-1 flex items-center justify-center gap-1 text-[10px]" style={{ color: "#9ca3af" }}>
+            <CheckIcon size={11} />
+            本轮耗时 {(lastRunMs / 1000).toFixed(1)}s
           </div>
         )}
       </div>
@@ -564,27 +580,28 @@ function ThinkingIndicator({
 function SplitButton({
   active,
   onClick,
-  label,
+  icon: Icon,
   title,
 }: {
   active: boolean;
   onClick: () => void;
-  label: string;
+  icon: IconComponent;
   title: string;
 }): JSX.Element {
   return (
     <button
       type="button"
       title={title}
+      aria-label={title}
       onClick={onClick}
-      className="rounded px-2 py-0.5"
+      className="flex items-center justify-center rounded px-2 py-0.5"
       style={{
         backgroundColor: active ? "#10a37f" : "transparent",
         color: active ? "#ffffff" : "#6b7280",
         border: "1px solid #e7e5e4",
       }}
     >
-      {label}
+      <Icon size={13} />
     </button>
   );
 }

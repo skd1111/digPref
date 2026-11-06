@@ -13,6 +13,7 @@ import { useChatStore } from '@/store/chatStore';
 import { useUIStore } from '@/store/uiStore';
 import { ipc } from '@/ipc/invoke';
 import { AutoModeConfirmDialog } from '@/components/chat/AutoModeConfirmDialog';
+import { BotIcon, UserIcon } from '@/components/ui/Icons';
 
 export function AutonomyToggle(): JSX.Element {
   const autonomy = useChatStore((s) => s.autonomy);
@@ -59,7 +60,9 @@ export function AutonomyToggle(): JSX.Element {
           border: `1px solid ${isAuto ? '#5a3a2a' : '#374151'}`,
         }}
       >
-        <span>{isAuto ? '🤖' : '👤'}</span>
+        <span className="flex items-center" aria-hidden="true">
+          {isAuto ? <BotIcon size={13} /> : <UserIcon size={13} />}
+        </span>
         <span className="hidden sm:inline">{isAuto ? '自动' : '交互'}</span>
       </button>
       {confirming && (

@@ -7,6 +7,7 @@
 import { useEffect, useState } from 'react';
 import { ipc } from '@/ipc/invoke';
 import { useChatStore, type ChatTab } from '@/store/chatStore';
+import { CloseIcon } from '@/components/ui/Icons';
 import { useUIStore } from '@/store/uiStore';
 
 /** AI 标题摘要每个 tab 只尝试一次（2026-08-07，失败不重试避免刷屏） */
@@ -123,9 +124,9 @@ export function TabBar(): JSX.Element {
                   e.stopPropagation();
                   closeTab(tab.id);
                 }}
-                className="rounded px-1 text-fg-muted opacity-0 transition-opacity hover:bg-vscode-border hover:text-fg group-hover:opacity-100"
+                className="rounded p-0.5 text-fg-muted opacity-0 transition-opacity hover:bg-vscode-border hover:text-fg group-hover:opacity-100"
               >
-                ✕
+                <CloseIcon size={13} />
               </button>
             )}
 

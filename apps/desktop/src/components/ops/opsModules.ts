@@ -10,6 +10,25 @@
  *   - delegated：由数据专家模式承接（统计报表类，不在运营工作台实现）
  */
 
+import {
+  BarChartIcon,
+  BookIcon,
+  BuildingIcon,
+  FileTextIcon,
+  HomeIcon,
+  LineChartIcon,
+  MegaphoneIcon,
+  PencilIcon,
+  PhoneIcon,
+  ReceiptIcon,
+  SearchIcon,
+  SettingsIcon,
+  ShieldIcon,
+  WarningIcon,
+  WrenchIcon,
+  type IconComponent,
+} from '@/components/ui/Icons';
+
 export interface OpsNavItem {
   id: string;
   label: string;
@@ -24,15 +43,19 @@ export interface OpsNavItem {
 export interface OpsModule {
   id: string;
   label: string;
-  icon: string;
+  /** 单色 SVG 图标（组件，颜色继承父级 currentColor） */
+  icon: IconComponent;
   items: OpsNavItem[];
+  /** 模块默认专家团（内置种子 id）：选中该模块功能点时零 LLM 直接命中；
+   *  团被删除/停用时自动跳过，回退 AI 推荐链（OperationsWorkbench） */
+  expertTeamIds?: string[];
 }
 
 export const OPS_MODULES: OpsModule[] = [
   {
     id: "workbench",
     label: "工作台",
-    icon: "🏠",
+    icon: HomeIcon,
     items: [
       { id: "today_todos", label: "今日待办", suggestSkill: "工作台-今日待办" },
       {
@@ -51,7 +74,8 @@ export const OPS_MODULES: OpsModule[] = [
   {
     id: "biz_process",
     label: "业务办理",
-    icon: "🏦",
+    icon: BuildingIcon,
+    expertTeamIds: ["biz_process_team"],
     items: [
       {
         id: "process_nav",
@@ -79,7 +103,8 @@ export const OPS_MODULES: OpsModule[] = [
   {
     id: "doc_precheck",
     label: "资料预审中心",
-    icon: "📑",
+    icon: FileTextIcon,
+    expertTeamIds: ["doc_precheck_team"],
     items: [
       {
         id: "doc_upload",
@@ -119,7 +144,8 @@ export const OPS_MODULES: OpsModule[] = [
   {
     id: "smart_form",
     label: "智能填单中心",
-    icon: "📝",
+    icon: PencilIcon,
+    expertTeamIds: ["smart_form_team"],
     items: [
       {
         id: "ocr_extract",
@@ -148,7 +174,8 @@ export const OPS_MODULES: OpsModule[] = [
   {
     id: "auth_review",
     label: "授权与复核中心",
-    icon: "🛡️",
+    icon: ShieldIcon,
+    expertTeamIds: ["auth_review_team"],
     items: [
       {
         id: "auth_tasks",
@@ -175,7 +202,8 @@ export const OPS_MODULES: OpsModule[] = [
   {
     id: "risk_warning",
     label: "风险预警中心",
-    icon: "⚠️",
+    icon: WarningIcon,
+    expertTeamIds: ["risk_warning_team"],
     items: [
       {
         id: "op_risk",
@@ -202,7 +230,8 @@ export const OPS_MODULES: OpsModule[] = [
   {
     id: "aml",
     label: "反洗钱辅助分析",
-    icon: "🧾",
+    icon: ReceiptIcon,
+    expertTeamIds: ["aml_team"],
     items: [
       {
         id: "aml_tasks",
@@ -234,7 +263,8 @@ export const OPS_MODULES: OpsModule[] = [
   {
     id: "corp_account",
     label: "对公账户管理",
-    icon: "🏢",
+    icon: BuildingIcon,
+    expertTeamIds: ["corp_account_team"],
     items: [
       { id: "corp_open", label: "对公开户辅助", suggestSkill: "对公账户-开户" },
       {
@@ -262,7 +292,7 @@ export const OPS_MODULES: OpsModule[] = [
   {
     id: "credit_due",
     label: "信贷尽调",
-    icon: "🔍",
+    icon: SearchIcon,
     items: [
       {
         id: "credit_materials",
@@ -301,7 +331,8 @@ export const OPS_MODULES: OpsModule[] = [
   {
     id: "post_loan",
     label: "贷后管理",
-    icon: "📊",
+    icon: BarChartIcon,
+    expertTeamIds: ["post_loan_team"],
     items: [
       {
         id: "loan_tasks",
@@ -328,7 +359,8 @@ export const OPS_MODULES: OpsModule[] = [
   {
     id: "cust_marketing",
     label: "客户经营与营销",
-    icon: "📣",
+    icon: MegaphoneIcon,
+    expertTeamIds: ["customer_marketing_team"],
     items: [
       { id: "cust_tags", label: "客户标签整理", suggestSkill: "营销-客户标签" },
       { id: "lead_gen", label: "营销线索生成", suggestSkill: "营销-线索生成" },
@@ -353,7 +385,8 @@ export const OPS_MODULES: OpsModule[] = [
   {
     id: "cust_service",
     label: "客户服务与投诉",
-    icon: "☎️",
+    icon: PhoneIcon,
+    expertTeamIds: ["customer_service_team"],
     items: [
       { id: "consult", label: "客户咨询辅助", suggestSkill: "客服-咨询辅助" },
       {
@@ -377,7 +410,7 @@ export const OPS_MODULES: OpsModule[] = [
   {
     id: "ops_reports",
     label: "运营报表与台账",
-    icon: "📈",
+    icon: LineChartIcon,
     items: [
       { id: "daily_report", label: "日报/周报/月报", delegated: true },
       { id: "ledger", label: "台账管理", delegated: true },
@@ -388,7 +421,8 @@ export const OPS_MODULES: OpsModule[] = [
   {
     id: "error_rectify",
     label: "差错整改中心",
-    icon: "🔧",
+    icon: WrenchIcon,
+    expertTeamIds: ["error_rectify_team"],
     items: [
       {
         id: "error_register",
@@ -415,7 +449,8 @@ export const OPS_MODULES: OpsModule[] = [
   {
     id: "knowledge",
     label: "知识库与培训考试",
-    icon: "📚",
+    icon: BookIcon,
+    expertTeamIds: ["knowledge_training_team"],
     items: [
       {
         id: "kb_policy",
@@ -431,7 +466,7 @@ export const OPS_MODULES: OpsModule[] = [
   {
     id: "sys_admin",
     label: "系统管理与审计",
-    icon: "⚙️",
+    icon: SettingsIcon,
     items: [
       {
         id: "user_role",

@@ -6,29 +6,35 @@
  *   - 系统功能点：支持搜索，右侧切换为需求卡片
  */
 import { useUIStore, type DevPanelMode } from "@/store/uiStore";
+import {
+  ComponentIcon,
+  DatabaseIcon,
+  FolderIcon,
+  type IconComponent,
+} from "@/components/ui/Icons";
 
 const OPTIONS: Array<{
   id: DevPanelMode;
   label: string;
-  icon: string;
+  icon: IconComponent;
   hint: string;
 }> = [
   {
     id: "assets",
     label: "系统资产",
-    icon: "🗄️",
+    icon: DatabaseIcon,
     hint: "DB / API / SSH / RPA 资产树",
   },
   {
     id: "files",
     label: "文件列表",
-    icon: "📁",
+    icon: FolderIcon,
     hint: "工程目录树（界面不变，右侧执行过程）",
   },
   {
     id: "features",
     label: "系统功能点",
-    icon: "🧩",
+    icon: ComponentIcon,
     hint: "工程 AI 提炼的功能点（右侧需求卡片）",
   },
 ];
@@ -46,6 +52,7 @@ export function LeftPanelDevSwitcher(): JSX.Element {
     >
       {OPTIONS.map((opt) => {
         const active = opt.id === mode;
+        const Icon = opt.icon;
         return (
           <button
             key={opt.id}
@@ -64,9 +71,7 @@ export function LeftPanelDevSwitcher(): JSX.Element {
               fontWeight: active ? 600 : 400,
             }}
           >
-            <span aria-hidden="true" className="text-[13px] leading-none">
-              {opt.icon}
-            </span>
+            <Icon size={18} />
             <span className="text-[10px] leading-none">{opt.label}</span>
           </button>
         );

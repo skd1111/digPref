@@ -8,6 +8,7 @@
  */
 import { useRouterStore } from '@/store/routerStore';
 import { ipc } from '@/ipc/invoke';
+import { PlugIcon } from '@/components/ui/Icons';
 
 const CB_PILL: Record<'closed' | 'open' | 'half_open', { label: string; color: string }> = {
   closed: { label: '● 正常', color: '#059669' },
@@ -35,8 +36,9 @@ export function CircuitBreakerStatus(): JSX.Element {
 
   return (
     <div className="rounded border p-4" style={{ backgroundColor: '#f3f3f3', borderColor: '#d4d4d4' }}>
-      <h3 className="mb-2 text-ui font-semibold" style={{ color: '#1f1f1f' }}>
-        🔌 熔断器状态
+      <h3 className="mb-2 flex items-center gap-1 text-ui font-semibold" style={{ color: '#1f1f1f' }}>
+        <PlugIcon size={13} />
+        熔断器状态
       </h3>
       <p className="mb-3 text-2xs" style={{ color: '#616161' }}>
         熔断后点“重置”手动恢复。
@@ -66,12 +68,8 @@ export function CircuitBreakerStatus(): JSX.Element {
                     type="button"
                     onClick={() => void handleReset(c.name)}
                     disabled={pending}
-                    className="rounded px-1.5 py-0.5 text-2xs"
-                    style={{
-                      backgroundColor: pending ? '#ececec' : '#0e639c',
-                      color: pending ? '#616161' : '#ffffff',
-                      cursor: pending ? 'wait' : 'pointer',
-                    }}
+                    className="btn btn-primary btn-xs"
+                    style={{ cursor: pending ? 'wait' : 'pointer' }}
                   >
                     {pending ? '…' : '重置'}
                   </button>

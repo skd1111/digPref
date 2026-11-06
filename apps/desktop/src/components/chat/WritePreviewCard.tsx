@@ -62,8 +62,7 @@ export function WritePreviewCard({ callId }: WritePreviewCardProps): JSX.Element
       <button
         type="button"
         onClick={() => setModalOpen(true)}
-        className="rounded px-1.5 py-0.5 font-medium transition-opacity hover:opacity-70"
-        style={{ backgroundColor: '#eff6ff', color: '#2563eb' }}
+        className="btn btn-secondary btn-xs"
       >
         查看完整 Diff
       </button>

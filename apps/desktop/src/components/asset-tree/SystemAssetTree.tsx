@@ -10,13 +10,8 @@ import { useMemo, useState, useCallback } from 'react';
 import { useAssetStore, type AssetNode } from '@/store/assetStore';
 import { useDataStore } from '@/store/dataStore';
 import { AssetConfigDialog } from './AssetConfigDialog';
-
-const TYPE_ICON: Record<AssetNode['type'], string> = {
-  database: '🗄',
-  rest: '🌐',
-  ssh: '🔐',
-  rpa: '🤖',
-};
+import { ASSET_TYPE_ICONS } from './assetTypeIcons';
+import { ChevronDownIcon, ChevronRightIcon, PlusIcon, RefreshIcon } from '@/components/ui/Icons';
 
 const TYPE_LABEL: Record<AssetNode['type'], string> = {
   database: 'DATABASE',
@@ -114,18 +109,18 @@ export function SystemAssetTree(): JSX.Element {
           <button
             type="button"
             onClick={() => setShowAddDialog(true)}
-            className="rounded px-1 text-fg-muted hover:bg-vscode-border hover:text-fg"
+            className="rounded p-0.5 text-fg-muted hover:bg-vscode-border hover:text-fg"
             title="新增资产"
           >
-            ＋
+            <PlusIcon size={14} />
           </button>
           <button
             type="button"
             onClick={() => void refresh()}
-            className="rounded px-1 text-fg-muted hover:bg-vscode-border hover:text-fg"
+            className="rounded p-0.5 text-fg-muted hover:bg-vscode-border hover:text-fg"
             title="刷新"
           >
-            ↻
+            <RefreshIcon size={14} />
           </button>
         </div>
       </div>
@@ -143,13 +138,17 @@ export function SystemAssetTree(): JSX.Element {
             className="flex w-full items-center gap-1 px-1 py-0.5 text-2xs font-semibold uppercase tracking-wider hover:text-fg"
             style={{ color: '#333333' }}
           >
-            <span className="text-fg-muted">{collapsed.has(type) ? '▸' : '▾'}</span>
+            <span className="flex items-center text-fg-muted" aria-hidden="true">
+              {collapsed.has(type) ? <ChevronRightIcon size={13} /> : <ChevronDownIcon size={13} />}
+            </span>
             <span>{TYPE_LABEL[type]}</span>
             <span className="text-fg-muted">({grouped[type].length})</span>
           </button>
           {!collapsed.has(type) && (
             <ul>
-              {grouped[type].map((n) => (
+              {grouped[type].map((n) => {
+                const TypeIcon = ASSET_TYPE_ICONS[n.type];
+                return (
                 <li
                   key={n.id}
                   onClick={() => setSelected(n.id)}
@@ -165,7 +164,9 @@ export function SystemAssetTree(): JSX.Element {
                     color: '#333333',
                   }}
                 >
-                  <span className="text-fg-muted">{TYPE_ICON[n.type]}</span>
+                  <span className="flex items-center text-fg-muted" aria-hidden="true">
+                    <TypeIcon size={13} />
+                  </span>
                   <span className="truncate">{n.label}</span>
                   {n.type === 'database' && (
                     <button
@@ -175,15 +176,16 @@ export function SystemAssetTree(): JSX.Element {
                         e.stopPropagation();
                         void refreshSchemas([n.id]);
                       }}
-                      className="ml-auto rounded px-1 opacity-0 transition-opacity hover:bg-vscode-border group-hover:opacity-100 disabled:opacity-50"
+                      className="ml-auto rounded p-0.5 opacity-0 transition-opacity hover:bg-vscode-border group-hover:opacity-100 disabled:opacity-50"
                       style={{ color: '#0e639c' }}
                       title="刷新表结构（重新同步该数据源）"
                     >
-                      ⟳
+                      <RefreshIcon size={13} />
                     </button>
                   )}
                 </li>
-              ))}
+                );
+              })}
             </ul>
           )}
         </section>
@@ -192,7 +194,7 @@ export function SystemAssetTree(): JSX.Element {
       {tree.length === 0 && (
         <div className="mt-2 px-2 text-2xs text-fg-muted">
           未配置系统资产 — 点击右上 ＋ 新增，或编辑
-          %APPDATA%/eaide/systems.yaml 后点击 ↻ 刷新。右键空白处也可新增。
+          %APPDATA%/eaide/systems.yaml 后点击刷新按钮。右键空白处也可新增。
         </div>
       )}
 
@@ -210,18 +212,20 @@ export function SystemAssetTree(): JSX.Element {
           <button
             type="button"
             onClick={() => { setShowAddDialog(true); setEmptyMenu(null); }}
-            className="block w-full px-3 py-1 text-left text-ui hover:bg-vscode-border"
+            className="flex w-full items-center gap-1.5 px-3 py-1 text-left text-ui hover:bg-vscode-border"
             style={{ color: '#333333' }}
           >
-            ＋ 新增资产
+            <PlusIcon size={13} />
+            新增资产
           </button>
           <button
             type="button"
             onClick={() => { void refresh(); setEmptyMenu(null); }}
-            className="block w-full px-3 py-1 text-left text-ui hover:bg-vscode-border"
+            className="flex w-full items-center gap-1.5 px-3 py-1 text-left text-ui hover:bg-vscode-border"
             style={{ color: '#333333' }}
           >
-            ↻ 刷新
+            <RefreshIcon size={13} />
+            刷新
           </button>
         </div>
       )}
@@ -303,16 +307,14 @@ export function SystemAssetTree(): JSX.Element {
               <button
                 type="button"
                 onClick={() => setEditingNode(null)}
-                className="rounded px-3 py-1 text-xs hover:bg-gray-200"
-                style={{ color: '#333333' }}
+                className="btn btn-secondary btn-sm"
               >
                 取消
               </button>
               <button
                 type="button"
                 onClick={commitEdit}
-                className="rounded px-3 py-1 text-xs text-white"
-                style={{ backgroundColor: '#007acc' }}
+                className="btn btn-primary btn-sm"
               >
                 确定
               </button>

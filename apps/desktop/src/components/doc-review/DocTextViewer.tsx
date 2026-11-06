@@ -4,6 +4,15 @@ import {
   DOC_REVIEW_RISK_COLORS,
 } from "@/store/docReviewStore";
 import { splitBlockSegments } from "./highlight";
+import { useOfficePreviewStore } from "@/store/officePreviewStore";
+import { OFFICE_RENDERABLE_EXTS } from "@/components/office/officeAnchor";
+import {
+  CheckIcon,
+  ChevronLeftIcon,
+  ErrorCircleIcon,
+  RefreshIcon,
+  SearchIcon,
+} from "@/components/ui/Icons";
 
 function scrollToFindingCard(findingId: string): void {
   const el = document.getElementById(`finding-card-${findingId}`);
@@ -91,7 +100,7 @@ function AnalyzingOverlay({
           style={{ color: "#b25c1a" }}
           aria-hidden
         >
-          🔍
+          <SearchIcon size={30} />
         </div>
         <p className="mt-2 text-ui font-semibold" style={{ color: "#1f1f1f" }}>
           正在分析，请稍后
@@ -363,8 +372,8 @@ function AnalysisDoneDialog(): JSX.Element | null {
           className="flex items-center gap-2 border-b px-5 py-3"
           style={{ borderColor: "#e0e0e0" }}
         >
-          <span className="text-xl" style={{ color: "#059669" }}>
-            ✓
+          <span className="flex items-center text-xl" style={{ color: "#059669" }}>
+            <CheckIcon size={18} />
           </span>
           <span className="text-ui font-semibold" style={{ color: "#1f1f1f" }}>
             分析完成 · 共 {summary.total} 条风险点
@@ -443,8 +452,7 @@ function AnalysisDoneDialog(): JSX.Element | null {
           <button
             type="button"
             onClick={dismiss}
-            className="rounded px-5 py-1.5 text-ui font-medium text-white"
-            style={{ backgroundColor: "#0e639c", cursor: "pointer" }}
+            className="btn btn-primary btn-md"
           >
             确定
           </button>
@@ -466,21 +474,19 @@ function AnalysisErrorBanner(): JSX.Element | null {
       className="mb-3 flex flex-wrap items-center gap-2 rounded border px-3 py-2"
       style={{ borderColor: "#f5c6c6", backgroundColor: "#fdf1f1" }}
     >
-      <span className="text-ui font-semibold" style={{ color: "#cd3131" }}>
-        ✗ 分析失败：{error}
+      <span className="flex items-center gap-1 text-ui font-semibold" style={{ color: "#cd3131" }}>
+        <ErrorCircleIcon size={14} />
+        分析失败：{error}
       </span>
       <button
         type="button"
         onClick={() => void analyze(selectedDocId)}
-        className="ml-auto rounded border px-2 py-0.5 text-2xs"
-        style={{
-          borderColor: "#cd3131",
-          color: "#cd3131",
-          backgroundColor: "transparent",
-          cursor: "pointer",
-        }}
+        className="ml-auto btn btn-danger btn-xs"
       >
-        ↻ 重新分析
+        <span className="flex items-center gap-1">
+          <RefreshIcon size={12} />
+          重新分析
+        </span>
       </button>
     </div>
   );
@@ -505,6 +511,29 @@ export function DocTextViewer(): JSX.Element {
     return () => clearTimeout(timer);
   }, [analyzing]);
 
+  // Office 版式预览：用 OfficeCLI 渲染的原文打开，自动滚动到风险所在列/段落并高亮
+  const officeLocatable =
+    !!detail && OFFICE_RENDERABLE_EXTS.has(detail.format) && !!detail.file_path;
+  const openOfficeAll = async (): Promise<void> => {
+    if (!detail || !officeLocatable) return;
+    const anchors = findings
+      .filter((f) => (f.evidence_text ?? "").trim().length > 0)
+      .map((f) => ({
+        id: f.finding_id,
+        text: f.evidence_text,
+        level: f.risk_level,
+      }));
+    if (anchors.length === 0) {
+      window.alert("没有可用于定位的原文证据，无法自动定位");
+      return;
+    }
+    try {
+      await useOfficePreviewStore.getState().openPreview(detail.file_path, "html", 1, anchors);
+    } catch (e) {
+      window.alert(`打开 Office 版式原文失败：${String(e)}`);
+    }
+  };
+
   if (!detail) {
     // 读取已持久化结果中（切换文档）：轻量加载态，不是「正在分析」遮罩
     if (loading) {
@@ -528,20 +557,45 @@ export function DocTextViewer(): JSX.Element {
     }
     return (
       <div
-        className="flex h-full items-center justify-center text-2xs"
+        className="flex h-full items-center justify-center gap-1 text-2xs"
         style={{ color: "#616161" }}
       >
-        ← 选择文档后展示内容
+        <span className="flex items-center" aria-hidden="true">
+          <ChevronLeftIcon size={13} />
+        </span>
+        选择文档后展示内容
       </div>
     );
   }
   return (
-    <div className="relative h-full" style={{ backgroundColor: "#ffffff" }}>
+    <div className="relative flex h-full flex-col" style={{ backgroundColor: "#ffffff" }}>
       {analyzing && blurred && (
         <AnalyzingOverlay stage={detail.status} progress={progress} />
       )}
+      {/* 工具条：解析文本视图 ↔ Office 版式预览（后者自动定位并高亮风险所在列/段） */}
       <div
-        className="h-full overflow-auto p-4"
+        className="flex flex-shrink-0 items-center gap-2 border-b px-4 py-1.5"
+        style={{ borderColor: "#e0e0e0" }}
+      >
+        <span className="text-2xs" style={{ color: "#616161" }}>
+          解析文本视图（风险已内联高亮）
+        </span>
+        <button
+          type="button"
+          onClick={() => void openOfficeAll()}
+          disabled={!officeLocatable || findings.length === 0}
+          className="btn btn-secondary btn-xs"
+          title={
+            officeLocatable
+              ? "用 OfficeCLI 渲染的版式原文打开，自动滚动到风险所在列/段落并高亮"
+              : "该格式无内置版式渲染器（仅 docx / xlsx / pptx 支持）"
+          }
+        >
+          Office 版式预览（高亮全部 {findings.length} 处风险）
+        </button>
+      </div>
+      <div
+        className="min-h-0 flex-1 overflow-auto p-4"
         style={{
           filter: analyzing && blurred ? "blur(6px)" : "none",
           transition: "filter 0.4s ease",

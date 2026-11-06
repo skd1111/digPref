@@ -32,27 +32,48 @@ import { McpSettingsPanel } from './settings/McpSettingsPanel';
 import { AdvancedSettingsPanel } from './settings/AdvancedSettingsPanel';
 import { EvolutionPanel } from './settings/EvolutionPanel';
 import { KnowledgeRagPanel } from './settings/KnowledgeRagPanel';
+import {
+  BookIcon,
+  BotIcon,
+  BracesIcon,
+  CloseIcon,
+  CompassIcon,
+  ComponentIcon,
+  FolderIcon,
+  GlobeIcon,
+  InfoCircleIcon,
+  KeyIcon,
+  MessageIcon,
+  PlugIcon,
+  SettingsIcon,
+  SproutIcon,
+  TerminalIcon,
+  UsersIcon,
+  WrenchIcon,
+  ZapIcon,
+  type IconComponent,
+} from '@/components/ui/Icons';
 
 type SectionId = 'envs' | 'models' | 'gen-limits' | 'dspark' | 'secrets' | 'terminal' | 'about' | 'skills' | 'expert-teams' | 'router' | 'codenav' | 'toolchain' | 'workspace' | 'advanced' | 'mcp' | 'evolution' | 'knowledge';
 
-const SECTIONS: { id: SectionId; label: string; icon: string }[] = [
-  { id: 'envs', label: 'Environments', icon: '🌍' },
-  { id: 'mcp', label: 'MCP', icon: '🔌' },
-  { id: 'workspace', label: '工作空间', icon: '📁' },
-  { id: 'models', label: '模型管理', icon: '🧠' },
-  { id: 'gen-limits', label: '模型与回复', icon: '💬' },
-  { id: 'dspark', label: 'DSpark 推测解码', icon: '⚡' },
-  { id: 'secrets', label: 'Secrets', icon: '🔑' },
-  { id: 'terminal', label: 'Terminal', icon: '⌨' },
-  { id: 'about', label: 'About', icon: 'ℹ' },
-  { id: 'skills', label: '技能', icon: '🧠' },
-  { id: 'evolution', label: '经验库（自进化）', icon: '🌱' },
-  { id: 'expert-teams', label: '专家团', icon: '👥' },
-  { id: 'router', label: '路由仪表盘', icon: '🧭' },
-  { id: 'codenav', label: '代码导航', icon: '🔍' },
-  { id: 'knowledge', label: '知识库/RAG', icon: '📚' },  // 审核专家 + 聊天共用的本地混合检索
-  { id: 'toolchain', label: '工具链与编译', icon: '🛠' },  // Phase 18；2026-08-28 并入原「编译配置」
-  { id: 'advanced', label: '高级设置', icon: '⚙' },  // 推理模式 + 会话自主性（2026-08-05）
+const SECTIONS: { id: SectionId; label: string; icon: IconComponent }[] = [
+  { id: 'envs', label: 'Environments', icon: GlobeIcon },
+  { id: 'mcp', label: 'MCP', icon: PlugIcon },
+  { id: 'workspace', label: '工作空间', icon: FolderIcon },
+  { id: 'models', label: '模型管理', icon: BotIcon },
+  { id: 'gen-limits', label: '模型与回复', icon: MessageIcon },
+  { id: 'dspark', label: 'DSpark 推测解码', icon: ZapIcon },
+  { id: 'secrets', label: 'Secrets', icon: KeyIcon },
+  { id: 'terminal', label: 'Terminal', icon: TerminalIcon },
+  { id: 'about', label: 'About', icon: InfoCircleIcon },
+  { id: 'skills', label: '技能', icon: ComponentIcon },
+  { id: 'evolution', label: '经验库（自进化）', icon: SproutIcon },
+  { id: 'expert-teams', label: '专家团', icon: UsersIcon },
+  { id: 'router', label: '路由仪表盘', icon: CompassIcon },
+  { id: 'codenav', label: '代码导航', icon: BracesIcon },
+  { id: 'knowledge', label: '知识库/RAG', icon: BookIcon },  // 审核专家 + 聊天共用的本地混合检索
+  { id: 'toolchain', label: '工具链与编译', icon: WrenchIcon },  // Phase 18；2026-08-28 并入原「编译配置」
+  { id: 'advanced', label: '高级设置', icon: SettingsIcon },  // 推理模式 + 会话自主性（2026-08-05）
 ];
 
 const KNOWN_SEGS: SectionId[] = ['envs', 'models', 'gen-limits', 'dspark', 'secrets', 'terminal', 'about', 'skills', 'expert-teams', 'router', 'codenav', 'toolchain', 'workspace', 'advanced', 'mcp', 'evolution', 'knowledge'];
@@ -109,9 +130,10 @@ export function SettingsView(): JSX.Element {
           type="button"
           onClick={() => navigate('/')}
           title="关闭并返回主页 (Esc)"
-          className="rounded px-2 py-0.5 text-fg-muted transition-colors hover:bg-vscode-border hover:text-fg"
+          className="btn btn-ghost btn-icon"
+          aria-label="关闭"
         >
-          ✕
+          <CloseIcon size={13} />
         </button>
       </div>
 
@@ -134,21 +156,22 @@ export function SettingsView(): JSX.Element {
           }}
         />
         <nav className="flex-1 space-y-0.5">
-          {SECTIONS.map((s) => (
+          {SECTIONS.map((s) => {
+            const Icon = s.icon;
+            return (
             <button
               key={s.id}
               type="button"
               onClick={() => switchTo(s.id)}
-              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-ui"
-              style={{
-                backgroundColor: active === s.id ? '#0e639c' : 'transparent',
-                color: active === s.id ? '#ffffff' : '#333333',
-              }}
+              className={`nav-item ${active === s.id ? 'nav-item-active' : ''}`}
             >
-              <span className="text-fg-muted">{s.icon}</span>
+              <span className={active === s.id ? '' : 'text-fg-muted'} aria-hidden="true">
+                <Icon size={15} />
+              </span>
               <span>{s.label}</span>
             </button>
-          ))}
+            );
+          })}
         </nav>
       </aside>
 

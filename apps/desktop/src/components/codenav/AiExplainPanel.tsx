@@ -5,6 +5,7 @@
  * 这里只显示一个状态徽章 + 「重新生成」按钮，方便用户知道何时在调用 LLM。
  */
 import { useCodeNavStore } from '@/store/codeNavStore';
+import { BotIcon } from '@/components/ui/Icons';
 
 interface AiExplainPanelProps {
   symbolId: string;
@@ -22,7 +23,9 @@ export function AiExplainPanel({ symbolId, onRequestExplain }: AiExplainPanelPro
       style={{ borderColor: '#d4d4d4', backgroundColor: '#ffffff' }}
     >
       <div className="flex items-center gap-2">
-        <span style={{ color: '#c586c0' }}>🤖</span>
+        <span className="flex items-center" style={{ color: '#c586c0' }} aria-hidden="true">
+          <BotIcon size={14} />
+        </span>
         <span
           className="text-2xs font-semibold uppercase tracking-wider"
           style={{ color: '#c586c0' }}

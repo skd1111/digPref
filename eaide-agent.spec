@@ -5,6 +5,15 @@
 import os
 
 
+# 精简版开关（build-all.bat slim / EAIDE_SLIM_BUILD=1）：不把 model/ 下的内置 ONNX 模型
+# 打进 agent（省约 306MB：bge-small 向量 ~23MB + bge-reranker 重排 ~283MB）。
+# 适用场景：构建机/客户端已有模型，或接受运行时降级——
+#   reranker 缺失 → 重排静默 no-op（保持 RRF 融合序）；
+#   bge-small 缺失 → 语义意图路由回退 LLM 分析、KB/缓存向量检索退化为关键词（FTS5）。
+# 需要本地模型时，把 model 目录放到安装目录（Agent spawn 的 cwd）即可被 _resolve_model_dir 命中。
+_SLIM_BUILD = os.environ.get('EAIDE_SLIM_BUILD', '').strip().lower() in ('1', 'true', 'yes', 'on')
+
+
 def _data_pairs():
     pairs = [
         ('services/agent/src/agent/llm/prompts', 'agent/llm/prompts'),
@@ -27,8 +36,11 @@ def _data_pairs():
         ('services/agent/src/agent/ops/schema.sql', 'agent/ops'),
         ('services/agent/src/agent/datadict/schema.sql', 'agent/datadict'),
         ('services/agent/src/agent/config/llm/speculative.yaml', 'config/llm'),
-        # V9.5 内置 Office 生成规范种子 Skill（首次启动播种到数据根 skills/）
-        ('services/agent/src/agent/skills/seeds', 'agent/skills/seeds'),
+        # V9.5 内置 Office 生成规范种子 Skill（首次启动播种到数据根 skills/）   
+        ('services/agent/src/agent/skills/seeds', 'agent/skills/seeds'),        
+        # 运营工作台各业务模块的内置专家团种子（启动播种到数据根 expert_teams/，
+        # 不覆盖用户资产；seeds/templates 为交付物模板）
+        ('services/agent/src/agent/expert_teams/seeds', 'agent/expert_teams/seeds'),
         # 注：2026-09-04 起内置 knowledge-base/ 已彻底移除（不再打包、仓库目录删除）——
         # 文档审核「依据」与 ops 制度问答均改走用户上传的本地 RAG 知识库（kb.db + files/，
         # 随数据根迁移）；内置 grep 知识库、财税规则库、audit_doc 演示脚本一并下线。
@@ -57,7 +69,11 @@ def _data_pairs():
         # bundle.resources，PPT 技能改由用户经 /skills/import 自行上传；嵌入式 Python
         # 亦早已移除）。故 spec datas 与 tauri resources 均不再含 ppt-master，安装包瘦身 ~100MB。
     ]
-    return [(src, dst) for src, dst in pairs if os.path.exists(src)]
+    pairs = [(src, dst) for src, dst in pairs if os.path.exists(src)]
+    if _SLIM_BUILD:
+        # model/ 下的向量 / 重排模型整目录排除（其余 datas 不受影响）
+        pairs = [pair for pair in pairs if not pair[0].startswith('model/')]
+    return pairs
 
 
 def _jieba_datas():

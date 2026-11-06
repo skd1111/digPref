@@ -18,6 +18,7 @@ import Editor, { type OnMount } from '@monaco-editor/react';
 import type { editor } from 'monaco-editor';
 import { selectSelectedSymbol, useCodeNavStore } from '@/store/codeNavStore';
 import { KIND_COLORS, LANGUAGE_COLORS } from '@/types/codenav';
+import { FileIcon } from '@/components/ui/Icons';
 import { AiExplainPanel } from './AiExplainPanel';
 
 const FLASH_DURATION_MS = 500;
@@ -172,8 +173,9 @@ export function SymbolDetail(): JSX.Element {
             {symbol.signature}
           </div>
         )}
-        <div className="mt-1 text-2xs" style={{ color: '#616161' }} title={symbol.file_path}>
-          📄 {symbol.file_path}
+        <div className="mt-1 flex items-center gap-1 text-2xs" style={{ color: '#616161' }} title={symbol.file_path}>
+          <FileIcon size={11} />
+          {symbol.file_path}
         </div>
       </div>
 

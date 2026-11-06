@@ -233,12 +233,8 @@ export function DSparkSettingsPanel(): JSX.Element {
           type="button"
           onClick={() => void refresh()}
           disabled={loading}
-          className="rounded px-2 py-0.5 text-2xs"
-          style={{
-            backgroundColor: '#ececec',
-            color: loading ? '#616161' : '#333333',
-            cursor: loading ? 'wait' : 'pointer',
-          }}
+          className="btn btn-secondary btn-xs"
+          style={{ cursor: loading ? 'wait' : 'pointer' }}
         >
           {loading ? '⟳' : '刷新'}
         </button>
@@ -283,12 +279,7 @@ export function DSparkSettingsPanel(): JSX.Element {
             type="button"
             onClick={() => void handleBrowseDraftPath()}
             disabled={saving === 'draft_model_path'}
-            className="rounded px-3 py-1 text-2xs whitespace-nowrap"
-            style={{
-              backgroundColor: saving === 'draft_model_path' ? '#ececec' : '#0e639c',
-              color: '#ffffff',
-              cursor: saving === 'draft_model_path' ? 'not-allowed' : 'pointer',
-            }}
+            className="btn btn-primary btn-sm whitespace-nowrap"
           >
             {saving === 'draft_model_path' ? '…' : '浏览…'}
           </button>
@@ -296,12 +287,7 @@ export function DSparkSettingsPanel(): JSX.Element {
             type="button"
             onClick={() => void handleClearDraftPath()}
             disabled={saving === 'draft_model_path' || !cfg?.draft_model_path}
-            className="rounded px-2 py-1 text-2xs whitespace-nowrap"
-            style={{
-              backgroundColor: saving === 'draft_model_path' || !cfg?.draft_model_path ? '#ececec' : '#fdeaea',
-              color: saving === 'draft_model_path' || !cfg?.draft_model_path ? '#616161' : '#cd3131',
-              cursor: saving === 'draft_model_path' || !cfg?.draft_model_path ? 'not-allowed' : 'pointer',
-            }}
+            className="btn btn-danger btn-sm whitespace-nowrap"
             title="清空路径"
           >
             清空
@@ -320,12 +306,8 @@ export function DSparkSettingsPanel(): JSX.Element {
                 type="button"
                 onClick={() => setContextPreset(p)}
                 disabled={saving === 'context_size'}
-                className="rounded px-2.5 py-0.5 text-2xs font-mono"
-                style={{
-                  backgroundColor: active ? '#0e639c' : '#ececec',
-                  color: active ? '#ffffff' : '#333333',
-                  cursor: saving === 'context_size' ? 'wait' : 'pointer',
-                }}
+                className={`btn btn-xs font-mono ${active ? 'btn-primary' : 'btn-secondary'}`}
+                style={{ cursor: saving === 'context_size' ? 'wait' : 'pointer' }}
               >
                 {p.label}
               </button>
@@ -571,12 +553,8 @@ export function DSparkSettingsPanel(): JSX.Element {
         type="button"
         onClick={() => void handleReload()}
         disabled={reloading}
-        className="rounded px-3 py-1 text-2xs"
-        style={{
-          backgroundColor: reloading ? '#ececec' : '#0e639c',
-          color: '#ffffff',
-          cursor: reloading ? 'wait' : 'pointer',
-        }}
+        className="btn btn-primary btn-sm"
+        style={{ cursor: reloading ? 'wait' : 'pointer' }}
       >
         {reloading ? '重新加载中…' : '重新加载策略'}
       </button>

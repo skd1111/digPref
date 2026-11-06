@@ -14,6 +14,15 @@
  */
 import { useEffect, useState } from 'react';
 import { useAuditStore, type AuditTask } from '@/store/auditStore';
+import {
+  CheckCircleIcon,
+  CheckIcon,
+  CloseIcon,
+  ErrorCircleIcon,
+  LinkIcon,
+  LockIcon,
+  RefreshIcon,
+} from '@/components/ui/Icons';
 
 interface ApprovalActionsProps {
   task: AuditTask;
@@ -220,10 +229,12 @@ export function ApprovalActions({ task }: ApprovalActionsProps): JSX.Element {
         <button
           type="button"
           onClick={handleVerify}
-          className="ml-2 rounded px-2 py-1 text-2xs"
-          style={{ backgroundColor: '#ececec', color: '#059669' }}
+          className="ml-2 btn btn-secondary btn-xs"
         >
-          🔗 验证签名链
+          <span className="flex items-center gap-1">
+            <LinkIcon size={12} />
+            验证签名链
+          </span>
         </button>
         {verifyResult && (
           <span className="ml-2 text-2xs" style={{ color: '#795e26' }}>
@@ -248,8 +259,13 @@ export function ApprovalActions({ task }: ApprovalActionsProps): JSX.Element {
           border: `1px solid ${isHighRisk ? '#cd3131' : '#059669'}`,
         }}
       >
-        <span className="font-bold">
-          {isHighRisk ? '🔴 高风险' : '🟢 低/中风险'}
+        <span className="flex items-center font-bold">
+          {isHighRisk ? (
+            <ErrorCircleIcon size={12} />
+          ) : (
+            <CheckCircleIcon size={12} />
+          )}
+          {isHighRisk ? ' 高风险' : ' 低/中风险'}
         </span>
         {isHighRisk && (
           <span style={{ color: '#795e26' }}>
@@ -284,14 +300,20 @@ export function ApprovalActions({ task }: ApprovalActionsProps): JSX.Element {
           style={{ backgroundColor: '#fbeaea', border: '1px solid #f48771' }}
         >
           <div className="mb-1 flex items-center gap-2 text-2xs font-bold" style={{ color: '#cd3131' }}>
-            🔐 TOTP 二次验证 <span style={{ color: '#616161' }}>(高风险必填 · 当前用户: {CURRENT_USER})</span>
+            <span className="flex items-center gap-1">
+              <LockIcon size={12} />
+              TOTP 二次验证
+            </span>
+            <span style={{ color: '#616161' }}>(高风险必填 · 当前用户: {CURRENT_USER})</span>
             <button
               type="button"
               onClick={() => refreshTotp(CURRENT_USER)}
-              className="ml-2 rounded px-2 py-0.5 text-2xs"
-              style={{ backgroundColor: '#ececec', color: '#059669' }}
+              className="ml-2 btn btn-secondary btn-xs"
             >
-              ↻ 刷新
+              <span className="flex items-center gap-1">
+                <RefreshIcon size={12} />
+                刷新
+              </span>
             </button>
             {currentTotp && (
               <span className="ml-2 font-mono" style={{ color: '#795e26' }}>
@@ -301,7 +323,10 @@ export function ApprovalActions({ task }: ApprovalActionsProps): JSX.Element {
           </div>
           {mfaVerified ? (
             <div className="flex items-center gap-2 text-2xs" style={{ color: '#059669' }}>
-              ✓ 已通过
+              <span className="flex items-center gap-1">
+                <CheckIcon size={12} />
+                已通过
+              </span>
               <button
                 type="button"
                 onClick={() => {
@@ -326,8 +351,7 @@ export function ApprovalActions({ task }: ApprovalActionsProps): JSX.Element {
               <button
                 type="button"
                 onClick={handleMfaVerify}
-                className="rounded px-3 py-1 text-2xs font-semibold"
-                style={{ backgroundColor: '#cd3131', color: '#0e0e0e' }}
+                className="btn btn-danger btn-sm"
               >
                 验证
               </button>
@@ -345,26 +369,38 @@ export function ApprovalActions({ task }: ApprovalActionsProps): JSX.Element {
               type="button"
               onClick={handleApprove}
               disabled={busy || (requireMfa && !mfaVerified)}
-              className="flex-1 rounded px-3 py-2 text-ui font-semibold transition-all disabled:opacity-40"
-              style={{ backgroundColor: '#059669', color: '#0e0e0e' }}
+              className="btn btn-success btn-md flex-1"
             >
-              {busy ? '处理中...' : '✓ 批准'}
+              {busy ? (
+                '处理中...'
+              ) : (
+                <span className="flex items-center gap-1">
+                  <CheckIcon size={13} />
+                  批准
+                </span>
+              )}
             </button>
             <button
               type="button"
               onClick={handleReject}
               disabled={busy || (requireMfa && !mfaVerified)}
-              className="flex-1 rounded px-3 py-2 text-ui font-semibold transition-all disabled:opacity-40"
-              style={{ backgroundColor: '#cd3131', color: '#0e0e0e' }}
+              className="btn btn-danger btn-md flex-1"
             >
-              {busy ? '处理中...' : '✗ 驳回'}
+              {busy ? (
+                '处理中...'
+              ) : (
+                <span className="flex items-center gap-1">
+                  <CloseIcon size={13} />
+                  驳回
+                </span>
+              )}
             </button>
             <button
               type="button"
               onClick={handleQuestion}
               disabled={busy}
-              className="flex-1 rounded px-3 py-2 text-ui font-semibold transition-all"
-              style={{ backgroundColor: '#795e26', color: '#0e0e0e' }}
+              className="btn btn-md flex-1"
+              style={{ backgroundColor: '#795e26', color: '#ffffff' }}
             >
               ❓ 问询
             </button>
@@ -376,8 +412,7 @@ export function ApprovalActions({ task }: ApprovalActionsProps): JSX.Element {
               type="button"
               onClick={handleApprove}
               disabled={busy || !mfaVerified}
-              className="flex-1 rounded px-3 py-2 text-ui font-semibold transition-all disabled:opacity-40"
-              style={{ backgroundColor: '#059669', color: '#0e0e0e' }}
+              className="btn btn-success btn-md flex-1"
               title="高风险任务建议用双人复核（后端也会强制）"
             >
               {busy ? '...' : '✓ 单人批准'}
@@ -386,8 +421,7 @@ export function ApprovalActions({ task }: ApprovalActionsProps): JSX.Element {
               type="button"
               onClick={handleReject}
               disabled={busy || !mfaVerified}
-              className="flex-1 rounded px-3 py-2 text-ui font-semibold transition-all disabled:opacity-40"
-              style={{ backgroundColor: '#cd3131', color: '#0e0e0e' }}
+              className="btn btn-danger btn-md flex-1"
             >
               {busy ? '...' : '✗ 单人驳回'}
             </button>
@@ -409,8 +443,8 @@ export function ApprovalActions({ task }: ApprovalActionsProps): JSX.Element {
               type="button"
               onClick={handleDualFirst}
               disabled={busy || !mfaVerified}
-              className="flex-1 rounded px-2 py-1 text-2xs font-semibold disabled:opacity-40"
-              style={{ backgroundColor: '#0451a5', color: '#0e0e0e' }}
+              className="btn btn-sm flex-1"
+              style={{ backgroundColor: '#0451a5', color: '#ffffff' }}
             >
               {busy ? '...' : '① 第一审批（沈雷）'}
             </button>
@@ -418,8 +452,8 @@ export function ApprovalActions({ task }: ApprovalActionsProps): JSX.Element {
               type="button"
               onClick={handleDualSecond}
               disabled={busy || !mfaVerified}
-              className="flex-1 rounded px-2 py-1 text-2xs font-semibold disabled:opacity-40"
-              style={{ backgroundColor: '#0b6bcb', color: '#0e0e0e' }}
+              className="btn btn-sm flex-1"
+              style={{ backgroundColor: '#0b6bcb', color: '#ffffff' }}
             >
               {busy ? '...' : '② 第二审批（陈宇）'}
             </button>
@@ -439,16 +473,14 @@ export function ApprovalActions({ task }: ApprovalActionsProps): JSX.Element {
         <button
           type="button"
           onClick={handleDelegate}
-          className="rounded px-3 py-1 text-ui"
-          style={{ backgroundColor: '#ececec', color: '#333333' }}
+          className="btn btn-secondary btn-md"
         >
           委派
         </button>
         <button
           type="button"
           onClick={handleVerify}
-          className="rounded px-3 py-1 text-ui"
-          style={{ backgroundColor: '#ececec', color: '#059669' }}
+          className="btn btn-secondary btn-md"
           title="验证签名链完整性"
         >
           🔗 验证

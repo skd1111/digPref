@@ -40,11 +40,11 @@ def kb_storage(tmp_path):
 
 def test_get_entity_types_reads_from_dictdb(dict_db):
     """get_entity_types 从数据字典正确读取 6 种实体类型。"""
-    with patch("agent.knowledge.entity_types.data_root") as mock_root:
+    with patch("agent.paths.data_root") as mock_root:
         from pathlib import Path
 
         mock_root.return_value = Path(dict_db).parent
-        with patch("agent.knowledge.entity_types.DictStorage") as mock_cls:
+        with patch("agent.datadict.storage.DictStorage") as mock_cls:
             mock_cls.return_value = DictStorage(dict_db)
             from agent.knowledge.entity_types import get_entity_types
 
@@ -68,11 +68,11 @@ async def test_extract_entities_normal_path(dict_db):
             {"person": ["张三"], "organization": ["中国人民银行"]}
         )
     )
-    with patch("agent.knowledge.entity_types.data_root") as mock_root:
+    with patch("agent.paths.data_root") as mock_root:
         from pathlib import Path
 
         mock_root.return_value = Path(dict_db).parent
-        with patch("agent.knowledge.entity_types.DictStorage") as mock_cls:
+        with patch("agent.datadict.storage.DictStorage") as mock_cls:
             mock_cls.return_value = DictStorage(dict_db)
             result = await ing._extract_entities("测试文本内容", mock_llm)
 
@@ -95,11 +95,11 @@ async def test_extract_entities_invalid_type_dropped(dict_db):
             {"person": ["李四"], "unknown_type": ["不应该出现"]}
         )
     )
-    with patch("agent.knowledge.entity_types.data_root") as mock_root:
+    with patch("agent.paths.data_root") as mock_root:
         from pathlib import Path
 
         mock_root.return_value = Path(dict_db).parent
-        with patch("agent.knowledge.entity_types.DictStorage") as mock_cls:
+        with patch("agent.datadict.storage.DictStorage") as mock_cls:
             mock_cls.return_value = DictStorage(dict_db)
             result = await ing._extract_entities("测试文本", mock_llm)
 
@@ -115,11 +115,11 @@ async def test_extract_entities_exception_returns_empty(dict_db):
 
     ing = KnowledgeIngestion(storage=MagicMock(), embedding=None)
     mock_llm = AsyncMock(side_effect=RuntimeError("LLM crashed"))
-    with patch("agent.knowledge.entity_types.data_root") as mock_root:
+    with patch("agent.paths.data_root") as mock_root:
         from pathlib import Path
 
         mock_root.return_value = Path(dict_db).parent
-        with patch("agent.knowledge.entity_types.DictStorage") as mock_cls:
+        with patch("agent.datadict.storage.DictStorage") as mock_cls:
             mock_cls.return_value = DictStorage(dict_db)
             result = await ing._extract_entities("测试文本", mock_llm)
 
