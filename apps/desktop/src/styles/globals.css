@@ -15,9 +15,15 @@
     letter-spacing: 0.01em;
     color: theme('colors.vscode.editor-fg');
     background-color: theme('colors.vscode.editor-bg');
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-    text-rendering: optimizeLegibility;
+    /* 字体渲染（2026-11-09 用户反馈字体发虚）：Windows 下 antialiased 会关掉
+       ClearType 次像素渲染，10~12px 小字 + 非 100% 界面缩放下尤其模糊；
+       交回系统默认（auto）让 ClearType 生效，字更锐利。
+       macOS 侧不再强制 grayscale，随系统最佳渲染。 */
+    -webkit-font-smoothing: auto;
+    -moz-osx-font-smoothing: auto;
+    /* 也不强制 optimizeLegibility：它会引入亚像素字距调整，
+       小字号下反而显糊；交回浏览器默认（auto） */
+    text-rendering: auto;
     font-feature-settings: "kern" 1, "liga" 1;
     /* 主界面文字默认可选中复制（2026-08-11）：会话记录/面板内容等；
        菜单栏/顶栏/页签等交互 chrome 由各组件自带 select-none 保持禁选 */
@@ -255,7 +261,8 @@
   100% { background-position: -50% 0; }
 }
 .animate-thinking-shimmer {
-  background: linear-gradient(90deg, #6b7280 20%, #10a37f 45%, #202124 55%, #6b7280 80%);
+  /* 2026-11-09（用户要求）：流光高光由科技绿改为黑，全局运行/思考指示去绿 */
+  background: linear-gradient(90deg, #6b7280 20%, #1f1f1f 45%, #454545 55%, #6b7280 80%);
   background-size: 200% 100%;
   -webkit-background-clip: text;
   background-clip: text;
@@ -275,10 +282,10 @@
 
 /* 科技感思考动效（2026-09-06 升级）：胶囊呼吸微光 + 弧光 orb 三层错速旋转 + 数据流均衡器 */
 
-/* 思考胶囊：边框 + 外发光呼吸 */
+/* 思考胶囊：边框 + 外发光呼吸（2026-11-09 黑色化：科技绿 → 简洁黑灰） */
 @keyframes ai-thinking-glow {
-  0%, 100% { border-color: #e7e5e4; box-shadow: 0 0 0 0 rgba(16, 163, 127, 0); }
-  50%      { border-color: rgba(16, 163, 127, 0.5); box-shadow: 0 0 10px 0 rgba(16, 163, 127, 0.18); }
+  0%, 100% { border-color: #e7e5e4; box-shadow: 0 0 0 0 rgba(31, 31, 31, 0); }
+  50%      { border-color: rgba(31, 31, 31, 0.35); box-shadow: 0 0 10px 0 rgba(31, 31, 31, 0.12); }
 }
 .ai-thinking {
   animation: ai-thinking-glow 2.4s ease-in-out infinite;
@@ -306,10 +313,10 @@
   border-radius: 9999px;
   background: conic-gradient(
     from 0deg,
-    rgba(16, 163, 127, 0) 0deg,
-    rgba(16, 163, 127, 0.15) 200deg,
-    #10a37f 330deg,
-    #34d399 360deg
+    rgba(31, 31, 31, 0) 0deg,
+    rgba(31, 31, 31, 0.15) 200deg,
+    #1f1f1f 330deg,
+    #52525b 360deg
   );
   -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
   mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
@@ -319,11 +326,11 @@
   position: absolute;
   inset: 4.5px;
   border-radius: 9999px;
-  background: radial-gradient(circle at 35% 30%, #6ee7b7, #10a37f 65%, #0b7a5e);
-  box-shadow: 0 0 6px 1px rgba(16, 163, 127, 0.55);
+  background: radial-gradient(circle at 35% 30%, #52525b, #1f1f1f 65%, #0a0a0a);
+  box-shadow: 0 0 6px 1px rgba(31, 31, 31, 0.45);
   animation: ai-orb-pulse 1.5s ease-in-out infinite;
 }
-/* 轨道粒子：慢速公转的发光卫星点 */
+/* 轨道粒子：慢速公转的卫星点 */
 .ai-orb-satellite {
   position: absolute;
   inset: 0;
@@ -338,8 +345,8 @@
   height: 3px;
   margin-left: -1.5px;
   border-radius: 9999px;
-  background: #34d399;
-  box-shadow: 0 0 5px 1px rgba(52, 211, 153, 0.8);
+  background: #3f3f46;
+  box-shadow: 0 0 5px 1px rgba(31, 31, 31, 0.5);
 }
 
 /* 数据流均衡器：5 根错相伸缩的能量柱 */
@@ -357,9 +364,28 @@
   width: 2.5px;
   height: 100%;
   border-radius: 2px;
-  background: linear-gradient(180deg, #34d399, #10a37f);
+  background: linear-gradient(180deg, #52525b, #1f1f1f);
   transform-origin: center;
   animation: ai-eq-bounce 0.9s ease-in-out infinite;
+}
+
+/* —— 专家卡提问框 收起⇄展开 过渡（2026-11-09 用户要求渐变动画，不要突然出现）——
+   grid-template-rows 0fr⇄1fr 实现高度过渡（收起裁切为 0，展开为内容高），
+   两态 pane 叠放在同一 grid 格，opacity + pointer-events 负责淡入淡出与点击穿透 */
+.ask-dock {
+  display: grid;
+  transition: grid-template-rows 240ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.ask-dock-clip {
+  display: grid;
+  overflow: hidden;
+  min-height: 0;
+}
+.ask-dock-pane {
+  grid-area: 1 / 1;
+  align-self: start;
+  min-height: 0;
+  transition: opacity 200ms ease-out;
 }
 
 /* 联网搜索：地球图标缓慢自转 */
@@ -522,6 +548,104 @@
 }
 .md-code-copy:hover { background-color: #333333; color: #e0e0e0; }
 
+/* ---- 文档元数据卡（Markdown frontmatter，2026-11-09）--------------------
+   预览面板里的 md 文档：顶部 YAML 头抽出来渲染成结构化卡片，
+   取代原先「字段名+值挤成一行 + 裸圆点列表」的正文式输出。 */
+.doc-meta {
+  margin: 0 0 14px;
+  border: 1px solid #e7e5e4;
+  border-radius: 8px;
+  background-color: #fafaf9;
+  overflow: hidden;
+}
+.doc-meta-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+}
+.doc-meta-title {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.45;
+  color: #202124;
+  word-break: break-word;
+}
+.doc-meta-sub {
+  margin-top: 3px;
+  font-size: 11px;
+  color: #78716c;
+}
+.doc-meta-body {
+  padding: 10px 12px 12px;
+  border-top: 1px solid #eeece9;
+}
+.doc-meta-grid {
+  display: grid;
+  /* 列宽封顶 240px：宽面板下字段不散开，保持左对齐的紧凑排版 */
+  grid-template-columns: repeat(auto-fill, minmax(180px, 240px));
+  gap: 4px 20px;
+}
+.doc-meta-grid + .doc-meta-grid { margin-top: 4px; }
+.doc-meta-field {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.doc-meta-label {
+  flex: none;
+  width: 48px;
+  text-align: right;
+  font-size: 11px;
+  color: #a8a29e;
+}
+.doc-meta-value {
+  color: #292524;
+  word-break: break-word;
+}
+.doc-meta-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 8px;
+}
+.doc-meta-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+.doc-meta-chip {
+  display: inline-block;
+  padding: 1px 8px;
+  border: 1px solid #e7e5e4;
+  border-radius: 999px;
+  background-color: #ffffff;
+  font-size: 11px;
+  line-height: 1.6;
+  color: #44403c;
+  white-space: nowrap;
+}
+.doc-meta-chip-accent {
+  border-color: #c7d2fe;
+  background-color: #eef2ff;
+  color: #4338ca;
+}
+.doc-meta-chip-ok {
+  border-color: #a7f3d0;
+  background-color: #ecfdf5;
+  color: #047857;
+}
+.doc-meta-chip-off {
+  border-color: #e7e5e4;
+  background-color: #f5f5f4;
+  color: #78716c;
+}
+
 /* ---- Agent 启动闸门（2026-09-04）-------------------------------------------
    Agent(:8765) 未就绪期间，AgentReadyGate 给 body 挂 .agent-booting：
    #root 整棵子树模糊 + 禁点禁选，避免用户在启动空窗期乱点触发一堆
@@ -543,4 +667,28 @@ body.agent-booting #root {
 }
 @keyframes agent-boot-spin {
   to { transform: rotate(360deg); }
+}
+
+/* ---- Agent 运行态指示器（2026-11-06）-------------------------------------
+   状态栏 / 顶栏的 Agent 徽标：
+     运行中（busy）    → 动态 SVG：缺口弧自转 + 核心点呼吸
+     未活动（idle）   → 静态待机圆环
+     未就绪（error）  → 静态叉号圆圈
+   SVG 自身不带 transform（避免与父级动画叠加），旋转作用在子元素上。 */
+.agent-status-arc {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  animation: agent-status-spin 1.1s linear infinite;
+}
+@keyframes agent-status-spin {
+  to { transform: rotate(360deg); }
+}
+.agent-status-core {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  animation: agent-status-pulse 1.6s ease-in-out infinite;
+}
+@keyframes agent-status-pulse {
+  0%, 100% { opacity: 0.55; transform: scale(0.82); }
+  50%      { opacity: 1;    transform: scale(1.12); }
 }

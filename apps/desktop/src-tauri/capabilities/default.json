@@ -8,6 +8,7 @@
     "core:window:default",
     "core:event:default",
     "core:webview:default",
+    "core:webview:allow-set-webview-zoom",
     "core:app:default",
     "log:default",
     "os:default",

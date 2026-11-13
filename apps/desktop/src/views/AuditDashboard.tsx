@@ -9,9 +9,10 @@
  *   │            │                      │ 资金影响   │
  *   └────────────┴──────────────────────┴────────────┘
  */
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useAuditStore } from "@/store/auditStore";
 import { useCollabStore } from "@/store/collabStore";
+import { useUIStore } from "@/store/uiStore";
 import { DocReviewDashboard } from "./DocReviewDashboard";
 import { KbPanel } from "@/components/doc-review/KbPanel";
 import { ApprovalQueue } from "@/components/audit/ApprovalQueue";
@@ -116,12 +117,13 @@ function AuditApprovalDashboard(): JSX.Element {
   );
 }
 
-type AuditTab = "approval" | "doc" | "kb";
-
 export function AuditDashboard(): JSX.Element {
-  const [tab, setTab] = useState<AuditTab>("approval");
+  // 页签存 uiStore（而非 useState）：设置页走 `<Outlet />` 会把本组件整体卸载，
+  // 组件内 state 随之丢失 —— 从知识库点「设置」再关闭就会莫名其妙回到「审批工作台」。
+  const tab = useUIStore((s) => s.auditTab);
+  const setTab = useUIStore((s) => s.setAuditTab);
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col overflow-hidden">
       <div
         className="flex flex-shrink-0 border-b"
         style={{ borderColor: "#d4d4d4", backgroundColor: "#f3f3f3" }}
@@ -142,13 +144,20 @@ export function AuditDashboard(): JSX.Element {
           label="知识库"
         />
       </div>
-      {tab === "doc" ? (
-        <DocReviewDashboard />
-      ) : tab === "kb" ? (
-        <KbPanel />
-      ) : (
-        <AuditApprovalDashboard />
-      )}
+      {/* 内容区必须 flex-1 min-h-0（不能与页签行平铺）：三个子视图根部都是 h-full，
+          直接铺在 flex-col 里高度会多出页签行那一截，溢出后由外层 overflow-hidden 裁掉。
+          一旦内部 scrollIntoView（定位原文 / 定位风险卡）顺带滚动了这个裁剪容器，
+          顶部页签行（审批工作台 / 文档审核 / 知识库）就整行被卷出可视区 ——
+          用户反馈「点原文链接后页签不见了」即由此而来。 */}
+      <div className="min-h-0 flex-1 overflow-hidden">
+        {tab === "doc" ? (
+          <DocReviewDashboard />
+        ) : tab === "kb" ? (
+          <KbPanel />
+        ) : (
+          <AuditApprovalDashboard />
+        )}
+      </div>
     </div>
   );
 }

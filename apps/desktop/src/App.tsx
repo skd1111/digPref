@@ -9,6 +9,7 @@ import { RouterProvider } from "react-router-dom";
 import { router } from "./router";
 import { useAgentStream } from "@/hooks/useAgentStream";
 import { useAgentHealth } from "@/hooks/useAgentHealth";
+import { useUiZoom } from "@/hooks/useUiZoom";
 import { PreviewEventBridge } from "@/components/preview/PreviewEventBridge";
 import { OfficePreviewPanel } from "@/components/office/OfficePreviewPanel";
 import { AgentReadyGate } from "@/components/chrome/AgentReadyGate";
@@ -66,6 +67,8 @@ export function App(): JSX.Element {
   useAgentStream();
   // Agent /health 轮询 → uiStore.agentStatus（修复状态栏永远显示「未连接」的 bug）
   useAgentHealth();
+  // 界面缩放（2026-11-09）：uiStore.uiZoom → WebView 原生 zoom，全界面等比放大
+  useUiZoom();
   // Phase 15 V0：订阅 preview://* HMR / 编译错误事件（三处同步的 TS 端）
 
   return (

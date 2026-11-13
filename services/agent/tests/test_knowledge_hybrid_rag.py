@@ -502,7 +502,8 @@ class TestApi:
         )
         assert r.status_code == 200
         body = r.json()
-        assert body["status"] == "indexing" and body["doc_id"]
+        # 上传后先建档排队（queued），拿到入库并发槽位后才转 indexing
+        assert body["status"] == "queued" and body["doc_id"]
         lst = client.get("/knowledge/v1/docs").json()
         assert lst["total"] >= 1
         assert any(d["id"] == body["doc_id"] for d in lst["docs"])

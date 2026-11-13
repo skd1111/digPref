@@ -3,7 +3,7 @@
  *
  * 两块：
  *   1. 知识库概览：文档/分块数、向量模型与维度、reranker 就绪、是否需重建 + 重建入口
- *   2. 混合检索参数：FTS5 BM25 / 向量 / RRF / reranker / 父子分块 / 上传上限等
+ *   2. 检索参数管理
  *
  * 参数保存后**不热应用**（写 rag_config.json），提示「重启 Agent 后生效」并给一键重启；
  * 数据（kb.db + 上传文件 + 参数 JSON）统一落数据根 knowledge/ 目录，复制即迁移。
@@ -45,7 +45,10 @@ const FIELDS: FieldDef[] = [
   { key: 'rag_llm_contextual_enabled', label: 'LLM 上下文前缀（实验）', desc: '入库期用大模型为分块生成上下文前缀；需先开启「大模型知识库验证」总开关。属索引期参数，改后需重建。', kind: 'bool', experimental: true },
   { key: 'rag_hyde_enabled', label: 'HyDE 假设文档（实验）', desc: '检索期先让大模型生成假设性回答，用其向量检索；需先开启总开关。', kind: 'bool', experimental: true },
   { key: 'rag_query_expansion_enabled', label: '查询扩展（实验）', desc: '检索期用大模型扩展多个查询视角，多路 BM25 合并；需先开启总开关。', kind: 'bool', experimental: true },
-  { key: 'rag_auto_classify_enabled', label: 'LLM 自动分类（实验）', desc: '入库期用大模型自动判定文档分类（财务/法务/合规/数据安全）；需先开启总开关。属索引期参数，改后需重建。', kind: 'bool', experimental: true },
+  { key: 'rag_embed_classify_enabled', label: '自动分类（本地向量）', desc: '入库与导入预判时用本地 bge 向量按类中心相似度判定分类，零云端调用、毫秒级；不可用或低于置信度阈值时才回落「LLM 自动分类」→ 启发式兜底。', kind: 'bool' },
+  { key: 'rag_embed_classify_threshold', label: '自动分类置信度阈值', desc: '文档向量与最近类中心的余弦低于该值视为「不可判」，转启发式兜底（0~1，默认 0.35）。调低 = 更倾向给出分类，调高 = 更保守。保存即生效。', kind: 'float', min: 0, max: 1, step: 0.05 },
+  { key: 'rag_classify_text_chars', label: '分类用正文字数', desc: '自动分类读取文档正文的前 N 字（本地向量分类 / LLM 分类 / 导入预判共用，默认 2000）。保存即生效。', kind: 'int', min: 200, max: 20000, step: 100 },
+  { key: 'rag_auto_classify_enabled', label: 'LLM 自动分类（实验）', desc: '入库期用大模型自动判定文档分类（财务/法务/合规/数据安全）；需先开启总开关。仅在本地向量分类不可用或低于阈值时被回落调用。', kind: 'bool', experimental: true },
   { key: 'rag_entity_extract_enabled', label: 'LLM 实体抽取（实验）', desc: '入库期按父块用大模型抽取关键实体（人名/机构/法规/金额/日期/术语），存入实体表供检索通道使用；需先开启总开关。属索引期参数，改后需重建。', kind: 'bool', experimental: true },
   { key: 'rag_entity_enabled', label: '实体检索通道', desc: '检索期用 FTS5 匹配实体名，关联子块加入 RRF 融合（第四路通道）。仅当已有实体数据时生效，不影响其余三通道。', kind: 'bool' },
 ];
@@ -207,9 +210,6 @@ export function KnowledgeRagPanel(): JSX.Element {
       <h1 className="text-ui-lg font-semibold" style={{ color: '#1f1f1f' }}>
         知识库 / RAG
       </h1>
-      <p className="mb-4 mt-1 text-2xs" style={{ color: '#616161' }}>
-        审核专家与聊天共用的本地混合检索（FTS5 BM25 + 向量 + RRF + reranker）。参数统一在此管理并落库 kb.db，查询期参数保存即热生效（无需重启）；分块/父块等索引期参数改后需重建索引。数据落安装目录 knowledge/，复制即迁移。
-      </p>
 
       {toast && (
         <div

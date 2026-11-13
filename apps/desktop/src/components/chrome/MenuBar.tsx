@@ -11,6 +11,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useChatStore } from '@/store/chatStore';
 import { useUIStore } from '@/store/uiStore';
+import { zoomInFrom, zoomOutFrom, zoomPercent } from '@/lib/uiZoom';
 import {
   cloneFromGit,
   pickAndImportFolder,
@@ -49,6 +50,12 @@ export function MenuBar(): JSX.Element {
   const toggleCommandPalette = useUIStore((s) => s.toggleCommandPalette);
   const toggleQuickOpen = useUIStore((s) => s.toggleQuickOpen);
   const toggleCheatSheet = useUIStore((s) => s.toggleCheatSheet);
+  // 界面缩放（2026-11-09）：View 菜单 Zoom In / Zoom Out / Reset Zoom
+  // 三档 100/110/125，与设置页共用 uiStore.uiZoom（持久化）
+  const uiZoom = useUIStore((s) => s.uiZoom);
+  const zoomIn = useUIStore((s) => s.zoomIn);
+  const zoomOut = useUIStore((s) => s.zoomOut);
+  const resetZoom = useUIStore((s) => s.resetZoom);
 
   // 把菜单项名字映射到具体动作
   const runAction = (label: string): void => {
@@ -62,6 +69,15 @@ export function MenuBar(): JSX.Element {
         break;
       case 'Quick Open':
         toggleQuickOpen();
+        break;
+      case 'Zoom In':
+        zoomIn();
+        break;
+      case 'Zoom Out':
+        zoomOut();
+        break;
+      case 'Reset Zoom':
+        resetZoom();
         break;
       case 'Keyboard Shortcuts':
         toggleCheatSheet();
@@ -89,6 +105,11 @@ export function MenuBar(): JSX.Element {
         alert(`"${label}" — 占位功能，待实现`);
     }
   };
+
+  /** 已到档位边界 → 灰掉，避免点了没反应（区别于没实现） */
+  const zoomItemDisabled = (item: string): boolean =>
+    (item === 'Zoom In' && zoomInFrom(uiZoom) === uiZoom) ||
+    (item === 'Zoom Out' && zoomOutFrom(uiZoom) === uiZoom);
 
   return (
     <div
@@ -122,14 +143,30 @@ export function MenuBar(): JSX.Element {
               }}
               onClick={() => setOpenIdx(null)}
             >
+              {/* View 菜单顶部：当前界面缩放比例（菜单项只有动作，不知道当前值） */}
+              {menu.label === 'View' && (
+                <div
+                  className="px-3 py-1 text-2xs"
+                  style={{ color: '#6e6e6e' }}
+                >
+                  UI Zoom: {zoomPercent(uiZoom)}
+                </div>
+              )}
               {menu.items.map((item, j) =>
                 item === '—' ? (
                   <div key={j} className="my-0.5 h-px" style={{ backgroundColor: '#d0d0d0' }} />
                 ) : (
                   <div
                     key={j}
-                    onClick={() => runAction(item)}
-                    className="cursor-pointer px-3 py-1 transition-colors hover:bg-vscode-border"
+                    onClick={() => {
+                      if (zoomItemDisabled(item)) return;
+                      runAction(item);
+                    }}
+                    className={
+                      zoomItemDisabled(item)
+                        ? 'cursor-default px-3 py-1 opacity-40'
+                        : 'cursor-pointer px-3 py-1 transition-colors hover:bg-vscode-border'
+                    }
                   >
                     {item}
                   </div>

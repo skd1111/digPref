@@ -488,7 +488,6 @@ async def _run_ingest(
 # ---- 导入前分类预判（只读，不写库）--------------------------------------
 
 _PREVIEW_TEXT_SUFFIXES = {".md", ".markdown", ".txt", ".csv", ".html", ".htm"}
-_PREVIEW_MAX_CHARS = 2000
 _PREVIEW_MAX_FILES = 50
 # 预判并发：云端后端常有 Token Plan 速率限制，并发过高会直接 429 → 失败一片
 _PREVIEW_CONCURRENCY = 2
@@ -507,23 +506,24 @@ def _is_rate_limited(exc: BaseException) -> bool:
 
 
 def _read_preview_text(path: Path) -> str:
-    """读取文件前 2000 字用于分类预判（纯文本直读；docx/pdf 等走文档解析器）。"""
+    """读取文件前 N 字用于分类预判（N = rag_classify_text_chars；纯文本直读；docx/pdf 等走文档解析器）。"""
+    max_chars = int(settings.rag_classify_text_chars)
     suffix = path.suffix.lower()
     if suffix in _PREVIEW_TEXT_SUFFIXES:
         raw = path.read_bytes()
         for encoding in ("utf-8", "gbk"):
             try:
-                return raw.decode(encoding)[:_PREVIEW_MAX_CHARS]
+                return raw.decode(encoding)[:max_chars]
             except UnicodeDecodeError:
                 continue
-        return raw.decode("utf-8", errors="replace")[:_PREVIEW_MAX_CHARS]
+        return raw.decode("utf-8", errors="replace")[:max_chars]
     if suffix == ".doc":
         # Word 97-2003 需 COM 转换（可达数十秒），预判阶段不等待：交用户手选分类
         return ""
     from agent.doc_review.parser import parse_document
 
     parsed = parse_document(str(path))
-    return (getattr(parsed, "full_text", "") or "")[:_PREVIEW_MAX_CHARS]
+    return (getattr(parsed, "full_text", "") or "")[:max_chars]
 
 
 @router.post("/v1/docs/classify/preview", response_model=V1ClassifyPreviewResponse)
@@ -637,7 +637,10 @@ async def v1_upload_doc(body: V1UploadRequest) -> V1UploadResponse:
         source_type=suffix.lstrip("."),
         category=body.category or "",
         size_bytes=size,
-        status="indexing",
+        # queued：已建档、排队等待入库闸门（未拿到并发槽位）。
+        # ingest_file 开跑时会把状态改回 indexing，完成后置 ready —— 界面据此区分
+        # 「排队中」与「真在索引」，避免批量导入时满屏都是「索引中」却毫无进度感。
+        status="queued",
         metadata=body.metadata or {},
         group_id=group_id,
         version=version,
@@ -656,7 +659,7 @@ async def v1_upload_doc(body: V1UploadRequest) -> V1UploadResponse:
     )
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
-    return V1UploadResponse(doc_id=doc_id, status="indexing")
+    return V1UploadResponse(doc_id=doc_id, status="queued")
 
 
 @router.delete("/v1/docs/{doc_id}", response_model=V1DeleteResponse)

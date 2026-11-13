@@ -161,3 +161,36 @@ class TestComposePrompt:
         monkeypatch.setattr(im, "_embed_text", _broken)
         prompt = await im.compose_intent_system_prompt("统计订单表行数")
         assert self._BLOCK_HEADER not in prompt
+
+
+# ---- 消歧块注入 prompt（2026-11-13）------------------------------------------------
+
+
+class TestComposeDisambiguation:
+    _HINT_HEADER = "# 易混淆意图消歧"
+
+    async def test_compose_injects_hint_block(self, monkeypatch, fake_embed):
+        from agent.graph import semantic_route as sr
+
+        class _StubRouter:
+            async def disambiguation_hints(self, text, top_k=None):
+                return [{"name": "db_query", "score": 0.91, "tree_hint": "只读查询，区别于删库"}]
+
+        monkeypatch.setattr(sr, "_default_router", _StubRouter())
+        prompt = await im.compose_intent_system_prompt("统计订单表行数")
+        assert self._HINT_HEADER in prompt
+        assert "db_query" in prompt
+        assert "只读查询，区别于删库" in prompt
+        assert "相似度 0.91" in prompt
+
+    async def test_compose_degrades_when_router_raises(self, monkeypatch, fake_embed):
+        from agent.graph import semantic_route as sr
+
+        class _BoomRouter:
+            async def disambiguation_hints(self, text, top_k=None):
+                raise RuntimeError("boom")
+
+        monkeypatch.setattr(sr, "_default_router", _BoomRouter())
+        prompt = await im.compose_intent_system_prompt("统计订单表行数")
+        assert self._HINT_HEADER not in prompt
+        assert "意图分析器" in prompt  # 基础模板仍在，未因消歧故障丢失

@@ -1,5 +1,5 @@
 /**
- * TokenUsageBadge —— 「Agent: 就绪」旁的 Token 用量徽章 + 悬浮明细卡片。
+ * TokenUsageBadge —— Agent 状态徽标旁的 Token 用量徽章 + 悬浮明细卡片。
  *
  * 徽章本体：速率（↑/↓）+ 调用次数，始终可见。
  * 鼠标悬浮：旁边弹出小卡片展示全部明细（当日累计 tokens / 调用次数 /

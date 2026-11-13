@@ -220,6 +220,83 @@ async def test_review_llm_unavailable_falls_back_pending(client, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_review_timeout_falls_back_pending_not_stuck_reviewing(client, monkeypatch):
+    """BUGFIX #202：审核超时后状态必须收敛到 pending，不能永远停在 reviewing。"""
+    import asyncio
+
+    from agent.ops import api as ops_api
+
+    row = _upload(client)
+
+    async def hang(_messages):
+        await asyncio.sleep(30)
+        return "{}"
+
+    monkeypatch.setattr(ops_api, "_make_summarize_llm", lambda: hang)
+    monkeypatch.setattr(ops_api.settings, "ops_review_timeout_sec", 0.05, raising=False)
+
+    r = client.post(f"/ops/case/files/{row['id']}/review")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "pending"
+    assert "超时" in body["review_note"]
+
+
+@pytest.mark.asyncio
+async def test_review_unexpected_error_falls_back_pending(client, monkeypatch):
+    """BUGFIX #202：未预期异常也不许把材料留在 reviewing。"""
+    from agent.ops import api as ops_api
+
+    row = _upload(client)
+
+    async def boom(_messages):
+        raise ValueError("模型返回了奇怪的东西")
+
+    monkeypatch.setattr(ops_api, "_make_summarize_llm", lambda: boom)
+
+    with pytest.raises(ValueError):
+        client.post(f"/ops/case/files/{row['id']}/review")
+
+    got = client.get("/ops/case", params={"project_name": "bank", "feature_id": "ops_open"}).json()
+    assert got["files"][0]["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_orphaned_reviewing_reaped_on_read(client):
+    """BUGFIX #202：Agent 重启后遗留的 reviewing 材料，读取 Case 时自愈为 pending。"""
+    from agent.ops import api as ops_api
+
+    row = _upload(client)
+    store = ops_api._get_case_storage()
+    store.update_file(row["id"], status="reviewing")
+
+    # 模拟「上次 Agent 被杀」→ reviewing 但本进程没有在跑
+    got = client.get("/ops/case", params={"project_name": "bank", "feature_id": "ops_open"}).json()
+    assert got["files"][0]["status"] == "pending"
+    assert "被中断" in got["files"][0]["review_note"]
+
+
+@pytest.mark.asyncio
+async def test_inflight_review_not_reaped(client, monkeypatch):
+    """BUGFIX #202：正在真实审核中的材料不得被自愈掉。"""
+    import asyncio
+
+    from agent.ops import api as ops_api
+
+    row = _upload(client)
+
+    async def slow(_messages):
+        await asyncio.sleep(0.2)
+        return '{"verdict": "passed", "note": "ok"}'
+
+    monkeypatch.setattr(ops_api, "_make_summarize_llm", lambda: slow)
+    # 审核进行中：状态是 reviewing，但不得被 reap
+    ops_api._INFLIGHT_REVIEWS.add(row["id"])
+    assert ops_api._reap_orphaned_reviews(ops_api._get_case_storage()) == 0
+    ops_api._INFLIGHT_REVIEWS.discard(row["id"])
+
+
+@pytest.mark.asyncio
 async def test_review_image_vision_fallback(client, monkeypatch):
     from agent.ops import api as ops_api
 

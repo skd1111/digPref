@@ -5,10 +5,10 @@
  * 背景 bug：agentStatus 初始值为 'unknown'，此前全工程无任何调用方更新它，
  * 导致 TopBar / StatusBar 永远显示「Agent: 未连接」。
  *
- * 状态映射：
- *   chatStore.busy === true            → 'busy'（处理中…）
- *   /health 返回 2xx                    → 'ready'（就绪）
- *   /health 不可达                      → 'error'（出错）
+ * 状态映射（展示文案见 components/chrome/AgentStatusBadge.tsx）：
+ *   chatStore.busy === true            → 'busy'（运行中，动态动画图标）
+ *   /health 返回 2xx                    → 'ready'（未活动：进程活着但无任务）
+ *   /health 不可达                      → 'error'（未就绪：进程挂了）
  *
  * 生命周期：组件挂载时启动轮询（首次 1.5s，之后每 5s），卸载时清理。
  */
@@ -47,7 +47,7 @@ export function useAgentHealth(): void {
 
     timer = setTimeout(() => void check(), FIRST_DELAY_MS);
 
-    // chatStore.busy 变化即时同步 → 状态栏「处理中…」不依赖下一轮轮询
+    // chatStore.busy 变化即时同步 → 状态栏「运行中」不依赖下一轮轮询
     const unsub = useChatStore.subscribe((state, prev) => {
       if (state.busy !== prev.busy) {
         useUIStore.getState().setAgentStatus(state.busy ? 'busy' : 'idle');

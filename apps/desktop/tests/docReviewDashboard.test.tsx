@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { DocTextViewer } from "@/components/doc-review/DocTextViewer";
+import { DocTextViewer, jumpToBlock } from "@/components/doc-review/DocTextViewer";
 import { DocReviewDashboard } from "@/views/DocReviewDashboard";
 import { useDocReviewStore } from "@/store/docReviewStore";
 
@@ -95,5 +95,32 @@ describe("导入中进度动效", () => {
     useDocReviewStore.setState({ importingFile: "测试合同.doc" } as never);
     render(<DocReviewDashboard />);
     expect(screen.getByText(/正在导入「测试合同.doc」/)).toBeTruthy();
+  });
+});
+
+describe("定位跳转不惊动外层容器", () => {
+  // BUGFIX：原实现用 scrollIntoView，会顺带滚动 overflow:hidden 的外层裁剪容器，
+  // 把审核页顶部「审批工作台 / 文档审核 / 知识库」页签行整行卷出可视区。
+  it("jumpToBlock 只滚原文面板，不调 scrollIntoView", () => {
+    const scroller = document.createElement("div");
+    scroller.setAttribute("data-doc-scroll", "");
+    const block = document.createElement("p");
+    block.id = "block-p1b1";
+    scroller.appendChild(block);
+    document.body.appendChild(scroller);
+
+    type WithScrollIntoView = { scrollIntoView?: (arg?: unknown) => void };
+    const proto = Element.prototype as unknown as WithScrollIntoView;
+    const original = proto.scrollIntoView;
+    const spy = vi.fn();
+    proto.scrollIntoView = spy;
+    try {
+      jumpToBlock("p1b1");
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      if (original) proto.scrollIntoView = original;
+      else delete proto.scrollIntoView;
+      document.body.removeChild(scroller);
+    }
   });
 });

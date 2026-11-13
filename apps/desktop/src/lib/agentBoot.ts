@@ -57,7 +57,7 @@ function markReady(elapsedMs: number | null): void {
   stopReprobe();
   const ui = useUIStore.getState();
   ui.setAgentBoot({ state: 'ready', elapsedMs });
-  // 状态栏立刻转「Agent: 就绪」，不等 useAgentHealth 的下一轮（最长 5s）
+  // 状态栏立刻转「Agent: 未活动」，不等 useAgentHealth 的下一轮（最长 5s）
   if (!useChatStore.getState().busy) ui.setAgentStatus('ready');
 }
 

@@ -10,10 +10,13 @@
  */
 import { create } from "zustand";
 import type {
+  CredentialAsset,
+  OpsBusinessTask,
   OpsCaseDraft,
   OpsCaseFile,
   OpsCaseQa,
   OpsCaseState,
+  OpsTaskStartMeta,
 } from "@/types/ops";
 import { ipc } from "@/ipc/invoke";
 
@@ -30,6 +33,11 @@ export interface DraftOcrFillResult {
   source: string;
   text_chars: number;
   text_preview: string;
+  /**
+   * 识别底图入库结果（凭证预览，2026-11-09）：这张图不进入专家审核，
+   * 只作为凭证影像留档，面板点录入字段时靠它的识别块定位高亮区域。
+   */
+  credential_image?: CredentialAsset | null | undefined;
 }
 
 function toFile(raw: Record<string, unknown>): OpsCaseFile {
@@ -44,12 +52,24 @@ function toDraft(raw: Record<string, unknown>): OpsCaseDraft {
   return {
     ...(raw as unknown as OpsCaseDraft),
     template: Array.isArray((raw as { template?: unknown }).template)
-      ? ((raw as { template: OpsCaseDraft["template"] }).template)
+      ? (raw as { template: OpsCaseDraft["template"] }).template
       : [],
     values:
       raw.values && typeof raw.values === "object"
         ? (raw.values as Record<string, string>)
         : {},
+  };
+}
+
+/** 业务台账行（业务汇总） */
+function toTask(raw: unknown): OpsBusinessTask {
+  const rec = (raw ?? {}) as Record<string, unknown>;
+  const pending = rec.pending_items;
+  return {
+    ...(rec as unknown as OpsBusinessTask),
+    pending_items: Array.isArray(pending)
+      ? (pending as OpsBusinessTask["pending_items"])
+      : [],
   };
 }
 
@@ -92,22 +112,43 @@ interface OpsCaseStore extends OpsCaseState {
   clearCase: (projectName: string, featureId: string) => Promise<boolean>;
   /** 用户查看某专家团页签 → 清除该团未读提示 */
   markTeamRead: (teamId: string) => void;
+  /** 面板消费「直开草稿 / 新草稿」标记后清标（2026-11-09）：
+   *  不清的话离开业务办理再回来（组件重挂）会重复弹草稿抽屉 */
+  consumeDraftSignals: () => void;
   attachFiles: (
     teamId: string,
     memberKey: string,
     files: File[],
+    /** 业务上下文（业务汇总建档用：业务大类 / 小类 / 标题） */
+    taskMeta?: OpsTaskStartMeta,
   ) => Promise<void>;
   reviewFile: (fileId: string) => Promise<void>;
-  overrideFile: (fileId: string, status: string, note?: string) => Promise<void>;
+  overrideFile: (
+    fileId: string,
+    status: string,
+    note?: string,
+  ) => Promise<void>;
   deleteFile: (fileId: string) => Promise<void>;
-  askExpert: (teamId: string, memberKey: string, question: string) => Promise<void>;
+  askExpert: (
+    teamId: string,
+    memberKey: string,
+    question: string,
+  ) => Promise<void>;
+  /** 业务发起建档（上传第一份材料时调；幂等） */
+  startTask: (meta: OpsTaskStartMeta) => Promise<void>;
+  /** 人工挂起：当前业务界面只读冻结（业务汇总） */
+  suspendTask: () => Promise<void>;
+  /** 恢复办理：解除挂起，按材料现状重算状态 */
+  resumeTask: () => Promise<void>;
+  /** 当前业务是否处于挂起状态（挂起 → 界面只读） */
+  isSuspended: () => boolean;
   /** 交付物模板直开草稿（零 LLM）：创建/复用草稿并返回 id；失败返 null */
   createDirectDraft: (
     teamId: string,
     memberKey: string,
     outputName: string,
   ) => Promise<string | null>;
-  /** 最近一次直开的草稿 id（面板据此自动全屏展开表单） */
+  /** 最近一次直开的草稿 id（面板据此拉出右侧交付草稿抽屉） */
   lastDirectDraftId: string;
   /** 本次会话新到达的草稿 id（专家回答/直开）：面板据此自动展开草稿区；
    *  loadCase 恢复的历史草稿不置位 → 启动/切业务不自动弹出表单（BUGFIX #134） */
@@ -115,11 +156,22 @@ interface OpsCaseStore extends OpsCaseState {
   /** 交付草稿（BUGFIX #78）：保存填写值 / 提交审核 */
   saveDraft: (draftId: string, values: Record<string, string>) => Promise<void>;
   submitDraft: (draftId: string) => Promise<boolean>;
-  /** 上传文件 → OCR/解析 → 模型抽取字段值（不落库；调用方合并后 saveDraft） */
-  ocrFillDraft: (draftId: string, file: File) => Promise<DraftOcrFillResult>;
+  /** 上传文件 → OCR/解析 → 模型抽取字段值（不落库；调用方合并后 saveDraft）。
+   *  taskMeta：首次用「上传文件 OCR 自动填入」即视为业务发起 → 顺手建档，
+   *  否则这类业务永远没有台账（挂起不可用、业务汇总查不到，BUGFIX #212） */
+  ocrFillDraft: (
+    draftId: string,
+    file: File,
+    taskMeta?: OpsTaskStartMeta,
+  ) => Promise<DraftOcrFillResult>;
   exportCase: (
     targetPath: string,
-    meta: { featureName?: string; teamName?: string; teamId?: string; checklist?: string[] },
+    meta: {
+      featureName?: string;
+      teamName?: string;
+      teamId?: string;
+      checklist?: string[];
+    },
   ) => Promise<boolean>;
   clearError: () => void;
   /** 静默重拉 Case（审核失败后同步后端状态） */
@@ -138,14 +190,19 @@ function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** Agent 未就绪的瞬态错误（启动竞态：前端请求早于 Agent 监听 8765） */
+/** Agent 未就绪 / 响应体截断的瞬态错误（启动竞态：前端请求早于 Agent 监听 8765；
+ *  或 Agent 单 worker 忙时 body 传完前被中断，Rust 报 decoding/read_body，BUGFIX #207） */
 function isTransient(e: unknown): boolean {
   const m = errMsg(e).toLowerCase();
   return (
     m.includes("error sending request") || // Rust reqwest 连接失败（拒绝/超时/DNS）
     m.includes("connection refused") ||
     m.includes("failed to fetch") ||
-    m.includes("network")
+    m.includes("network") ||
+    // 响应体截断/解码失败：Rust 侧已有 3 次有界重试，仍冒泡到这里说明还在抖，
+    // 静默退避再试一轮即可自愈，不该把红字甩给用户（与 #197 同源）
+    m.includes("decoding response body") ||
+    m.includes("read_body")
   );
 }
 
@@ -164,6 +221,7 @@ export const useOpsCaseStore = create<OpsCaseStore>((set, get) => ({
   files: [],
   qa: [],
   drafts: [],
+  task: null,
   loading: false,
   error: null,
   busyMembers: {},
@@ -192,6 +250,8 @@ export const useOpsCaseStore = create<OpsCaseStore>((set, get) => ({
           files: (r.files ?? []).map(toFile),
           qa: (r.qa ?? []).map(toQa),
           drafts: (r.drafts ?? []).map(toDraft),
+          // 业务台账状态（业务汇总）：挂起 → 界面只读冻结
+          task: r.task ? toTask(r.task) : null,
           loading: false,
           // 初次加载的历史结果不算未读（避免一进页面满屏红点）
           unreadByTeam: {},
@@ -221,6 +281,7 @@ export const useOpsCaseStore = create<OpsCaseStore>((set, get) => ({
       files: [],
       qa: [],
       drafts: [],
+      task: null,
       busyMembers: {},
       error: null,
       unreadByTeam: {},
@@ -228,6 +289,48 @@ export const useOpsCaseStore = create<OpsCaseStore>((set, get) => ({
       lastDirectDraftId: "",
       lastNewDraftId: "",
     }),
+
+  /** 当前业务是否挂起（挂起 → 界面只读冻结，不可上传/提问/审核/导出） */
+  isSuspended: () => get().task?.status === "suspended",
+
+  /** 业务发起建档（幂等）：上传第一份材料时登记到业务台账（业务汇总） */
+  startTask: async (meta) => {
+    const caseId = get().case_id;
+    if (!caseId) return;
+    try {
+      const row = await ipc.opsTaskStart({ case_id: caseId, ...meta });
+      set({ task: toTask(row) });
+    } catch (e) {
+      // 建档失败不阻断上传（后端 case/files 还有兵底建档），但必须可见：
+      // 没台账 → 挂起按钮禁用、业务汇总查不到，静默失败会让人以为功能没做
+      console.warn("[ops] 业务建档失败", e);
+      set({ error: `业务建档失败：${errMsg(e)}（挂起与业务汇总暂不可用）` });
+    }
+  },
+
+  /** 人工挂起：当前业务界面只读冻结（客户经理去办别的业务） */
+  suspendTask: async () => {
+    const t = get().task;
+    if (!t) return;
+    try {
+      const row = await ipc.opsTaskStatus(t.id, { action: "suspend" });
+      set({ task: toTask(row) });
+    } catch (e) {
+      set({ error: errMsg(e) });
+    }
+  },
+
+  /** 恢复办理：解除挂起，按材料现状重算状态（有待处理项 → 人工确认） */
+  resumeTask: async () => {
+    const t = get().task;
+    if (!t) return;
+    try {
+      const row = await ipc.opsTaskStatus(t.id, { action: "resume" });
+      set({ task: toTask(row) });
+    } catch (e) {
+      set({ error: errMsg(e) });
+    }
+  },
 
   showRiskAudit: (fileId) => set({ riskAuditFileId: fileId }),
 
@@ -254,9 +357,21 @@ export const useOpsCaseStore = create<OpsCaseStore>((set, get) => ({
       return { unreadByTeam: next };
     }),
 
-  attachFiles: async (teamId, memberKey, files) => {
+  consumeDraftSignals: () =>
+    set({ lastDirectDraftId: "", lastNewDraftId: "" }),
+
+  attachFiles: async (teamId, memberKey, files, taskMeta) => {
     const caseId = get().case_id;
     if (!caseId || files.length === 0) return;
+    if (get().isSuspended()) {
+      set({ error: "本业务已挂起，恢复办理后才能继续上传材料" });
+      return;
+    }
+    // 业务发起即建档（业务汇总）：首次上传材料时把业务登记进台账；
+    // 已结束的台账补了新材料 → 重新建档（回到「正在办理」）
+    if (taskMeta && (!get().task || get().task?.status === "closed")) {
+      await get().startTask(taskMeta);
+    }
     set(setBusy(memberKey, "uploading"));
     try {
       for (const file of files) {
@@ -284,6 +399,10 @@ export const useOpsCaseStore = create<OpsCaseStore>((set, get) => ({
   reviewFile: async (fileId) => {
     const target = get().files.find((f) => f.id === fileId);
     if (!target) return;
+    if (get().isSuspended()) {
+      set({ error: "本业务已挂起，恢复办理后才能重新审核" });
+      return;
+    }
     set(setBusy(target.member_key, "reviewing"));
     set((s) => ({
       files: s.files.map((f) =>
@@ -322,6 +441,10 @@ export const useOpsCaseStore = create<OpsCaseStore>((set, get) => ({
   },
 
   overrideFile: async (fileId, status, note) => {
+    if (get().isSuspended()) {
+      set({ error: "本业务已挂起，恢复办理后才能改判" });
+      return;
+    }
     try {
       const row = await ipc.opsCaseFileOverride(fileId, {
         status,
@@ -350,6 +473,10 @@ export const useOpsCaseStore = create<OpsCaseStore>((set, get) => ({
   askExpert: async (teamId, memberKey, question) => {
     const caseId = get().case_id;
     if (!caseId || !question.trim()) return;
+    if (get().isSuspended()) {
+      set({ error: "本业务已挂起，恢复办理后才能提问" });
+      return;
+    }
     set(setBusy(memberKey, "asking"));
     try {
       const r = await ipc.opsCaseAsk({
@@ -387,7 +514,9 @@ export const useOpsCaseStore = create<OpsCaseStore>((set, get) => ({
       // 幂等：后端复用既有草稿时前端不重复追加，只把它设为直开目标；
       // lastNewDraftId 同步置位 → 草稿区展开（即使是复用旧草稿也要看见，BUGFIX #134）
       set((s) => ({
-        drafts: s.drafts.some((d) => d.id === draft.id) ? s.drafts : [...s.drafts, draft],
+        drafts: s.drafts.some((d) => d.id === draft.id)
+          ? s.drafts
+          : [...s.drafts, draft],
         lastDirectDraftId: draft.id,
         lastNewDraftId: draft.id,
       }));
@@ -436,13 +565,22 @@ export const useOpsCaseStore = create<OpsCaseStore>((set, get) => ({
     }
   },
 
-  ocrFillDraft: async (draftId, file) => {
+  ocrFillDraft: async (draftId, file, taskMeta) => {
     const content = await readFileAsBase64(file);
     try {
-      return await ipc.opsCaseDraftOcrFill(draftId, {
+      // 业务发起即建档：草稿 OCR 上传也算发起（之前只走专家卡上传才建档，
+      // 靠 OCR 填单办业务 → 台账永远为空 → 挂起/业务汇总全部不可用）
+      if (taskMeta && !get().task) await get().startTask(taskMeta);
+      const r = await ipc.opsCaseDraftOcrFill(draftId, {
         file_name: file.name,
         content_base64: content,
       });
+      // credential_image 是凭证底图行（后端 _asset_brief 结构），这里按已知类型收拢
+      return {
+        ...r,
+        credential_image: (r.credential_image ??
+          null) as CredentialAsset | null,
+      };
     } catch (e) {
       set({ error: errMsg(e) });
       throw e;
@@ -452,6 +590,10 @@ export const useOpsCaseStore = create<OpsCaseStore>((set, get) => ({
   exportCase: async (targetPath, meta) => {
     const caseId = get().case_id;
     if (!caseId) return false;
+    if (get().isSuspended()) {
+      set({ error: "本业务已挂起，恢复办理后才能导出交付物" });
+      return false;
+    }
     set({ exporting: true, error: null });
     try {
       await ipc.opsCaseExport({

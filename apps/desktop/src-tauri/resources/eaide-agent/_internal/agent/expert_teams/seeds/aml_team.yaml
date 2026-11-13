@@ -46,6 +46,15 @@ members:
         - { name: screening, label: 名单与制裁筛查结果, type: textarea, required: false }
         - { name: conclusion, label: 分析结论, type: select, required: true, options: [暂无明显异常, 存在疑点需核实, 建议强化尽调, 建议移交上报] }
         - { name: verify_items, label: 需人工核实事项, type: textarea, required: false }
+    credentials:
+      - name: 可疑交易分析工作底稿
+        required: false
+        media: any
+        hint: 已有纸质/电子底稿可上传，用于比对分析口径
+        keywords: [底稿, 分析, 可疑交易]
+        fields:
+          - { name: case_no, label: 案件编号 }
+          - { name: alert_date, label: 预警日期 }
     prompt: |
       你是反洗钱分析主管，负责把预警转成结构化分析初稿。你的任务：
       1. 核实触发原因；2. 汇总画像、交易、名单与核实结果；
@@ -74,6 +83,17 @@ members:
         - { name: account_profile, label: 账户与产品情况, type: textarea, required: false }
         - { name: match_judgement, label: 身份与交易匹配性, type: select, required: true, options: [匹配, 存在不符, 严重不符, 资料不足] }
         - { name: risk_tags, label: 风险特征标签, type: textarea, required: false }
+    credentials:
+      - name: 客户身份影像
+        required: true
+        media: image
+        hint: 自然人证件或单位证照，需与系统登记一致
+        keywords: [身份, 证件, 客户影像, 证照]
+        fields:
+          - { name: customer_name, label: 客户名称 }
+          - { name: id_no, label: 证件号码 }
+          - { name: occupation, label: 职业/经营范围 }
+          - { name: address, label: 住所地 }
     prompt: |
       你是客户画像专家，负责判断客户身份与交易是否匹配。你的任务：
       1. 汇总身份与账户信息；2. 判断匹配性；3. 识别关联与受益所有人；
@@ -103,6 +123,16 @@ members:
         - { name: pattern, label: 可疑模式, type: textarea, required: true }
         - { name: key_txns, label: 重点交易（时间｜金额｜对手｜摘要）, type: textarea, required: false }
         - { name: flow, label: 资金来源与去向, type: textarea, required: false }
+    credentials:
+      - name: 交易背景单据（合同或发票）
+        required: false
+        media: image
+        hint: 说明资金用途，金额与交易日期需与流水对应
+        keywords: [合同, 发票, 订单, 货运]
+        fields:
+          - { name: contract_no, label: 合同/发票号 }
+          - { name: amount, label: 金额 }
+          - { name: txn_date, label: 交易日期 }
     prompt: |
       你是交易分析专家，负责识别可疑资金模式。你的任务：
       1. 分析交易特征；2. 识别可疑模式；3. 追踪资金流向；
@@ -160,6 +190,16 @@ members:
         - { name: questions, label: 核实问题与客户答复, type: textarea, required: true }
         - { name: evidence, label: 支撑证据, type: textarea, required: false }
         - { name: pending, label: 未完成核实事项, type: textarea, required: false }
+    credentials:
+      - name: 人工核实记录或现场照片
+        required: false
+        media: any
+        hint: 电话/上门核实留痕，需含时间与核实人
+        keywords: [核实, 访谈, 上门, 现场, 照片]
+        fields:
+          - { name: verify_method, label: 核实方式 }
+          - { name: verify_date, label: 核实时间 }
+          - { name: verifier, label: 核实人 }
     prompt: |
       你是核实记录专家，负责让核实过程可追溯。你的任务：
       1. 设计核实问题；2. 记录核实结果；3. 判断解释合理性；

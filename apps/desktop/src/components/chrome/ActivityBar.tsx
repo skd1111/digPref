@@ -10,7 +10,7 @@
  */
 import { useState } from 'react';
 import { useCollabStore, selectMentionCount } from '@/store/collabStore';
-import { type ActivityId } from '@/store/uiStore';
+import { useUIStore, type ActivityId } from '@/store/uiStore';
 import {
   BookIcon,
   BracesIcon,
@@ -23,6 +23,7 @@ import {
   PlayIcon,
   SearchIcon,
   SettingsIcon,
+  TableIcon,
   UserIcon,
   type IconComponent,
 } from '@/components/ui/Icons';
@@ -40,18 +41,24 @@ interface ActivityItem {
   icon: IconComponent;
   /** 是否显示红点 badge（Phase 9 @ 我的未读数） */
   badge?: 'mentionCount';
+  /** 2026-11-09（用户要求）：隐藏占位/装饰入口（审计/版本、运行/调试、扩展、代码符号）。
+   *  保留条目便于日后恢复：渲染时 filter 掉，ActivityId 类型与 TITLES 不动。 */
+  hidden?: boolean;
+  /** 2026-11-09（用户要求）：资源管理器（系统资产）只在开发模式展示，
+   *  运营/审核/数据 3 个专家模式不渲染该入口（专家工作台自带左栏）。 */
+  devOnly?: boolean;
 }
 
 const ITEMS: ActivityItem[] = [
-  { id: 'explorer', label: 'Explorer\n系统资产', icon: FolderIcon },
+  { id: 'explorer', label: 'Explorer\n系统资产', icon: FolderIcon, devOnly: true },
   { id: 'search', label: 'Search\n搜索', icon: SearchIcon },
-  { id: 'source-control', label: 'Source Control\n审计 / 版本', icon: GitBranchIcon },
-  { id: 'run-debug', label: 'Run and Debug\n运行 / 调试', icon: PlayIcon },
-  { id: 'extensions', label: 'Extensions\n扩展', icon: BlocksIcon },
+  // 2026-11-09（用户要求）：以下均为占位/装饰入口，隐藏不渲染（hidden 过滤，见渲染处）
+  { id: 'source-control', label: 'Source Control\n审计 / 版本', icon: GitBranchIcon, hidden: true },
+  { id: 'run-debug', label: 'Run and Debug\n运行 / 调试', icon: PlayIcon, hidden: true },
+  { id: 'extensions', label: 'Extensions\n扩展', icon: BlocksIcon, hidden: true },
   { id: 'collab', label: 'Collaboration\n任务级协作', icon: MessageIcon, badge: 'mentionCount' },
-  // Phase 2F V0 收尾 (2026-07-28)：代码符号搜索顶级入口
-  // 与 search activity 顶 tab 的 symbol 模式视觉一致，全屏渲染 320px 双栏（SideBar 折叠）
-  { id: 'code-nav', label: 'Code Nav\n代码符号', icon: BracesIcon },
+  // Phase 2F V0 收尾 (2026-07-28)：代码符号搜索顶级入口 —— 2026-11-09 隐藏（用户要求）
+  { id: 'code-nav', label: 'Code Nav\n代码符号', icon: BracesIcon, hidden: true },
   // Phase 6 V1.5 (2026-07-31)：会话管理顶级入口
   // 复用 SideBar 280px 宽度，SessionsPanel 渲染在侧栏
   { id: 'sessions', label: 'Sessions\n会话管理', icon: HistoryIcon },
@@ -59,6 +66,8 @@ const ITEMS: ActivityItem[] = [
   { id: 'requirements', label: 'Requirements\n需求工作台', icon: ClipboardIcon },
   // 数据字典：独立入口（原运营工作台右侧 tab 迁出，公共参数维护）
   { id: 'data-dict', label: 'Data Dictionary\n数据字典', icon: BookIcon },
+  // 业务汇总：业务办理台账查询（2026-11-09，全屏页，横切所有模式）
+  { id: 'biz-summary', label: 'Business Summary\n业务汇总', icon: TableIcon },
 ];
 
 interface Props {
@@ -69,12 +78,17 @@ interface Props {
 export function ActivityBar({ active, onChange }: Props): JSX.Element {
   // Phase 9：协作图标显示 @ 我的未读数
   const mentionCount = useCollabStore((s) => s.contexts.length) > 0 ? selectMentionCount() : 0;
+  // 2026-11-09（用户要求）：资源管理器只在开发模式展示，专家模式不渲染该入口
+  const mode = useUIStore((s) => s.mode);
+  const visibleItems = ITEMS.filter(
+    (item) => !item.hidden && (!item.devOnly || mode === 'full'),
+  );
   return (
     <nav
       className="flex w-[48px] flex-col items-stretch select-none"
       style={{ backgroundColor: '#f3f3f3' }}
     >
-      {ITEMS.map((item) => {
+      {visibleItems.map((item) => {
         const isActive = item.id === active;
         const showBadge = item.badge === 'mentionCount' && mentionCount > 0;
         const badgeLabel = mentionCount > 9 ? '9+' : String(mentionCount);
@@ -85,9 +99,7 @@ export function ActivityBar({ active, onChange }: Props): JSX.Element {
             type="button"
             title={item.label}
             onClick={() => onChange(item.id)}
-            className={`relative flex h-[48px] w-[48px] items-center justify-center transition-colors hover:text-gray-900${
-              isActive && item.id === 'data-dict' ? ' data-dict-active' : ''
-            }`}
+            className="relative flex h-[48px] w-[48px] items-center justify-center transition-colors hover:text-gray-900"
             style={{
               color: isActive ? '#1f1f1f' : '#616161',
               borderLeft: isActive ? '2px solid #007acc' : '2px solid transparent',

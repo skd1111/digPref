@@ -2,34 +2,25 @@
  * StatusBar — 底部 22px 状态栏（VSCode 风格）。
  *
  * 数据来源：
- *   - agentStatus: uiStore（由 useAgentStream / 后端轮询设置）
+ *   - agentStatus: uiStore（由 useAgentStream / 后端轮询设置）→ AgentStatusBadge
  *   - errorCount / warnCount: uiStore
  *   - cursor: uiStore（用户在 Monaco 里移动光标时更新）
  */
 import { useEffect, useState } from 'react';
 import { TokenUsageBadge } from '@/components/chrome/TokenUsageBadge';
+import { AgentStatusBadge } from '@/components/chrome/AgentStatusBadge';
 import { useUIStore } from '@/store/uiStore';
 import {
   BellIcon,
   ErrorCircleIcon,
   FolderIcon,
-  MessageIcon,
   RefreshIcon,
   SearchIcon,
   WarningIcon,
   type IconComponent,
 } from '@/components/ui/Icons';
 
-const AGENT_LABEL = {
-  idle: 'Agent: 空闲',
-  busy: 'Agent: 处理中…',
-  error: 'Agent: 未连接',
-  ready: 'Agent: 就绪',
-  unknown: 'Agent: 未知',
-} as const;
-
 export function StatusBar(): JSX.Element {
-  const agentStatus = useUIStore((s) => s.agentStatus);
   const errorCount = useUIStore((s) => s.errorCount);
   const warnCount = useUIStore((s) => s.warnCount);
   const cursorLine = useUIStore((s) => s.cursorLine);
@@ -58,7 +49,10 @@ export function StatusBar(): JSX.Element {
         />
         <StatusItem icon={WarningIcon} label={String(warnCount)} />
         <StatusItem icon={BellIcon} label="0" />
-        <StatusItem icon={MessageIcon} label={AGENT_LABEL[agentStatus]} />
+        {/* Agent 状态：运行中显示动态动画图标；未活动 / 未就绪为静态图标 */}
+        <span className="flex h-full items-center px-2">
+          <AgentStatusBadge size={13} />
+        </span>
         {/* Token 用量：实时速率（↑上传/↓下载）+ 当日总量，2s 轮询；悬浮向上弹明细卡片 */}
         <span className="flex h-full items-center px-2">
           <TokenUsageBadge placement="top" />

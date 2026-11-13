@@ -1,10 +1,135 @@
-# EAIDE 变更日志
+# EAIDE 变更日志（第一册 · 已封存）
 
-> 本文件是项目唯一的版本变更记录台账。每Phase 交付或重大变更时必须在此追加记录??
+> ⚠️ **本册已封存（2026-11-09）**：收录至 v2.160 的全部历史记录，不再追加新条目。新条目请写 [CHANGELOG_2.md](CHANGELOG_2.md)（从 v2.161 起编号）。
+
+> 原为项目版本变更记录台账：每 Phase 交付或重大变更时在此追加记录（现已封存）。
+
+---
+
+## 2026-11-09
+
+### v2.160 — 凭证预览：专家团预设凭证节点 + 影像 OCR 块坐标落库 + 点要素名放大高亮对应区域
+
+- **背景**：办理业务本质上是「交齐一叠凭证影像」，但系统里三件事都是缺的：
+  ① 专家团里**并没有预设「这笔业务要传哪几张图」**（只有 Skill 的一行自由文本材料清单，挂不住字段与介质）；
+  ② 上传后只能按专家看到一堆文件，**看不出哪个凭证节点还是空的**；
+  ③ OCR 识别结果是**用完即丢**的（`/ocr-fill` 走临时目录，不落盘也不留坐标），所以「凭证上这个值是从哪儿识别出来的」永远无法回查，更做不了区域高亮。
+- **改动**：
+  - 凭证节点入资产（[expert_teams/models.py](../services/agent/src/agent/expert_teams/models.py) + [schema.py](../services/agent/src/agent/expert_teams/schema.py)）：`member.credentials = [{name, required, media(image|doc|any), hint, keywords[], fields[{name,label}]}]`，`normalize_credentials()` 统一清洗（节点≤20、要素≤12、media 白名单）；
+    6 个影像密集型内置团预置 33 个凭证节点（业务办理 7 / 资料预审 7 / 对公账户 7 / 智能填单 4 / 授权复核 4 / 反洗钱 4）；
+    因播种策略是「同名团一律不动存量文件」，新增 [seed.py](../services/agent/src/agent/expert_teams/seed.py) `backfill_credentials()`：仅向成员缺失的 `credentials` 键**补写**内置清单（用户自己编过的一行不改，回写保留 prompt 字块风格）；
+    设置页专家团编辑器新增「凭证清单」行式表单（名称/必传/介质/要求/归类关键词/期望要素）。
+  - 影像块坐标落库（[image_processing/ocr.py](../services/agent/src/agent/image_processing/ocr.py) 新增 `ocr_image_meta()`）：返回 `{engine,width,height,blocks[{text,bbox[[x,y]×4],confidence}],text,elapsed_ms}`，`_plain_bbox()` 把 numpy 坐标转成可 JSON 落库的普通数（原直接 dumps 会抛）；依赖缺失/超大/解码失败一律 `engine="none"` + 空块，不抛异常。
+    `case_files` 新增三列 `credential / classified_by / ocr_meta`，新表 `credential_images`（识别底图：case_id、team_id、member_key、draft_id、credential、file_name/path、source、values_json、ocr_meta）；
+    上传图片材料后由 `_schedule_asset_pipeline()` **后台**补跑「识别 → 关键词归类」，不让 RapidOCR 十几秒冷启动拖住上传。
+  - 归类与挂载（[ops/api.py](../services/agent/src/agent/ops/api.py)）：`_match_credential()` 关键词一级命中（keywords + 节点名拆词，自动丢掉「影像/材料/证明」这类泛词；文件名优先于识别文本）→ LLM 批量二级判定（本地优先三级降级，**只接受该成员候选节点名**，臆造的丢弃）→ 剩下的落「未归属」给人工拖；
+    新端点：`GET /ops/case/credentials`（节点+实挂资产+要素来源与齐备度聚合）、`POST /ops/case/classify-credentials`、`GET|PUT|POST|DELETE /ops/case/credential-asset/{id}`（一次拿回图片字节+块坐标 / 改归属 / 立即识别 / 删除）；`GET /ops/tasks/{id}` 附带 `credentials` 齐备度摘要。
+  - `/ocr-fill` 行为调整：填写值依旧**不写库**（用户核对后才提交，与 HITL 一致），但识别原图现在登记为 `credential_images` 底图 —— 不进入专家审核（避开二次审核噪声），只供凭证预览回查与区域定位；响应新增 `credential_image`，录入提示补一句「影像已归档到凭证『XX』」。
+  - 前端：新增 [CredentialPreviewModal.tsx](../apps/desktop/src/components/ops/CredentialPreviewModal.tsx)（左：按专家分组的凭证节点树 + 必传/已传/缺失 + 未归属区；右：影像工作区 + 要素清单）、[credentialStore.ts](../apps/desktop/src/store/credentialStore.ts)、纯函数层 [ocrLocate.ts](../apps/desktop/src/lib/ocrLocate.ts)（全半角/OCR 混淆字符归一、同行多块合并、值→区域定位、居中放大与以光标为锚的缩放数学）；
+    交互：滚轮缩放 + 拖拽平移 + 适应/1:1，**点要素名自动定位并闪烁描边**，无命中时给实话（手动录入/识别不清/尚未识别），未识别影像有「🔍 立即识别影像」出口，未归属材料可直接**拖到凭证节点**上挂载（跨专家拖拽被拒，避免悄悄改审核人）；
+    入口：办理界面页头新增「🪪 凭证预览 N/M」（缺张时红字「缺N」），材料行新增「🪪 凭证名」直达，业务汇总明细行显示「凭证必传 X/Y 已齐 · 缺…」并可打开同一弹窗（已结束/挂起为只读）。
+  - Rust 新增 6 个命令：`ops_case_credentials / ops_case_classify_credentials / ops_credential_asset_get / _assign / _recognize / _delete`。
+- **验证**：新增 [test_ops_credentials.py](../services/agent/tests/test_ops_credentials.py) 19 例（聚合口径、关键词归类、LLM 白名单、手动挂载与非法节点、底图登记/入库失败不阻断填表、台账摘要）+ [test_expert_teams_seed.py](../services/agent/tests/test_expert_teams_seed.py) 5 例（种子预置凭证、schema 拒非法 media、backfill 不覆盖用户清单且幂等）+ [ocrLocate.test.ts](../apps/desktop/tests/ocrLocate.test.ts) 20 例（归一化/跳块合并/居中缩放数学）+ [credentialPreview.test.tsx](../apps/desktop/tests/credentialPreview.test.tsx) 11 例（节点与缺失、点要素高亮、低置信提醒、手动录入不可定位、拖拽挂载与跨专家拒绝、只读态）；全量 pytest 3113 通过 / 10 跳过，vitest 73 文件 511 例全绿，`tsc --noEmit` 零错误，eslint 零告警，`ruff check/format` 全通过。
+- **边界**：本次只做**图片凭证**的区域定位（PDF/Word 沿用现有文本高亮，ocr_meta 为空时面板明说「不是图片，无法框区域」）；未预设凭证清单的团仍可查看全部已传材料但判断不了缺失；挂起/已结束业务只读。
+
+---
+
+### v2.159 — 业务汇总：业务发起即登记台账 + 四态流转（正在办理/挂起/人工确认/结束）+ 多维查询
+
+- **背景**：业务**只在办完之后**才留痕（现有「业务记录卡片」是导出交付物时 AI 生成的小结），**发起到办完之间没有任何台账** —— 客户经理中途挂起、材料被打回待处理时，管理层看不到「有哪些业务在办、卡在谁那里」；左侧栏也没有业务查询入口。
+- **改动**：
+  - 后端新增 [ops/tasks.py](../services/agent/src/agent/ops/tasks.py) + `business_tasks` 表（与 `business_records` 小结卡片**分表**，`case_id` 唯一 → 一条业务一行）：
+    - 状态四态：`in_progress` 正在办理 / `suspended` 挂起（人工）/ `manual_review` 人工确认（系统自动）/ `closed` 结束（系统自动）；
+    - 状态**派生式**同步 `_sync_task_status()`：按 Case 材料现状重算（被打回 / 审核异常 → 人工确认；处理完 → 回到办理中），挂起与已结束不自动改写（人工优先）；
+    - 触发点四处：上传材料（建档，兼底兵底建档）、审核出结果、人工改判、导出交付物；
+    - 新增端点：`POST /ops/tasks/start`（幂等建档）、`GET /ops/tasks`（状态/大类/小类/日期/关键词 + 各状态计数）、`GET /ops/tasks/{id}`（待处理项 + 材料进度）、`POST /ops/tasks/{id}/status`（挂起/恢复）；`GET /ops/case` 顺带带回台账状态。
+  - 前端新增 [BusinessSummaryView.tsx](../apps/desktop/src/views/BusinessSummaryView.tsx)（全屏查询页）：状态计数条（点一下即筛选、可多选）+ 筛选行（业务大类 / 小类 / 发起日期区间 / 关键词）+ 结果表 + 点行展开明细（待处理项 / 材料进度 / 关联小结）；[ActivityBar.tsx](../apps/desktop/src/components/chrome/ActivityBar.tsx) 新增「业务汇总」顶级入口（横切所有模式，含运营模式）。
+  - [ExpertWorkflowPanel.tsx](../apps/desktop/src/components/ops/ExpertWorkflowPanel.tsx)：页头新增「⏸ 挂起 / ▶ 恢复办理」+ 挂起横幅；挂起期间当前交易界面只读冻结（上传/提问/重审/改判/导出全禁），客户经理可去办另一个业务，回来接着原记录继续办。
+  - Rust 新增 `ops_task_list / ops_task_get / ops_task_status / ops_task_start` 四个 Tauri 命令。
+- **验证**：新增 [test_ops_tasks.py](../services/agent/tests/test_ops_tasks.py) 12 例 + [businessSummary.test.tsx](../apps/desktop/tests/businessSummary.test.tsx) 6 例；`services/agent` 全量 pytest 0 失败 / 0 错误（9 例因内网模型不可达跳过）；`apps/desktop` vitest 71 文件 / 478 例全绿；`npx tsc --noEmit` 零错误；改动文件 eslint 零告警；`ruff check` 全通过；`mypy --strict` 无新增错误；Rust `cargo check` 通过。
+
+---
+
+### v2.158 — 专家验收材料行瘦身：合规风险改独立按钮 + 审核结论直显 + 明细按需展开
+
+- **背景**：运营模式专家卡里的材料行太臃肿 —— 一张被打回的材料默认就铺开「步骤链 + 意见气泡 + 关键要素卡 + 证据链 + 操作按钮」，把整张专家卡撑满；而唯一真正要看的系统合规审核入口「⚠ 合规风险 N」只是一段红色小字，混在状态徽标旁边，正常人根本不会认为它可点（用户反馈：“合规风险按钮不太明确，正常人会点这里吗？”）。
+- **改动**：
+  - [ExpertWorkflowPanel.tsx](../apps/desktop/src/components/ops/ExpertWorkflowPanel.tsx) `CaseFileRow` 重排为三层结构：
+    - **摘要行**：文件名 + 结论徽标（✗ 打回 · AI）+ 低置信提示（`⚠N 待核`，不再是光秃秃的 `⚠N`）；
+    - **结果行（默认可见）**：专家审核意见直接显示（2 行截断、点开看全文），配色随结论状态（打回红 / 通过绿 / 待审橙）；意见与结论徽标同文（如都是「通过」）时不重复铺框；草稿材料的意见仍在草稿卡展示，材料行只给「审核意见见草稿卡」指引；
+    - **入口行（默认可见）**：`⚠ 合规风险 N` 改为**独立按钮**（走 `.btn btn-xs btn-danger` 体系，灰底红字红边，hover 变色）+ 「查看审核明细 / 收起审核明细」文字入口；
+    - **审核明细（默认收起）**：审核步骤链 / 关键要素卡 / 证据链 / 人工干预（重审 · 打回定位 · 通过 · 打回 · 删除）全部收在这里（此前被打回的材料默认展开，现在统一收起 —— 结论已经在结果行里直显）。
+- **验证**：`apps/desktop/tests/expertWorkflow.test.tsx` 新增 1 例（结论直显、明细默认收起、合规风险为 `.btn` 独立按钮且可点开报告），并同步更新 2 例受影响的用例（明细入口改为点「查看审核明细」、材料行默认不重复铺「通过」框）；`pnpm vitest run` 70 文件 / 472 例全绿；`npx tsc --noEmit` 零错误；`npx eslint --max-warnings=0`（改动文件）零告警。
+
+---
+
+### v2.157 — 交付草稿审核一直转圈：审核状态永久停在 reviewing 且无自愈入口
+
+- **背景**：运营模式交付草稿提交后，右侧抽屉一直显示「业务办理引导专家正在审核草稿」转圈，关应用重开仍然转圈，不报错也不出结果。查安装目录 `ops.db` 确认材料行 `status` 停在 `reviewing`、`updated_at` 停留在提交那一刻；对照 `logs/eaide.log`，提交请求发出后 Agent 随即被重启，请求被硬断在审核中途。根因是三处缺口叠加：① `_do_review_file` 是「先写 `status=reviewing` → 再调长耗时外部 LLM」，只有 LLM 不可用有回落分支，**超时 / 取消 / 未预期异常都没有兜底**；② 没有僵尸状态自愈（同类问题知识库侧 #198 已修，运营模式从未做）；③ 前端 `reviewing` 状态下没有重审入口，用户既不能重试也不能取消。
+- **改动**：
+  - [config.py](../services/agent/src/agent/config.py)：新增 `ops_review_timeout_sec`（默认 240s）—— 审核全流程墙钟上限。
+  - [ops/api.py](../services/agent/src/agent/ops/api.py)：`_do_review_file` 拆为「状态守护壳 + `_run_review_pipeline` 主体」。壳层用 `asyncio.wait_for` 加墙钟上限，`TimeoutError` / `CancelledError` / 未预期异常一律落回 `pending` 并写明原因与「可点重审」—— **任何路径都不再把材料留在 `reviewing`**。另新增进程级 `_INFLIGHT_REVIEWS` 登记表与 `_reap_orphaned_reviews()`，在 `GET /ops/case` 时触发自愈。
+  - [ops/cases.py](../services/agent/src/agent/ops/cases.py)：新增 `CaseStorage.reap_orphaned_reviews()` —— 把「状态是 reviewing 但本进程没在跑」的材料落回 `pending`，关联草稿从 `submitted` 退回 `draft`（可重新提交）。
+  - [main.py](../services/agent/src/agent/main.py)：Agent 启动时自愈一次（对齐知识库 orphan heal 的既有模式）。
+  - [ExpertWorkflowPanel.tsx](../apps/desktop/src/components/ops/ExpertWorkflowPanel.tsx)：材料行「↻ 重审」在 `reviewing` 状态同样可见；交付草稿卡（全屏 + 紧凑）转圈旁新增「↻ 重新审核」按钮 —— 不让用户对着转圈干等。
+  - [ops.rs](../apps/desktop/src-tauri/src/commands/ops.rs)：`ops_case_file_review` / `ops_case_draft_submit` 补 300s HTTP 超时 —— 否则 Agent 挂死时桌面端命令永远不返回。
+- **验证**：`services/agent/tests/test_ops_case.py` 新增 4 例（审核超时回落 pending、未预期异常回落 pending、僵尸 reviewing 读取时自愈、正在审核中的材料不被误自愈）；`apps/desktop/tests/expertWorkflow.test.tsx` 新增 1 例（审核中材料可见「↻ 重审」并能触发重新审核）。`services/agent` 全量 pytest 0 失败 / 0 错误（30 例因内网模型不可达跳过）；`apps/desktop` vitest 22 例全绿；`npx tsc --noEmit` 与 `npx eslint --max-warnings=0` 零告警；`ruff check` 全通过；`mypy --strict` 无新增错误（基线 1192 → 1189）；Rust `cargo check` 通过。
+
+---
+
+### v2.156 — 文件预览：Markdown frontmatter 渲染为元数据卡 + URL 不再被路径胶囊截断
+
+- **背景**：知识库法规文档（`legal-docs/法规库/**.md`，头部带 `---` 包裹的 YAML 元数据）点「预览」时，顶部 YAML 头被通用 Markdown 渲染器当正文输出 —— `title: … author: … publication_date: …` 挤在同一行、categories/tags 变成裸圆点列表，观感极差；其中 `urls` 还被「文件路径胶囊」规则截断（`https://flk.npc.gov.cn/detail?id=…` 被截成 `htt` + 一个蓝色胶囊 `detail?id=…`），用户看到的是一段坏掉的 URL。
+- **改动**：
+  - 新增 [frontmatter.ts](../apps/desktop/src/lib/frontmatter.ts)：零依赖 YAML-lite 解析器（标量 / 行内数组 / 块数组 / 引号 / 注释 / CRLF 归一 / 未闭合围栏兜底），配套 `fmText` / `fmItems` / `fmValue`（键名大小写不敏感，兼容 `LinkTitle` 写法）。
+  - 新增 [DocMetaCard.tsx](../apps/desktop/src/components/office/DocMetaCard.tsx)：frontmatter → 结构化元数据卡（标题 + 效力状态徽标 + 制定机关/法规层级 + 发布/施行日期 + 分类与标签胶囊 + 未识别字段兜底网格），右上角可收起/展开；`urls` 外链字段不展示（文档都在本地，外链无意义）。
+  - 新增 [MarkdownDoc.tsx](../apps/desktop/src/components/office/MarkdownDoc.tsx)：解析 frontmatter → 渲染元数据卡 + 正文（正文首行与 frontmatter 标题重复时自动去重）；[OfficePreviewPanel.tsx](../apps/desktop/src/components/office/OfficePreviewPanel.tsx) 的 md 分支改用它（无 frontmatter 的文档渲染结果不变）。
+  - [FilePathChip.tsx](../apps/desktop/src/components/chat/FilePathChip.tsx)：`FILE_PATH_RE` 加前置否定回顾 `(?<![A-Za-z0-9_])` —— 盘符规则 `[A-Za-z]:[\\/]` 会命中 `https://` 里的 `s:/`，导致 URL 被误判成文件路径（BUGFIX #201）。
+  - [globals.css](../apps/desktop/src/styles/globals.css)：新增 `.doc-meta*` 样式族（卡片 / 网格 / 胶囊）；日期列宽封顶 240px，宽预览面板下字段不散开。
+  - 知识库界面文案瘦身（用户反馈）：[KbPanel.tsx](../apps/desktop/src/components/doc-review/KbPanel.tsx) 右上角统计由「共 N 文档 · N 分块 · 向量就绪 · 重排就绪」精简为「共 N 文档」（仅保留必要的「需重建」告警，模型/重排就绪状态仍在设置页「知识库/RAG」概览可查）；[KbImportDialog.tsx](../apps/desktop/src/components/doc-review/KbImportDialog.tsx) 删除分类列的「AI 判定」徽标，底部提示改为「分类留「自动识别」时按内容自动归类」。
+- **验证**：新增 [frontmatter.test.ts](../apps/desktop/tests/frontmatter.test.ts) 12 例与 [markdownDoc.test.tsx](../apps/desktop/tests/markdownDoc.test.tsx) 8 例，[markdownPathLink.test.tsx](../apps/desktop/tests/markdownPathLink.test.tsx) 补 URL 回归 1 例；`pnpm vitest run --no-file-parallelism` 68 文件 / 463 例全绿；`npx tsc --noEmit` 与 `npx eslint --max-warnings=0` 零告警。
 
 ---
 
 ## 2026-11-06
+
+### v2.155 — Agent 状态徽标改版：运行中动态动画 SVG / 未活动待机环 / 未就绪叉号
+
+- **背景**：状态栏与顶栏的 Agent 状态原先只有纯文字（就绪 / 空闲 / 处理中… / 未连接），且两处各自维护一份文案表 —— 顶栏把 `unknown` 写成「未连接」、状态栏写成「未知」，同一个状态在两个位置显示不同说法；用户也无法一眼区分「Agent 进程活着但当前没任务」与「Agent 进程挂了」。
+- **改动**：
+  - 新增 [AgentStatusBadge.tsx](../apps/desktop/src/components/chrome/AgentStatusBadge.tsx)：状态 → { 文案 / 图标 / 配色 / 悬浮提示 } 的**单源映射** `AGENT_STATUS_META`，顶栏与状态栏共用一个组件，彻底消除两处文案漂移。三种可见形态：
+    - **运行中**（`busy`，绿色 `#10a37f`）：动态 SVG —— 缺口弧自转 + 核心点呼吸缩放；
+    - **未活动**（`ready` / `idle`，灰色 `#616161`）：静态待机圆环 —— Agent 进程正常但当前无任务在跑；
+    - **未就绪**（`error` 红色 `#cd3131` 叉号圆圈 / `unknown` 灰色 `#8a8a8a`）：健康检查探不通或尚未完成首次探测（灰色避免启动瞬间误报红色）。
+  - [Icons.tsx](../apps/desktop/src/components/ui/Icons.tsx)：新增 `AgentRunningIcon`（动态）与 `AgentIdleIcon`（静态待机环），沿用现有单色线性描边规范（`currentColor` 继承配色）。
+  - [globals.css](../apps/desktop/src/styles/globals.css)：新增 `@keyframes agent-status-spin`（1.1s 自转）与 `@keyframes agent-status-pulse`（1.6s 呼吸）+ `.agent-status-arc` / `.agent-status-core` 类；SVG 子元素用 `transform-box: fill-box` 锁定旋转中心在圆心。
+  - [TopBar.tsx](../apps/desktop/src/components/chrome/TopBar.tsx) / [StatusBar.tsx](../apps/desktop/src/components/chrome/StatusBar.tsx)：删除本地 `AGENT_LABEL` 常量表与旧图标（顶栏 ZapIcon / 状态栏 MessageIcon），改渲染 `<AgentStatusBadge />`。
+- **验证**：新增 [agentStatusBadge.test.tsx](../apps/desktop/tests/agentStatusBadge.test.tsx) 6 例（busy 文案 + 动画元素存在；ready/idle 文案 + 无动画元素 + 圆形构成；error 叉号构成；unknown 灰色防误报；三态配色；悬浮提示）；`pnpm vitest run tests/agentStatusBadge.test.tsx` 6 例全绿；`npx tsc --noEmit` 通过；`npx eslint --max-warnings=0` 对改动文件零告警；全量 `pnpm vitest run --no-file-parallelism` 64 文件 / 438 例中仅 `chatHistory` 1 例因 5s 超时未过（单独重跑 9 例全绿，为环境负载型 flaky，与本改动无关）。
+
+---
+
+### v2.154 — Rust dev profile 瘦身：target/debug 从 55.6GB 降到 4.5GB（回收 51GB）
+
+- **背景**：本机 `apps/desktop/src-tauri/target` 达 63.4GB，其中 `debug/` 占 **55.6GB（88%）**，而真正必须保留的交付物（release 安装包 + exe）仅约 0.3GB。根因是 `Cargo.toml` **未配置 `[profile.dev]`**，走默认值 `debug = 2`（全量调试信息）+ `incremental = true`：
+  - `debug/deps` **15.0GB / 7675 个文件** —— Windows MSVC 的 `.pdb` 按编译单元各存一份、不合并，单个 `.pdb` 达 156MB，`eaide_desktop_lib.lib` 达 1,145MB；
+  - `debug/incremental` **32.5GB** —— 增量编译的 session 目录**只增不删**，实测堆积 125 个 session（单个最大 459MB）。
+- **改动**：
+  - [Cargo.toml](../apps/desktop/src-tauri/Cargo.toml)：新增 `[profile.dev] debug = 1`（line-tables-only，断点/单步照常可用，watch 变量受限）+ `incremental = false` + `[profile.dev.package."*"] debug = 0`（第三方依赖不生成调试信息，栈回溯里依赖帧仍可见）。`incremental = false` 的依据：session 目录只增不删，而本项目 Rust 仅是 Tauri 壳 + builtin 工具（核心业务在 Python/TS），实测增量仅省 23s（有 session 11.2s vs 无 session 全量 34.3s），不值 33GB 常驻磁盘。
+  - [CLAUDE.md](../CLAUDE.md)：新增「Rust target 目录体积控制」小节 —— 复发排查点（`debug`/`incremental` 被改回默认值）+ 清理命令 `clean --profile dev`。
+  - 一次性清理 `target/debug/incremental` 及其历史残留，回收 **33.4GB**（删除耗时 8s @ 4.6GB/s）。
+- **验证**：全量重编通过（`cargo build --lib` exit 0）；CI 门禁 `cargo clippy --all-targets -- -D warnings` 通过（exit 0，零告警）；`target/debug/deps` 15.00 → **2.22 GB**、文件数 7675 → 1557、`eaide_desktop_lib.lib` 1145 → 305MB、最大 `.pdb` 156MB → 已无超大项；`target/debug/incremental` → **0.00 GB**（清空后重编验证：目录重建但 0 个 session，rustc 命令行已无 incremental 参数，配置确实生效）；`target/debug` 整体 55.64 → **4.47 GB**（↓92%，回收 51.2GB）、`target` 总计 63.41 → **12.27 GB**；`target/release` 7.77GB 未动（`bundle` 安装包完好）。代价：改 Rust 代码的编译耗时 11.2s → 34.3s。
+
+---
+
+### v2.153 — Windows 构建期临时目录重定向到 D 盘 + Rust 工具链路径可迁移
+
+- **背景**：本机 Rust/Cargo 环境体检结论 —— **编译产物（`target/`，约 64GB）本就在 D 盘**（位于 `apps/desktop/src-tauri/target`）；C 盘上仅有工具链本体与 crates 源缓存：`C:\Users\79834\.cargo`（registry 950MB + bin 171MB ≈ 1.1GB）、`C:\Users\79834\.rustup`（约 1.6GB），合计约 2.7GB。`CARGO_HOME` / `RUSTUP_HOME` / `CARGO_TARGET_DIR` 均**未设置**，走 Windows 默认路径。
+- **改动**：
+  - [build-all.bat](../build-all.bat)、[build-with-msvc.bat](../build-with-msvc.bat)（本机专用脚本，已被 `.gitignore` 第 90-91 行忽略、不入库）：新增 `TMP`/`TEMP` → `D:\RustTools\tmp` 重定向，构建期临时文件（rustc / MSVC link / PyInstaller 中间产物）不再占用 C 盘 `%TEMP%`；cargo 定位改为**优先读 `CARGO_HOME`**（未设置时回退 `%USERPROFILE%\.cargo\bin`），日后把工具链本体迁到 D 盘只需设 `CARGO_HOME`/`RUSTUP_HOME` 用户环境变量，无需再改脚本。
+  - [README.md](../README.md) 第 6 节、[CLAUDE.md](../CLAUDE.md)「Windows 下 Rust 的特殊坑」：补充临时目录重定向与工具链迁移说明，并沉淀两个 cmd 陷阱（① `if/else` 括号块内展开 `%PATH%` 会被 `Program Files (x86)` 的括号破坏块解析；② 无 `chcp 65001` 的 bat 里中文注释会被 GBK 误解析成命令）。
+- **验证**：`build-with-msvc.bat --version` → `cargo 1.97.1`；`build-with-msvc.bat build --lib` → `Finished dev profile in 56.30s`（exit 0）；cmd 会话内确认 `TEMP=D:\RustTools\tmp`、`TMP=D:\RustTools\tmp`、`CARGO_BIN=C:\Users\79834\.cargo\bin`（回退路径正确）；编译后 C 盘 `%TEMP%` 无 rustc/cargo 残留。
+
+---
 
 ### v2.152 — 知识库入库并发闸门（默认 2）+ 错误友好化
 
@@ -1221,16 +1346,20 @@
   8. **`services/agent/src/agent/config.py`**（修??~3 行） —??新增 `audit_expert_db_path` 配置
   9. **`services/agent/src/agent/main.py`**（修??~3 行） —??注册 `audit_api_router` ??FastAPI app
   10. **SSE 三处同步（CLAUDE.md §4??*??      - **Python** `graph/stream.py::_CHANNEL_BY_KIND` ??4 通道 `audit_task_pending/decided/evidence_added/compliance_done` ??`agent://audit_*`
+
   - **Python** `graph/stream.py` ??`_drain_audit_events()` 函数 + 流循??+ finally 各调一??      - **Rust** `sse_bridge.rs::channel` ??4 个常??+ `map_event_to_channel` 4 个新映射
   - **TS** `events.ts::EVT` ??4 ??`AUDIT_TASK_PENDING/DECIDED/EVIDENCE_ADDED/COMPLIANCE_DONE`
+
   11. **`services/agent/tests/test_audit_expert_v0.py`**（新??~310 ??/ 32 测试??—??models 14 + compliance 5 + events 1 + storage 3 + API 8 + stream 1 = 32 全过
 - **CLAUDE.md 6 红线遵守**??  - §1 HITL 不可绕过：audit_expert ??HITL 的审??审核层（用户主动 approve/reject）；不绕过；MFA + reason 是必??  - §2 _LOCAL_ONLY_TASKS：V0 不新增任务；审计本身是本地操??  - §3 Auto-Repair retry_count??：audit_expert 不影响主??  - §4 SSE 三处同步?? 新事件严格对??  - §5 凭证保险箱：audit_expert 不读凭证；MFA 自身（V1 接力）走凭证保险??  - §6 审计??schema：audit_expert.db 独立 4 表（approval_tasks + approval_actions + evidence_entries + compliance_checks），Python 端单写（不与 Rust 端共享）；V1 接力如需 Rust ??Tauri Command 写则??schema
 - **三关核验**??  - Python `uv run pytest services/agent/tests/test_audit_expert_v0.py -v` —??**32 passed**
+
   - Python `uv run pytest services/agent/tests/` —??**896 passed / 7 skipped / 0 failed**（v2.42 864 ??+32 = 896；零回归??  - Rust `build-with-msvc.bat check --lib` —??V0 不动 Rust 业务逻辑（SSE bridge 仅常??match arm?? ??warning??  - TS `pnpm exec tsc -b` —??**0 ??*（V0 仅追??EVT 常量??- **V0 端点清单**?? 个）??  - `POST /audit/tasks` —??创建审批任务 + 同步合规检??  - `GET /audit/tasks` —??列表（按 status / risk_level 过滤??  - `GET /audit/tasks/{id}` —??任务详情
   - `POST /audit/tasks/{id}/evidence` —??添加证据条目
   - `GET /audit/tasks/{id}/evidence` —??列证??  - `GET /audit/tasks/{id}/compliance` —??列合规检查结??  - `POST /audit/tasks/{id}/decide` —??决策（必填校??+ 签名链写??+ 任务状态更新）
   - `GET /audit/tasks/{id}/verify` —??验证签名链完整??  - `GET /audit/stats` —??统计
 - **V0 不做**（V1 接力）：
+
   - 前端 `AuditDashboard.tsx` 三栏布局（已存在 mock；V1 联调??  - ApprovalQueue + AuditApprovalCard + DiffViewer（Monaco??  - RSA 数字签名（V0 SHA-256 链式 hash??  - TOTP MFA 真集??  - OA/IM 集成（Phase 8 接力??  - 配置文件驱动的规则引擎（YAML / 数据库）
   - 双人复核（MFA + 二次审批??- **耗时**：V0 ~1 工作日（原计??3 天，本轮 V0 仅交付后端骨??+ 签名??+ 5 合规规则 + 8 端点 + 32 测试；前??UI + RSA + MFA ??V1??
 
@@ -1247,21 +1376,26 @@
   9. **`services/agent/src/agent/ssh/api.py`**（新??~270 行） —??FastAPI 8 端点（POST connect / disconnect/{session_id} / exec / sftp/ls / sftp/get；GET sessions / sessions/{session_id}/commands / stats?? Pydantic schema 6 ??+ 错误处理??00/401/404/500/502?? SSE 4 事件 emit + storage 自动??  10. **`services/agent/src/agent/config.py`**（修??~10 行） —??新增 `ssh_db_path` / `ssh_connect_timeout` (10s) / `ssh_command_timeout` (30s) / `ssh_max_sessions` (32) 4 个配??  11. **`services/agent/src/agent/llm/router.py`**（修??~3 行） —??`_LOCAL_ONLY_TASKS` 追加 `ssh_command_summary`（SSH 命令输出可能含敏感信息：系统配置 / 数据库连接串 / 业务数据????强制本地 Ollama
   12. **`services/agent/src/agent/main.py`**（修??~3 行） —??注册 `ssh_api_router` ??FastAPI app
   13. **SSE 三处同步（CLAUDE.md §4??*??      - **Python** `graph/stream.py::_CHANNEL_BY_KIND` ??4 通道 `ssh_connected/disconnected/command_done/error` ??`agent://ssh_*`
+
   - **Python** `graph/stream.py` ??`_drain_ssh_events()` 函数 + 流循??+ finally 各调一??      - **Rust** `sse_bridge.rs::channel` ??4 个常??+ `map_event_to_channel` 4 个新映射
   - **TS** `events.ts::EVT` ??4 ??`SSH_CONNECTED/DISCONNECTED/COMMAND_DONE/ERROR`
+
   14. **新依??`asyncssh==2.24.0`** —??uv pip install asyncssh（V0 PoC 改用 asyncssh 而非 russh，因 russh 0.5.0 pyproject.toml 解析问题??  15. **`services/agent/tests/test_ssh_v0.py`**（新??~360 ??/ 39 测试??—??models 16 + events 2 + storage 5 + session_manager 2 + client 4 + API 6 + server 2 + stream/router 2 = 39 全过
 - **CLAUDE.md 6 红线遵守**??  - §1 HITL 不可绕过：V0 SSH 是用户主动发起的连接（用户知道自己在连哪台机器）；写操作不在 SSH 层；V1 接力时如果集成到主图，由 `hitl_gate_node` 决定
+
   - §2 _LOCAL_ONLY_TASKS：注??`ssh_command_summary`（SSH 输出可能含敏感信息） —??强制本地 Ollama
   - §3 Auto-Repair retry_count??：SSH 命令不在主图重试链，由客户端超时控制
   - §4 SSE 三处同步?? 新事件（`ssh_connected/disconnected/command_done/error`）严格对??Python `stream.py` + Rust `sse_bridge.rs` + TS `events.ts`
   - §5 凭证保险箱：SSH 密码仅在 connect 时用一次（不写??storage、不写入 SSE）；_scrub_password helper ??password 字段??`{length: N}`
   - §6 审计??schema：ssh_sessions + ssh_commands 双表（Python 端单写，不与 Rust 端共享）；V1 接力如需 Rust ??Tauri Command 写则??schema
 - **三关核验**??  - Python `uv run pytest services/agent/tests/test_ssh_v0.py -v` —??**39 passed**（超额完成原计划 25 个）
+
   - Python `uv run pytest services/agent/tests/` —??**864 passed / 7 skipped / 0 failed**（v2.41 825 ??+39 = 864；零回归??  - Rust `build-with-msvc.bat check --lib` —??V0 不动 Rust 业务逻辑（SSE bridge 仅常??match arm?? ??warning??  - TS `pnpm exec tsc -b` —??**0 ??*（V0 仅追??EVT 常量??- **V0 端点清单**?? 个）??  - `POST /ssh/connect` —??创建会话 + 连接（password 认证??  - `POST /ssh/disconnect/{session_id}` —??断开指定 session
   - `POST /ssh/exec` —??在已??session 上执行命令（echo 模式??  - `POST /ssh/sftp/ls` —??列出 SFTP 目录
   - `POST /ssh/sftp/get` —??下载远程文件到本??  - `GET /ssh/sessions` —??列活动会??+ 数据库历??  - `GET /ssh/sessions/{session_id}/commands` —??命令历史
   - `GET /ssh/stats` —????host + 成功/失败统计
 - **V0 不做**（V1 接力）：
+
   - 真实 PTY 交互（双??stdin/stdout 流；create_process + PTYRequest??  - publickey 认证（V0 ??password??  - 端口转发（local / remote??  - 跳板机（ProxyJump??  - 已知主机 known_hosts 校验（V0 跳过；V1 ??keyring ??known_hosts??  - 会话自动重连 / 心跳 / 超时回收
   - 前端 SSH 面板 UI
   - 真实 asyncssh SSHServer（V0 ??demo 简??echo server??- **耗时**：V0 ~1 工作日（原计??2.5 天，本轮仅交付客户端封装 + session_manager + SQLite 持久??+ SSE 同步 + FastAPI 8 端点 + demo server + 39 测试；PTY 交互 + UI ??V1??
@@ -1279,8 +1413,10 @@
   7. **`services/agent/src/agent/image_processing/storage.py`**（新??~190 行） —??`ImageProcessingStorage`（aiosqlite + WAL + foreign_keys=ON?? 4 方法（insert_task / get_task / list_tasks + filter / get_stats?? 单例 + reset
   8. **`services/agent/src/agent/image_processing/schema.sql`**（新??~30 行） —??`image_processing_tasks` ??16 列（task_id / processing_type / backend / input_path / output_path / input_size / output_size / elapsed_ms / ok / error / ocr_text / ocr_confidence / ocr_block_count / meta_json / ts?? 4 索引（task_id / processing_type / ts / ok+ts??  9. **`services/agent/src/agent/image_processing/api.py`**（新??~330 行） —??FastAPI 6 端点：`POST /image/enhance` / `POST /image/correct` / `POST /image/ocr` / `GET /image/tasks` / `GET /image/tasks/{task_id}` / `GET /image/stats` + Pydantic schema 6 ??+ 错误处理??00/404/422?? SSE 3 事件 emit + storage 自动??  10. **`services/agent/src/agent/config.py`**（修??~10 行） —??新增 `image_processing_db_path` / `image_processing_max_bytes` (默认 50MB) / `image_processing_ocr_langs` (默认 ch+en) 3 个配??  11. **`services/agent/src/agent/llm/router.py`**（修??~3 行） —??`_LOCAL_ONLY_TASKS` 追加 `image_processing_summary`（OCR 文本可能含敏感信息：身份??/ 银行??/ 合同金额 ??强制本地 Ollama??  12. **`services/agent/src/agent/main.py`**（修??~3 行） —??注册 `image_api_router` ??FastAPI app
   13. **SSE 三处同步（CLAUDE.md §4??*??      - **Python** `graph/stream.py::_CHANNEL_BY_KIND` ??3 通道 `image_processing_started/done/error` ??`agent://image_processing_*`
+
   - **Python** `graph/stream.py` ??`_drain_image_events()` 函数 + 流循??+ finally 各调一??      - **Rust** `sse_bridge.rs::channel` ??3 个常??+ `map_event_to_channel` 3 个新映射
   - **TS** `events.ts::EVT` ??3 ??`IMAGE_PROCESSING_STARTED/DONE/ERROR`
+
   14. **`services/agent/tests/test_image_processing_v0.py`**（新??~480 ??/ 34 测试??—??models 12 + enhance 5 + correct 1 + ocr 1 + storage 3 + events 2 + api 8 + stream/router 2 = 34 全过
 - **CLAUDE.md 6 红线遵守**??  - §1 HITL 不可绕过：图像处理是只读 / 文件写入（output_path != input_path），??HITL 触发（V0 mock 不写 input）；V1 真实超分 / OCR 输出新文件不涉及数据破坏
 
@@ -1980,7 +2116,9 @@
 请基于上述草稿继续完善用户请求的最终回答：
 
 {user_prompt}" 执行；LLM 调用失败兜底 placeholder??  2. **后端 `services/agent/src/agent/llm/dual_judge.py`**（新增约 180 行）—??V3-2 `run_dual_with_judge`??     - `asyncio.gather` ??backend 并发（每 backend `asyncio.wait_for` + 30s 默认超时??     - **judge_caller 独立??candidates**（修??v2.26 早期 v1 设计??caller 复用 bug??     - judge_caller=None ??本地规则兜底（pick longest text??     - judge 输出 `WINNER: <idx>` 解析 + 越界 clamp + 拒绝负数（避??`"-1"` 被误解析??`"1"`??     - `_build_judge_prompt` 安全 `str.replace`（避??`.format` 误吞 `user_prompt` 里的 `{xxx}`??     - `_LOCAL_ONLY_TASKS` 红线：value_error 立刻 raise（防止敏感数据走双模型）
+
 - `JudgeTrace` dataclass 暴露 candidates / winner_index / judge_backend / judge_reason
+
 3. **前端 `apps/desktop/src/components/router/ScoringRadar.tsx`**（新增约 80 行）—??V2.5-3 零依??5 维评分可视化（inline 横向 bar + 权重蓝线刻度 + ????绿颜色编码）。零 npm 依赖（不引入 Chart.js / recharts），V2.5 收尾轻量化??  4. **前端 `apps/desktop/src/components/router/ManualConfirmationPanel.tsx`** —??DecisionRow 嵌入 `<ScoringRadar>` 显示当前 decision primary backend ??5 维分数（后端 `decision.candidates[0].scores` 注入）??  5. **后端 `services/agent/tests/test_router_v32_dual_judge.py`**（新增约 220 ??/ 17 测试）—??V3-2 全覆盖：2-candidate 裁判选最??/ ??candidate 直返 / 全失??RuntimeError / partial failure / `_LOCAL_ONLY_TASKS` 红线 / missing caller / empty list / judge_caller=None 本地规则 / judge 输出 garbage 兜底 / `_parse_judge_output` 6 场景（含负数、越界）/ `_build_judge_prompt` 安全替换（含 user_prompt 里的 `{xxx}`?? latency 计时 / judge_caller 抛错兜底??- **CLAUDE.md §2 红线遵守**??  - ??**HITL 沿用 Phase 1** —??不动
 
 - ??**`_LOCAL_ONLY_TASKS`** —??`dual_judge` 红线强制（intent/repair/biznav_extract ??ValueError?? spark_route 仍走 engine.route_request.apply_hard_rules 保护

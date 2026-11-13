@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -65,6 +66,37 @@ def _page_index(parsed: Any) -> list[tuple[int, int]]:
     return idx
 
 
+# ---- 全局 LLM 调用闸门（防 429）--------------------------------------------
+#
+# 429 的真实来源是「入库期每父块一次云端 LLM 调用」，而不是「文档数量」。早期把限流
+# 加在文档级（rag_ingest_concurrency）代价太大：单文档要等几十秒的云端往返，N 个文档
+# 排成 N/2 批 → 界面长时间全是「索引中」。故改为两级分工：
+#   - 文档级（rag_ingest_concurrency）：控 CPU/内存（解析 + ONNX 向量化并行度）
+#   - LLM 调用级（本闸门）：控云端并发，避免 429
+# 自动分类 / 上下文前缀 / 实体抽取三类入库期调用共用此闸门。
+_llm_gate: asyncio.Semaphore | None = None
+_llm_gate_limit: int = 0
+
+
+def _get_llm_gate() -> asyncio.Semaphore:
+    """全局 LLM 调用信号量（按 rag_llm_concurrency 限流，惰性创建）。"""
+    global _llm_gate, _llm_gate_limit
+    limit = max(1, int(settings.rag_llm_concurrency))
+    if _llm_gate is None or _llm_gate_limit != limit:
+        # limit 热更新会重建信号量：已在等旧信号量的请求仍能正常完成，
+        # 仅可能出现瞬时并发略高于新上限（best-effort 限流，可接受）。
+        _llm_gate = asyncio.Semaphore(limit)
+        _llm_gate_limit = limit
+    return _llm_gate
+
+
+async def _call_llm(llm: Any, task: str, prompt: str) -> str:
+    """经全局闸门调用云端 LLM；返回纯文本（空串代表无结果）。"""
+    async with _get_llm_gate():
+        raw = await llm(task, prompt)
+    return str(raw or "")
+
+
 class KnowledgeIngestion:
     """导入编排器（文件 -> 分块 -> 向量 -> 入库）。"""
 
@@ -72,6 +104,9 @@ class KnowledgeIngestion:
         self.storage = storage
         self.embedding = embedding
         self._llm: Any | None = None
+        # 嵌入分类类中心缓存：(分类列表指纹, 类中心向量, 分类列表)；
+        # 分类列表来自数据字典实时读，指纹变更即重嵌（惰性初始化兼容 __new__ 构造）
+        self._centers_cache: tuple[str, list[list[float]], list[dict[str, Any]]] | None = None
 
     def _get_embedding(self) -> Any | None:
         if self.embedding is None:
@@ -102,12 +137,13 @@ class KnowledgeIngestion:
         if llm is None:
             return ""
         try:
-            prefix = await llm(
+            prefix = await _call_llm(
+                llm,
                 "kb_contextual",
                 "用一句话说明下面这段文字的主题与所属章节（只写这句话，30字内）：\n"
                 + parent_text[:1500],
             )
-            return (prefix or "").strip()
+            return prefix.strip()
         except Exception as exc:  # pragma: no cover - 默认关
             logger.debug("llm contextual prefix skipped: %s", exc)
             return ""
@@ -115,8 +151,9 @@ class KnowledgeIngestion:
     async def _auto_classify(
         self, full_text: str, title: str, file_name: str, llm: Any | None
     ) -> str:
-        """LLM 自动分类：从数据字典读取分类列表，分析文本前 2000 字判定分类。
+        """LLM 自动分类：从数据字典读取分类列表，分析文本前 N 字判定分类。
 
+        N = settings.rag_classify_text_chars（与嵌入分类、导入预判共用）。
         返回匹配到的分类 key；无法判定 / LLM 异常 / 无分类条目 → 返回空串。
         """
         from agent.knowledge.category import get_kb_categories
@@ -132,15 +169,16 @@ class KnowledgeIngestion:
         cat_lines = "\n".join(
             f"- {c['key']}: {c['label']}（{c['description']}）" for c in categories
         )
+        head_chars = int(settings.rag_classify_text_chars)
         prompt = (
             "请根据以下文档内容，判断它最属于哪个分类。只返回分类代码（key），不要其他文字。\n\n"
             f"可选分类：\n{cat_lines}\n\n"
             f"文档标题：{title}\n"
             f"文件名：{file_name}\n"
-            f"文档内容（前 2000 字）：\n{full_text[:2000]}"
+            f"文档内容（前 {head_chars} 字）：\n{full_text[:head_chars]}"
         )
         try:
-            raw: str = await llm("kb_classify", prompt)
+            raw = await _call_llm(llm, "kb_classify", prompt)
             result = (raw or "").strip().split()[0].strip().lower() if raw else ""
             if result in valid_keys:
                 return result
@@ -155,16 +193,90 @@ class KnowledgeIngestion:
             logger.warning("auto_classify skipped (LLM 不可用或限流): %s", exc)
             return ""
 
+    async def _embed_classify(self, full_text: str, title: str, file_name: str) -> str:
+        """嵌入相似度分类：bge-small-zh 类中心余弦最近邻（本地，零云端调用）。
+
+        类代表文本 = label（key）+ description（数据字典实时读）；类中心按分类列表
+        指纹缓存，列表变更即重嵌。embedding 客户端的失败契约为零向量（any() 判定），
+        据此判不可用/不完整 → 返回空串由调用方走后续兜底。
+        """
+        from agent.knowledge.category import get_kb_categories
+
+        categories = get_kb_categories()
+        if not categories:
+            return ""
+        embedding = self._get_embedding()
+        if embedding is None:
+            return ""
+        fingerprint = hashlib.sha1(
+            "\x1f".join(
+                f"{c.get('key', '')}\x1e{c.get('label', '')}\x1e{c.get('description', '')}"
+                for c in categories
+            ).encode("utf-8")
+        ).hexdigest()
+        cached = getattr(self, "_centers_cache", None)
+        if cached is None or cached[0] != fingerprint:
+            reps = [
+                f"{c.get('label', '')}（{c.get('key', '')}）：{c.get('description', '')}"
+                for c in categories
+            ]
+            vecs = await embedding.embed_batch(reps)
+            if len(vecs) != len(reps) or not all(any(v) for v in vecs):
+                logger.debug("embed classify: 类中心嵌入不完整 → 跳过")
+                return ""
+            cached = (fingerprint, vecs, categories)
+            self._centers_cache = cached
+        _, center_vecs, center_cats = cached
+        head = (full_text or "")[: int(settings.rag_classify_text_chars)]
+        doc_text = "\n".join(x for x in (title, file_name, head) if x)
+        if not doc_text.strip():
+            return ""
+        doc_vec = await embedding.embed(doc_text)
+        if not any(doc_vec):
+            return ""
+        threshold = float(settings.rag_embed_classify_threshold)
+        best_key, best_score = "", -1.0
+        for cat, center in zip(center_cats, center_vecs):
+            score = sum(a * b for a, b in zip(doc_vec, center))  # 向量已 L2 归一化，余弦=点积
+            if score > best_score:
+                best_key, best_score = str(cat.get("key", "")), score
+        if best_key and best_score >= threshold:
+            logger.info(
+                "embed-classify file=%s → %s (score=%.3f)",
+                file_name,
+                best_key,
+                best_score,
+            )
+            return best_key
+        logger.debug(
+            "embed-classify below threshold file=%s best=%s (%.3f)",
+            file_name,
+            best_key,
+            best_score,
+        )
+        return ""
+
     async def classify_with_fallback(
         self, full_text: str, title: str, file_name: str, llm: Any | None = None
     ) -> tuple[str, str]:
-        """分类判定：优先 LLM，失败（限流/不可用/无法判定）时按文件名启发式兜底。
+        """分类判定：嵌入相似度优先（本地零云端）→ LLM（需增强总开关）→ 启发式兜底。
 
-        返回 ``(category, source)``，source ∈ {"llm", "heuristic", ""}。
+        嵌入分类关闭/不可用/低于置信度阈值时才消耗云端配额；增强总开关关闭时
+        LLM 路径硬闸不调（与 rag_llm_enhance_enabled 的红线语义一致）。
+        返回 ``(category, source)``，source ∈ {"embed", "llm", "heuristic", ""}。
         """
-        category = await self._auto_classify(full_text, title, file_name, llm)
-        if category:
-            return category, "llm"
+        if settings.rag_embed_classify_enabled:
+            try:
+                embed_cat = await self._embed_classify(full_text, title, file_name)
+            except Exception as exc:  # 嵌入分类任何异常都不阻断入库
+                logger.warning("embed classify failed: %s", exc)
+                embed_cat = ""
+            if embed_cat:
+                return embed_cat, "embed"
+        if settings.rag_llm_enhance_enabled:
+            category = await self._auto_classify(full_text, title, file_name, llm)
+            if category:
+                return category, "llm"
         try:
             from agent.knowledge.category import guess_category
 
@@ -217,7 +329,7 @@ class KnowledgeIngestion:
             f"文档片段：\n{parent_text[:2000]}"
         )
         try:
-            raw = await llm("kb_entity_extract", prompt)
+            raw = await _call_llm(llm, "kb_entity_extract", prompt)
             if not raw or not raw.strip():
                 return []
             # 提取 JSON（LLM 可能包裹在 ```json``` 中）
@@ -320,12 +432,9 @@ class KnowledgeIngestion:
             if not full_text.strip():
                 raise IngestionError("未提取到文本（可能为扫描件）")
 
-            # 自动分类（category 为空 + 总开关 + 子开关均开启时判定；LLM 失败走启发式兜底）
-            if (
-                not category
-                and settings.rag_llm_enhance_enabled
-                and settings.rag_auto_classify_enabled
-            ):
+            # 自动分类（category 为空 + 自动分类子开关开启时判定）：嵌入相似度优先
+            # （本地零云端，不受 LLM 增强总开关约束）→ LLM（需总开关）→ 启发式兜底
+            if not category and settings.rag_auto_classify_enabled:
                 auto_cat, cat_source = await self.classify_with_fallback(
                     full_text, src.stem, src.name, llm
                 )
@@ -349,10 +458,13 @@ class KnowledgeIngestion:
             parents, children = result["parents"], result["children"]
 
             # LLM 上下文前缀（seam，默认关；总开关为硬闸）：按父块生成，拼到该父块下子块的索引文本
+            # 父块间并行（共享全局 LLM 闸门 → 云端并发仍受控，但单文档不再串行等 N 次往返）
             prefix_by_parent: dict[int, str] = {}
             if settings.rag_llm_enhance_enabled and settings.rag_llm_contextual_enabled:
-                for p in parents:
-                    pfx = await self._llm_contextual_prefix(p.text, llm)
+                prefixes = await asyncio.gather(
+                    *(self._llm_contextual_prefix(p.text, llm) for p in parents)
+                )
+                for p, pfx in zip(parents, prefixes):
                     if pfx:
                         prefix_by_parent[p.ord] = pfx
 
@@ -362,17 +474,15 @@ class KnowledgeIngestion:
             )
             # 实体抽取（总开关 + 子开关均开启时按父块逐块抽取）
             ent_count = 0
-            if (
-                settings.rag_llm_enhance_enabled
-                and settings.rag_entity_extract_enabled
-            ):
-                for p in parents:
-                    ents = await self._extract_entities(p.text, llm)
+            if settings.rag_llm_enhance_enabled and settings.rag_entity_extract_enabled:
+                # 父块间并行（共享全局 LLM 闸门）；落库仍串行（SQLite 写，按 p_seq 保序）
+                ent_lists = await asyncio.gather(
+                    *(self._extract_entities(p.text, llm) for p in parents)
+                )
+                for p, ents in zip(parents, ent_lists):
                     if ents:
                         p_seq = parent_map.get(p.ord, 0)
-                        ent_count += self.storage.upsert_entities(
-                            doc_id, ents, p_seq
-                        )
+                        ent_count += self.storage.upsert_entities(doc_id, ents, p_seq)
             self.storage.set_doc_status(
                 doc_id, "ready", chunk_count=len(children)
             )

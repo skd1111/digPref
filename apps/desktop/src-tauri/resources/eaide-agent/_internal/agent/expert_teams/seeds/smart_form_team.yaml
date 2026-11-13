@@ -71,6 +71,27 @@ members:
         - { name: extracted, label: 提取结果（字段｜值｜置信度）, type: textarea, required: true }
         - { name: low_confidence, label: 低置信度/不可读字段, type: textarea, required: false }
         - { name: manual_input, label: 建议人工录入字段, type: textarea, required: false }
+    credentials:
+      - name: 转账凭证影像
+        required: true
+        media: image
+        hint: 凭证号、金额、对手信息不得遮挡
+        keywords: [转账, 凭证, 回单]
+        fields:
+          - { name: voucher_no, label: 凭证号码 }
+          - { name: amount, label: 金额 }
+          - { name: txn_date, label: 交易日期 }
+          - { name: payer_name, label: 付款人 }
+          - { name: payee_name, label: 收款人 }
+      - name: 票据或支票影像
+        required: false
+        media: image
+        hint: 涉票业务上传，票面与背书均需可读
+        keywords: [票据, 支票, 本票, 背书]
+        fields:
+          - { name: voucher_no, label: 票据号码 }
+          - { name: amount, label: 票面金额 }
+          - { name: valid_to, label: 提示付款期限 }
     prompt: |
       你是凭证要素识别专家，负责从影像中提取要素。你的任务：
       1. 提取表单所需字段；2. 标注置信度；3. 指出不可读位置。
@@ -91,6 +112,16 @@ members:
       - 预填字段清单
       - 冲突值处理建议
       - 缺失字段提示
+    credentials:
+      - name: 客户手写单据
+        required: true
+        media: image
+        hint: 预填字段以此为源，字迹需能辨认
+        keywords: [手写, 单据, 填单, 表单]
+        fields:
+          - { name: customer_name, label: 客户名称 }
+          - { name: biz_type, label: 业务种类 }
+          - { name: amount, label: 金额 }
     prompt: |
       你是表单预填专家，负责把材料里的信息填进表单。你的任务：
       1. 映射要素到字段；2. 做格式转换；3. 处理多来源冲突；
@@ -138,6 +169,16 @@ members:
       - 交叉比对结果表
       - 差异影响说明
       - 需客户确认事项
+    credentials:
+      - name: 客户身份信息表
+        required: false
+        media: image
+        hint: 与其他凭证做姓名、证件号、账号交叉比对
+        keywords: [身份信息, 客户信息, 登记表]
+        fields:
+          - { name: customer_name, label: 客户名称 }
+          - { name: id_no, label: 证件号码 }
+          - { name: account_no, label: 账号 }
     prompt: |
       你是交叉比对专家，负责发现多份材料之间的矛盾。你的任务：
       1. 比对同一字段在不同材料中的值；2. 标注差异；3. 说明影响；

@@ -131,10 +131,16 @@ class Settings(BaseSettings):
     rag_contextual_prefix_enabled: bool = True
     # 单文件上传大小上限（MB）
     rag_max_file_mb: int = Field(default=50, ge=1, le=500)
-    # 入库（分块+向量化+LLM 增强）并发上限：上传后每个文档一个后台任务，
-    # 批量导入时全部并发会瞬间打爆云端模型（429 速率限制）→ 分类/增强阶段成片失败；
-    # 用信号量限制同时在跑的入库数，其余排队（状态仍为 indexing）。
-    rag_ingest_concurrency: int = Field(default=2, ge=1, le=16)
+    # 入库（分块+向量化）并发上限：上传后每个文档一个后台任务。
+    # 这里限的是「文档级」并发，不再承担云端限流职责——云端调用统一由
+    # rag_llm_concurrency 在「LLM 调用级」闸门（knowledge/ingestion._call_llm）控制。
+    # 文档级压得太低（如 2）会让批量导入退化成串行：单文档要等几十秒的云端 LLM 往返，
+    # N 个文档排成 N/2 批 → 界面长时间全是「索引中」。8 路够吃满云端配额又不打爆 CPU。
+    rag_ingest_concurrency: int = Field(default=8, ge=1, le=16)
+    # 云端 LLM 调用并发上限（全局共享信号量）：入库期的「自动分类 / 上下文前缀 / 实体抽取」
+    # 三类调用共用此闸门，限制同时在飞的请求数，避免 429 速率限制。
+    # 取 8：实测 9 路并发仍返回 200，30+ 路才成片 429，留足余量；可运行期热调。
+    rag_llm_concurrency: int = Field(default=8, ge=1, le=32)
     # 冷启动预加载（lifespan 后台预热 embedding / reranker / FTS5，best-effort）
     rag_preload_on_startup: bool = True
     # RAG 优先作答（根因修复 2026-09-04）：文档/制度类查询且知识库已 BM25 命中
@@ -165,6 +171,13 @@ class Settings(BaseSettings):
     rag_query_expansion_enabled: bool = False
     # 入库期：LLM 自动分类（category 为空时从数据字典读分类列表，分析文本判定分类）
     rag_auto_classify_enabled: bool = False
+    # 入库期：嵌入相似度自动分类（2026-11-09 方案一）：bge-small-zh 类中心余弦最近邻，
+    # 本地零云端调用，优先于 LLM 分类；嵌入不可用或低于置信度阈值时回落 LLM → 启发式。
+    rag_embed_classify_enabled: bool = True
+    # 嵌入分类置信度阈值：文档向量与最近类中心余弦低于该值视为不可判（走兜底）
+    rag_embed_classify_threshold: float = Field(default=0.35, ge=0.0, le=1.0)
+    # 分类用文档正文字符数（嵌入相似度分类 / LLM 分类 / 导入预判共用同一截断长度）
+    rag_classify_text_chars: int = Field(default=2000, ge=200, le=20000)
     # 入库期：LLM 实体抽取（从数据字典读实体类型列表，按父块抽取关键实体存入 entities 表）
     rag_entity_extract_enabled: bool = False
     # 检索期：实体通道（FTS5 匹配实体名 → 关联子块加入 RRF 融合；独立于入库抽取开关）
@@ -183,6 +196,11 @@ class Settings(BaseSettings):
     semantic_route_hybrid_weight: float = Field(default=0.35, ge=0.0, le=0.9)
     # V2：高风险路由（删库/远程执行类）默认命中阈值，高于普通路由
     semantic_route_high_risk_threshold: float = Field(default=0.85, ge=0.5, le=1.0)
+    # 消歧提示（2026-11-13）：向量路由未命中回退 LLM 时，把接近带候选的 tree_hint
+    # 注入意图分析 system 提示。hint_floor=候选相似度下限（低于此分不注入，避免噪声）；
+    # hint_top_k=最多注入条数。tree_hint 不参与向量化，故不影响路由命中与向量缓存。
+    semantic_route_hint_floor: float = Field(default=0.45, ge=0.0, le=1.0)
+    semantic_route_hint_top_k: int = Field(default=3, ge=1, le=10)
 
     # ---- Phase 13 DSpark 推测解码 ----
     # 策略 yaml 路径（不存在 / 解析失败 → 落回 DEFAULT_POLICIES）
@@ -273,6 +291,10 @@ class Settings(BaseSettings):
     ops_doc_audit_max_chars: int = Field(default=12000, ge=1000, le=40000)
     # 单份材料的合规审核墙钟上限（超时降级，不弹窗）
     ops_doc_audit_timeout_sec: float = Field(default=120.0, ge=10.0, le=600.0)
+    # 单份材料「专家验收」全流程墙钟上限（BUGFIX #202）：审核是长耗时外部调用
+    # （合规审核 + 专家 LLM），无上限时 LLM 挂死/Agent 重启会让材料永久停在
+    # reviewing —— 界面一直转圈且无自愈入口。超时降级为「待审核」，可点重审再来。
+    ops_review_timeout_sec: float = Field(default=240.0, ge=30.0, le=900.0)
 
     # ---- Phase 7 V0 数据专家模式 ----
     # 数据专家 SQLite 路径（与 audit / router / knowledge / ssh 等 db 物理隔离）

@@ -137,6 +137,92 @@ def recognize_image_sync(img: Any) -> tuple[str, list[dict[str, Any]], float]:
     return full, blocks, avg
 
 
+# 凭证影像元数据上限（单张扫描件行数极多，入库前截断防 json 无限膨胀）
+_OCR_META_MAX_BYTES = 30 * 1024 * 1024
+_OCR_META_MAX_BLOCKS = 300
+_OCR_META_TEXT_CHARS = 6000
+
+
+def _plain_bbox(box: Any) -> list[list[float]]:
+    """RapidOCR 框→可 JSON 序列化的 [[x,y],...]（numpy 标量直接 dumps 会抛）。
+
+    少于 3 点或坐标非数 → 空列表（调用方据此丢弃该块）。
+    """
+    pts: list[list[float]] = []
+    try:
+        for pt in box:
+            x = float(pt[0])
+            y = float(pt[1])
+            if x != x or y != y:  # NaN 坐标（识别异常）丢弃
+                return []
+            pts.append([round(x, 1), round(y, 1)])
+    except (TypeError, ValueError, IndexError, KeyError):
+        return []
+    return pts if len(pts) >= 3 else []
+
+
+def ocr_image_meta(image_path: str | Path) -> dict[str, Any]:
+    """凭证图片 → 影像元数据（供前端「点要素 → 放大高亮对应区域」）。
+
+    返回 ``{engine, width, height, blocks, text, confidence, elapsed_ms}``；
+    blocks 保留 RapidOCR 原始四点框 ``[[x,y]×4]``（像素坐标，配合 width/height 缩放）。
+    端侧 OCR 不可用 / 图过大 / 解码失败 → ``engine="none"`` + 空 blocks，
+    绝不抛异常（调用方的上传/审核主链路不能被识别拖死）。
+    """
+    meta: dict[str, Any] = {
+        "engine": "none",
+        "width": 0,
+        "height": 0,
+        "blocks": [],
+        "text": "",
+        "confidence": 0.0,
+        "elapsed_ms": 0,
+    }
+    path = Path(image_path)
+    try:
+        if not path.is_file():
+            meta["error"] = "文件不存在"
+            return meta
+        if path.stat().st_size > _OCR_META_MAX_BYTES:
+            meta["error"] = "图片超过 30MB，未做影像定位"
+            return meta
+    except OSError as exc:
+        meta["error"] = str(exc)[:200]
+        return meta
+    try:
+        from PIL import Image
+
+        with Image.open(path) as im:
+            meta["width"], meta["height"] = int(im.width), int(im.height)
+    except Exception as exc:  # 尺寸拿不到不影响识别，前端退化为按块自身坐标缩放
+        logger.debug("[ocr-meta] 图片尺寸读取失败 %s: %s", path.name, exc)
+    started = time.monotonic()
+    try:
+        text, blocks, conf = recognize_image_sync(str(path))
+    except Exception as exc:
+        meta["error"] = str(exc)[:200]
+        return meta
+    meta["engine"] = "rapidocr"
+    clean: list[dict[str, Any]] = []
+    for b in blocks:
+        pts = _plain_bbox(b.get("bbox"))
+        if not pts:
+            continue
+        try:
+            conf = round(float(b.get("confidence", 0.0)), 3)
+        except (TypeError, ValueError):
+            conf = 0.0
+        clean.append({"text": str(b.get("text", "")), "bbox": pts, "confidence": conf})
+    meta["blocks"] = clean[:_OCR_META_MAX_BLOCKS]
+    meta["text"] = text[:_OCR_META_TEXT_CHARS]
+    try:
+        meta["confidence"] = round(float(conf), 3)
+    except (TypeError, ValueError):
+        meta["confidence"] = 0.0
+    meta["elapsed_ms"] = int((time.monotonic() - started) * 1000)
+    return meta
+
+
 def ocr_pdf_to_pages(
     pdf_path: str | Path,
     *,

@@ -265,6 +265,19 @@ async def lifespan(app: FastAPI):
         from agent.knowledge.rag_config import load_rag_config
 
         load_rag_config()
+        # 入库僵尸自愈：入库是后台任务，进程重启/崩溃后任务不会恢复，但文档状态仍停在
+        # indexing → 界面永久显示「索引中」，且无任何自愈路径。启动时统一置为 failed，
+        # 让用户能重新导入，而不是对着僵尸记录干等。
+        try:
+            from agent.knowledge.storage import get_default_storage as _kb_storage
+
+            _healed = _kb_storage().reset_orphaned_indexing_docs(
+                "上次索引被中断（Agent 重启或崩溃），请重新导入"
+            )
+            if _healed:
+                log.info("knowledge: %d orphaned indexing doc(s) marked failed", _healed)
+        except Exception:
+            log.debug("knowledge orphan heal skipped", exc_info=True)
         if getattr(_settings, "rag_preload_on_startup", False):
             # 模型/维度漂移检测：迁移到不同 embedding 环境时标 stale，面板提示重建
             try:
@@ -295,6 +308,17 @@ async def lifespan(app: FastAPI):
             app.state.rag_preload_task = asyncio.create_task(_preload_rag())
     except Exception:
         log.exception("rag startup init failed")
+    # 运营模式审核僵尸自愈（BUGFIX #202）：材料审核是长耗时外部调用，
+    # 上次 Agent 被重启/被杀时，正在审核的材料状态会永久停在 reviewing
+    # → 界面一直转圈且无任何自愈路径。启动时统一落回 pending（可点重审）。
+    try:
+        from agent.ops.api import _get_case_storage, _reap_orphaned_reviews
+
+        _healed_ops = _reap_orphaned_reviews(_get_case_storage())
+        if _healed_ops:
+            log.info("ops: %d orphaned reviewing material(s) reset to pending", _healed_ops)
+    except Exception:
+        log.debug("ops orphan heal skipped", exc_info=True)
     try:
         yield
     finally:
@@ -316,6 +340,13 @@ async def lifespan(app: FastAPI):
         # Shutdown: 关闭 MCP 客户端连接池
         if isinstance(mcp, _LazyMcp):
             await mcp.close()
+        # 共享 LLM 后端客户端连接池回收（httpx 连接复用，2026-11-06）
+        try:
+            from agent.llm.router import close_shared_llm_clients
+
+            await close_shared_llm_clients()
+        except Exception:
+            log.exception("close shared llm clients failed")
         # Phase 15 V0: 关闭预览 Vite 子进程（幂等）
         try:
             from agent.preview.session_manager import get_default_manager

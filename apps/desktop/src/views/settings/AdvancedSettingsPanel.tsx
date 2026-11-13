@@ -8,10 +8,25 @@
  *     无需逐次确认，直到任务完成（硬阻断 DROP/TRUNCATE 除外，任何模式都拒绝）
  *
  * 两个开关均只存 chatStore（会话级，不持久化），重启回落默认值。
+ *
+ * 另增「界面缩放」（2026-11-09，连续可调）：80%–200%，滑块 5% 步进 /
+ * − ＋ 按钮 10% 步进，写 uiStore.uiZoom（持久化），与 View 菜单
+ * Zoom In / Zoom Out / Reset Zoom 共用（全界面等比放大）。
  */
 import { InferenceModeToggle } from '@/components/chat/InferenceModeToggle';
 import { AutonomyToggle } from '@/components/chat/AutonomyToggle';
 import { useChatStore } from '@/store/chatStore';
+import { useUIStore } from '@/store/uiStore';
+import {
+  isZoomAtMax,
+  isZoomAtMin,
+  UI_ZOOM_DEFAULT,
+  UI_ZOOM_MAX,
+  UI_ZOOM_MIN,
+  zoomInFrom,
+  zoomOutFrom,
+  zoomPercent,
+} from '@/lib/uiZoom';
 
 function Row({
   title,
@@ -43,6 +58,8 @@ function Row({
 export function AdvancedSettingsPanel(): JSX.Element {
   const inferenceMode = useChatStore((s) => s.inferenceMode);
   const autonomy = useChatStore((s) => s.autonomy);
+  const uiZoom = useUIStore((s) => s.uiZoom);
+  const setUiZoom = useUIStore((s) => s.setUiZoom);
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -52,6 +69,54 @@ export function AdvancedSettingsPanel(): JSX.Element {
       <p className="mb-4 mt-1 text-2xs" style={{ color: '#616161' }}>
         智能体执行行为的高级开关。均为会话级设置，重启后恢复默认值。
       </p>
+
+      <Row
+        title="界面缩放"
+        desc={`可连续调节 ${zoomPercent(UI_ZOOM_MIN)}–${zoomPercent(
+          UI_ZOOM_MAX,
+        )}（默认 ${zoomPercent(
+          UI_ZOOM_DEFAULT,
+        )}）；拖动滑块或点 − / ＋，选择会记住，下次启动直接生效。也可用顶部 View 菜单的 Zoom In / Zoom Out。`}
+      >
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setUiZoom(zoomOutFrom(uiZoom))}
+            disabled={isZoomAtMin(uiZoom)}
+            className="btn btn-secondary btn-xs"
+            title="缩小一档（-10%）"
+          >
+            −
+          </button>
+          <input
+            type="range"
+            min={UI_ZOOM_MIN}
+            max={UI_ZOOM_MAX}
+            step={0.05}
+            value={uiZoom}
+            onChange={(e) => setUiZoom(Number(e.target.value))}
+            aria-label="界面缩放"
+            className="w-36"
+            style={{ accentColor: '#10a37f' }}
+          />
+          <button
+            type="button"
+            onClick={() => setUiZoom(zoomInFrom(uiZoom))}
+            disabled={isZoomAtMax(uiZoom)}
+            className="btn btn-secondary btn-xs"
+            title="放大一档（+10%）"
+          >
+            ＋
+          </button>
+          <span
+            className="w-10 text-right text-ui font-semibold"
+            style={{ color: '#1f1f1f' }}
+            title="当前界面缩放比例"
+          >
+            {zoomPercent(uiZoom)}
+          </span>
+        </div>
+      </Row>
 
       <Row
         title="推理模式"

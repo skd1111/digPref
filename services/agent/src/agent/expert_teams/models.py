@@ -8,6 +8,55 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+_ALLOWED_CREDENTIAL_MEDIA = frozenset({"image", "doc", "any"})
+
+
+def normalize_credentials(raw: object) -> list[dict]:
+    """凭证节点归一化（装载 / 保存 / 种子回填共用）。
+
+    只接受 dict 条目；name 去空白、media 限白名单（非法归 any）、
+    required 转 bool、keywords/fields 压成字符串/dict 列表；无 name 的条目丢弃。
+    上限 20 个节点、每节点 12 个要素（防单个成员清单写成无边界长表）。
+    """
+    out: list[dict] = []
+    if not isinstance(raw, list):
+        return out
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "") or "").strip()
+        if not name:
+            continue
+        media = str(item.get("media", "any") or "any").strip().lower()
+        if media not in _ALLOWED_CREDENTIAL_MEDIA:
+            media = "any"
+        fields: list[dict] = []
+        raw_fields = item.get("fields")
+        if isinstance(raw_fields, list):
+            for f in raw_fields:
+                if isinstance(f, dict):
+                    fname = str(f.get("name", "") or "").strip()
+                    flabel = str(f.get("label", "") or "").strip() or fname
+                    if fname:
+                        fields.append({"name": fname, "label": flabel})
+                elif isinstance(f, str) and f.strip():
+                    fields.append({"name": f.strip(), "label": f.strip()})
+        out.append(
+            {
+                "name": name[:64],
+                "required": bool(item.get("required", False)),
+                "media": media,
+                "hint": str(item.get("hint", "") or "").strip()[:200],
+                "keywords": [
+                    str(k).strip()[:32] for k in (item.get("keywords") or []) if str(k).strip()
+                ][:12],
+                "fields": fields[:12],
+            }
+        )
+        if len(out) >= 20:
+            break
+    return out
+
 
 @dataclass
 class ExpertMember:
@@ -23,6 +72,11 @@ class ExpertMember:
     # ops 草稿 template_json 一致（_ALLOWED_FIELD_TYPES）；未定义的交付物仍走
     # 问专家 → LLM 生成草稿链路。
     output_forms: dict[str, list[dict]] = field(default_factory=dict)
+    # 凭证节点（2026-11-09 凭证预览）：该专家办理时要求上传的影像/单据清单。
+    # [{name, required, media(image|doc|any), hint, keywords[], fields[{name,label}]}]；
+    # keywords 供材料自动归类兜底匹配，fields 声明该凭证期望采集的要素
+    # （前端点要素名 → 在影像上定位并高亮对应区域）。
+    credentials: list[dict] = field(default_factory=list)
     prompt: str = ""  # 独立 prompt
 
     def to_dict(self) -> dict:
@@ -33,6 +87,7 @@ class ExpertMember:
             "focus_points": list(self.focus_points),
             "outputs": list(self.outputs),
             "output_forms": {k: list(v) for k, v in self.output_forms.items()},
+            "credentials": [dict(c) for c in self.credentials],
             "prompt": self.prompt,
         }
 
@@ -51,6 +106,7 @@ class ExpertMember:
             focus_points=list(data.get("focus_points", [])),
             outputs=list(data.get("outputs", [])),
             output_forms=output_forms,
+            credentials=normalize_credentials(data.get("credentials", [])),
             prompt=data.get("prompt", ""),
         )
 

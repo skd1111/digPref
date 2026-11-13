@@ -23,6 +23,7 @@ import json
 import logging
 import sys
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -102,6 +103,108 @@ def _copy_templates(src_dir: Path, teams_dir: Path) -> list[str]:
     return copied
 
 
+class _LiteralStr(str):
+    """标记「请用字块量风格 ``|`` 输出」的字符串（多行 prompt 回写用）。"""
+
+
+def _repr_literal(dumper: yaml.SafeDumper, value: object) -> Any:
+    return dumper.represent_scalar("tag:yaml.org,2002:str", str(value), style="|")
+
+
+class _TeamDumper(yaml.SafeDumper):
+    """专家团回写专用 dumper：不重复引用、多行串走字块。"""
+
+    def ignore_aliases(self, data: object) -> bool:
+        return True
+
+
+_TeamDumper.add_representer(_LiteralStr, _repr_literal)
+
+
+def _convert_multiline(node: Any) -> Any:
+    if isinstance(node, dict):
+        return {k: _convert_multiline(v) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_convert_multiline(v) for v in node]
+    if isinstance(node, str) and "\n" in node:
+        return _LiteralStr(node)
+    return node
+
+
+def _dump_team_yaml(data: dict) -> str:
+    """回写专家团 yaml（凭证清单补齐用）。
+
+    多行字符串（主要是 prompt）保持字块量风格 ``|``，不让回写把提示词
+    压成一整行转义长串；中文不转义、不改 key 顺序、不做引用共享。
+    """
+    return yaml.dump(
+        _convert_multiline(data),
+        Dumper=_TeamDumper,
+        allow_unicode=True,
+        sort_keys=False,
+        default_flow_style=False,
+        width=10**6,
+    )
+
+
+def backfill_credentials(teams_dir: Path, src_dir: Path) -> list[str]:
+    """给已存在的同名团只补 members[*].credentials（2026-11-09 凭证预览）。
+
+    背景：播种“已有文件一律不动”，凭证节点作为新资产无法自动到达已安装用户。
+    这里采取最保守的合并：只动目标成员缺失的 ``credentials`` 键（不存在或空列表），
+    其他字段（提示词/交付物/表单）一律不动；目标文件本身语法不合法则跳过。
+    返回本次补齐的 team id 列表。注：按成员名对齐，用户改过成员名则不匹配。
+    """
+    patched: list[str] = []
+    for path in sorted(src_dir.glob("*.yaml")):
+        try:
+            seed_data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(seed_data, dict):
+            continue
+        team_id = seed_data.get("id")
+        if not isinstance(team_id, str) or not team_id:
+            continue
+        target = teams_dir / f"{team_id}.yaml"
+        if not target.is_file():
+            continue  # 新文件走正常播种，不在这里重复写
+        seed_by_name = {
+            str(m.get("name", "")): m.get("credentials") or []
+            for m in seed_data.get("members", [])
+            if isinstance(m, dict)
+        }
+        try:
+            local_data = yaml.safe_load(target.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning("[expert-team-seed] 凭证补齐读取失败 %s: %s", target.name, exc)
+            continue
+        if not isinstance(local_data, dict):
+            continue
+        changed = 0
+        for member in local_data.get("members", []):
+            if not isinstance(member, dict):
+                continue
+            name = str(member.get("name", ""))
+            preset = seed_by_name.get(name) or []
+            if not preset:
+                continue
+            current = member.get("credentials")
+            if isinstance(current, list) and current:
+                continue  # 用户已有凭证清单（含自己编辑的）→ 不覆盖
+            member["credentials"] = preset
+            changed += 1
+        if not changed:
+            continue
+        try:
+            target.write_text(_dump_team_yaml(local_data), encoding="utf-8")
+        except (OSError, yaml.YAMLError) as exc:
+            logger.warning("[expert-team-seed] 凭证补齐回写失败 %s: %s", target, exc)
+            continue
+        patched.append(team_id)
+    return patched
+
+
 def seed_builtin_expert_teams(teams_dir: Path) -> list[str]:
     """把内置种子播种到 teams_dir；返回本次新播种的 team id 列表。
 
@@ -154,6 +257,13 @@ def seed_builtin_expert_teams(teams_dir: Path) -> list[str]:
 
     _copy_templates(src_dir, teams_dir)
     _save_manifest(teams_dir, manifest)
+    try:
+        patched = backfill_credentials(teams_dir, src_dir)
+    except Exception as exc:  # pragma: no cover - 补齐失败不影响启动
+        logger.warning("[expert-team-seed] 凭证清单补齐异常: %s", exc)
+        patched = []
     if seeded:
         logger.info("[expert-team-seed] 内置专家团已播种: %s", seeded)
+    if patched:
+        logger.info("[expert-team-seed] 已为存量专家团补齐凭证清单: %s", patched)
     return seeded

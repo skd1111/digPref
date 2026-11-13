@@ -73,6 +73,25 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
 
+# dev profile（未配置时默认 debug=2 全量调试信息 + incremental=true）：
+# Windows MSVC 的 .pdb 按编译单元各存一份、不合并，实测单个 .pdb 达 150MB，
+# eaide_desktop_lib.lib 达 1.1GB，导致 target/debug/deps 膨胀到 15GB、
+# target/debug 整体 55GB（占整个 target 的 88%）。
+# debug=1（line-tables-only）只保留行号表：断点/单步照常可用，watch 变量受限，
+# 但 .pdb 降到个位数 MB。
+# incremental=false：增量编译的 session 目录**只增不删**（实测堆积 125 个 session
+# → 33GB），而本项目 Rust 只是 Tauri 壳 + builtin 工具、核心业务在 Python/TS，
+# 增量实测仅省 23s（有 session 11s vs 无 session 全量 34s）——不值 33GB 常驻磁盘。
+# 关闭后 target/debug 永久稳定在 ~4GB，无需人工清理。
+[profile.dev]
+debug = 1
+incremental = false
+
+# 第三方依赖一律不生成调试信息：栈回溯里依赖帧仍可见（只是无变量信息）。
+# 本 crate 的调试信息由上面的 [profile.dev] 单独控制，不受此段影响。
+[profile.dev.package."*"]
+debug = 0
+
 [profile.release]
 panic = "unwind"
 codegen-units = 1

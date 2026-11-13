@@ -144,7 +144,7 @@ async def intent_node(state: AgentState, llm: LMRouter) -> dict:
     )
 
     # 意图向量快速路由（semantic-router 模式）：命中预置 Route 时零 LLM 直出，
-    # 未命中 / embedding 不可用静默回退下方 LLM 分析（开关默认关闭）。
+    # 未命中 / embedding 不可用静默回退下方 LLM 分析（开关默认开启，见 config）。
     analysis = None
     try:
         from agent.graph.semantic_route import get_semantic_router

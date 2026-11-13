@@ -39,6 +39,7 @@ import { SystemAssetTree } from '@/components/asset-tree/SystemAssetTree';
 import { XtermDrawer } from './XtermDrawer';
 import { ClipboardIcon } from '@/components/ui/Icons';
 import { AuditDashboard } from '@/views/AuditDashboard';
+import { BusinessSummaryView } from '@/views/BusinessSummaryView';
 import { DataWorkbench } from '@/views/DataWorkbench';
 import { CollabCenter } from '@/views/CollabCenter';
 // reqflow V1：需求工作台（运营专家需求卡片管理）
@@ -57,8 +58,8 @@ import { useSessionsStore } from '@/store/sessionsStore';
 import { useSkillsStore } from '@/store/skillsStore';
 import { useChatStore } from '@/store/chatStore';
 import { useExpertTeamStore } from '@/store/expertTeamStore';
-import { DataSourceTree } from '@/components/data/DataSourceTree';
-import { DataDictionaryPanel } from '@/components/ops/DataDictionaryPanel';
+// 数据字典（2026-11-09）：横切顶级入口，全屏铺平维护（原 SideBar 260px 窄条列表废弃）
+import { DataDictView } from '@/views/DataDictView';
 import { LeftPanelDevSwitcher } from '@/components/asset-tree/LeftPanelDevSwitcher';
 import { useLeftPanelContent } from '@/store/leftPanel';
 import { BiznavChatBridge } from '@/components/biznav/BiznavChatBridge';
@@ -217,6 +218,14 @@ export function WorkspaceLayout(): JSX.Element {
               // 回落到 HomeView → chatStore 没该会话 tab → 显示欢迎页。
               // 修复后：SessionsPanel.onClick 设置 activeSessionId → 本组件订阅拉详情）
               <SessionInlineView />
+            ) : active === 'data-dict' ? (
+              // 数据字典（2026-11-09）：横切顶级入口，全屏铺平维护（隐藏会话与控制台）。
+              // BUGFIX #176：之前 center 无 data-dict 分支 + SideBar CSS 特异性不足，
+              // operator/auditor/analyst 全接管模式下点击无反应（SideBar 保持 0 宽、center 仍是工作台）
+              <DataDictView />
+            ) : active === 'biz-summary' ? (
+              // 业务汇总（2026-11-09）：业务办理台账查询，横切顶级入口全屏展示
+              <BusinessSummaryView />
             ) : mode === 'auditor' ? (
               <AuditDashboard />
             ) : mode === 'analyst' ? (
@@ -234,10 +243,13 @@ export function WorkspaceLayout(): JSX.Element {
           {/* 旧 BottomTerminal 已并入 ExecutionBlock — 保留 section 占位让以后回滚 */}
           <div style={{ display: 'none' }} />
         </main>
-        {/* 审核/数据专家模式不需要右侧 Trace 面板（独立布局） */}
-        {mode !== 'auditor' && mode !== 'analyst' && mode !== 'operator' && (
-          <RightPanel />
-        )}
+        {/* 审核/数据专家模式不需要右侧 Trace 面板（独立布局）；
+            数据字典全屏铺平维护，右侧控制台一并隐藏（用户要求 2026-11-09） */}
+        {mode !== 'auditor' &&
+          mode !== 'analyst' &&
+          mode !== 'operator' &&
+          active !== 'data-dict' &&
+          active !== 'biz-summary' && <RightPanel />}
         {/* Phase 2G: 功能点详情（开发 / 运营模式都挂载） */}
         {(mode === 'full' || mode === 'operator') && (
           <FeatureDetailPanel />
@@ -296,22 +308,15 @@ const WORKSPACE_TRANSITION_CSS = `
     pointer-events: none;
   }
 
-  /* 专家模式自带左栏（运营/审核/数据），折叠外层 SideBar；
-     但横切 activity（sessions/search）选中时保持可见（跨全模式，用户要求 2026-08-07） */
+  /* 专家模式自带左栏（运营/审核/数据），默认折叠外层 SideBar；
+     2026-11-09（用户要求）：资源管理器只在开发模式展示 → 专家模式不再给 explorer 开口子；
+     sessions/search 是横切能力，仍在任何模式可见（点击必须能出来） */
   [data-mode="analyst"]:not([data-activity="sessions"]):not([data-activity="search"]) .workspace-sidebar,
   [data-mode="operator"]:not([data-activity="sessions"]):not([data-activity="search"]) .workspace-sidebar,
   [data-mode="auditor"]:not([data-activity="sessions"]):not([data-activity="search"]) .workspace-sidebar {
     width: 0 !important;
     opacity: 0;
     pointer-events: none;
-  }
-
-  /* 数据字典是独立顶级入口：选中时即使在 operator/auditor/analyst 全接管模式下
-     也保持 SideBar 展开（覆盖下方各模式的折叠规则） */
-  .workspace-root:has(.data-dict-active) .workspace-sidebar {
-    width: 260px !important;
-    opacity: 1 !important;
-    pointer-events: auto !important;
   }
 
   /* Phase 9 协作中心：ActivityBar 选中 collab 时折叠外层 SideBar，center 区域全屏 */
@@ -378,6 +383,28 @@ function SideBar({ activity, mode }: { activity: ActivityId; mode: WorkMode }): 
       />
     );
   }
+  // 数据字典（2026-11-09）：全屏铺平维护，SideBar 折叠让位（同 requirements）。
+  // BUGFIX #176：原实现靠 CSS :has(.data-dict-active) 恢复 260px，但特异性低于
+  // operator/auditor/analyst 折叠规则（4 vs 3），全接管模式下点击无反应
+  if (activity === 'data-dict') {
+    return (
+      <aside
+        className="workspace-sidebar"
+        style={{ width: 0, borderRight: 'none', pointerEvents: 'none' }}
+        aria-hidden
+      />
+    );
+  }
+  // 业务汇总（2026-11-09）：业务台账查询页全屏展示，SideBar 折叠让位（同 data-dict）
+  if (activity === 'biz-summary') {
+    return (
+      <aside
+        className="workspace-sidebar"
+        style={{ width: 0, borderRight: 'none', pointerEvents: 'none' }}
+        aria-hidden
+      />
+    );
+  }
   // 任务计划视图生效范围：仅开发模式 + explorer activity（其它 activity 各有专属内容）
   const showPlan = mode === 'full' && activity === 'explorer' && leftView === 'plan';
   return (
@@ -405,12 +432,10 @@ function SideBar({ activity, mode }: { activity: ActivityId; mode: WorkMode }): 
         style={{ cursor: 'col-resize', backgroundColor: dragging ? 'rgba(0,120,212,0.4)' : 'transparent' }}
       />
       <SideBarHeader activity={activity} mode={mode} />
-      {/* Phase 2H：开发模式下显示 系统资产/文件列表/系统功能点 三态子切换；
-          会话管理/数据字典等自带专属内容的 activity 不显示（用户要求 2026-08-07）；
+      {/* explorer 子切换（系统资产/文件列表/系统功能点）：仅开发模式展示
+          （2026-11-09 用户要求：资源管理器只在开发模式出现，专家模式不展示）；
           任务计划视图下隐藏（计划面板自带全高内容区） */}
-      {mode === 'full' && !showPlan && activity !== 'sessions' && activity !== 'search' && activity !== 'collab' && activity !== 'data-dict' && (
-        <LeftPanelDevSwitcher />
-      )}
+      {mode === 'full' && activity === 'explorer' && !showPlan && <LeftPanelDevSwitcher />}
       <div className="flex-1 overflow-auto">
         {showPlan ? (
           // 任务计划（2026-08-28）：竖向进度卡常驻左侧，不随对话区滚动丢失
@@ -424,18 +449,15 @@ function SideBar({ activity, mode }: { activity: ActivityId; mode: WorkMode }): 
         ) : activity === 'sessions' ? (
           // Phase 6 V1.5：会话管理侧栏（穿透所有 mode；FTS5 搜索 + 会话列表）
           <SessionsPanel />
-        ) : activity === 'data-dict' ? (
-          // 数据字典：独立侧栏入口（穿透所有 mode，原运营工作台右侧 tab 迁出）
-          <DataDictionaryPanel />
-        ) : mode === 'analyst' ? (
-          // 数据专家模式：默认 DataSourceTree（外层 SideBar 折叠由 DataWorkbench 内部管理）
-          <DataSourceTree />
-        ) : mode === 'auditor' ? (
-          // 审核专家模式：占位
-          <PlaceholderPanel title="审核工作台" hint="功能开发中" />
-        ) : (
-          // 'full' / 'operator'：按 leftPanelContent 决定
+        ) : mode === 'full' ? (
+          // 开发模式：资源管理器主体（系统资产 / 文件列表 / 系统功能点）
+          // 2026-11-09 用户要求：资源管理器只在开发模式展示，其他 3 个模式不展示
           <LeftPanelBody activity={activity} />
+        ) : (
+          // 专家模式（运营 / 审核 / 数据）：外层 SideBar 恒折叠，左栏由各自工作台
+          // 自带（运营 280px 业务列表 / 审核 280px 待审 / 数据 260px 数据源树），
+          // 此处不重复挂载内容
+          <PlaceholderPanel title="专家工作台" hint="主区域全屏展示，点击 ActivityBar 其他图标切换" />
         )}
       </div>
     </aside>
@@ -485,10 +507,9 @@ function SideBarHeader({
   const setLeftView = useUIStore((s) => s.setLeftView);
   // 资源管理器 / 任务计划 并列切换（2026-08-28）：仅开发模式 + explorer activity
   const switchable = mode === 'full' && activity === 'explorer';
-  // Phase 2H：开发模式标题跟随 devPanelMode；但 sessions/search/collab 等自带专属内容的
-  // activity 始终用 TITLES（否则会话管理会显示成「文件列表/系统功能点」，用户要求 2026-08-07）
+  // explorer 标题跟随内容切换（2026-11-09：仅开发模式，专家模式不展示资源管理器）
   const title =
-    mode === 'full' && activity !== 'sessions' && activity !== 'search' && activity !== 'collab' && activity !== 'data-dict'
+    mode === 'full' && activity === 'explorer'
       ? content === 'files'
         ? '文件列表'
         : content === 'business'
@@ -551,8 +572,10 @@ const TITLES: Record<ActivityId, string> = {
   sessions: '会话管理',
   // reqflow V1 (2026-08-05)：需求工作台（同 code-nav，SideBar early-return 让位）
   requirements: '需求工作台',
-  // 数据字典：独立顶级入口（原运营工作台右侧 tab 迁出）
+  // 数据字典（2026-11-09）：全屏铺平维护（同 code-nav，SideBar early-return 让位）
   'data-dict': '数据字典',
+  // 业务汇总（2026-11-09）：业务办理台账查询（同 data-dict，SideBar early-return 让位）
+  'biz-summary': '业务汇总',
 };
 
 function PlaceholderPanel({ title, hint }: { title: string; hint: string }): JSX.Element {

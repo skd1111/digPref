@@ -9,7 +9,8 @@ infra/
 ├── scripts/
 │   ├── dev.sh                   # 本地一键启动
 │   ├── build-tauri.sh           # 跨平台 Tauri 构建
-│   └── seed-audit-db.py         # 初始化审计 schema
+│   ├── seed-audit-db.py         # 初始化审计 schema
+│   └── seed_demo_data.py        # 灌示例数据（业务汇总台账 + 需求卡片，幂等）
 └── config/
     ├── agent.example.yaml       # 复制一份 → ~/.eaide/agent.yaml
     └── mcp.example.yaml         # 复制一份 → ~/.eaide/mcp.yaml

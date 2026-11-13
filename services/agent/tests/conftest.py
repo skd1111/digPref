@@ -52,9 +52,11 @@ def _isolate(monkeypatch, tmp_path):
     try:
         from agent.graph.semantic_route import reset_semantic_router
         from agent.llm.onnx_embedding import reset_onnx_embedding_client
+        from agent.llm.router import reset_shared_llm_clients
 
         reset_semantic_router()
         reset_onnx_embedding_client()
+        reset_shared_llm_clients()
     except Exception:
         pass
     try:

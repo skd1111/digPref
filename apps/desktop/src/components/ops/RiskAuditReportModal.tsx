@@ -9,6 +9,7 @@
 import { useEffect, useMemo } from "react";
 import type { OpsCaseFile, OpsRiskLevel } from "@/types/ops";
 import { BookIcon, BulbIcon, CloseIcon, FlagIcon, WarningIcon } from "@/components/ui/Icons";
+import { KbRefLink, openKbRefFile } from "@/components/doc-review/KbRefLink";
 
 const EMPTY_FINDINGS: NonNullable<OpsCaseFile["risk_report"]>["findings"] = [];
 
@@ -168,7 +169,8 @@ export function RiskAuditReportModal({
                   </p>
                 )}
 
-                {/* 原文证据：需求明确要求随报告展示，缺失时明确标注 */}
+                {/* 原文证据：需求明确要求随报告展示，缺失时明确标注；
+                    点击可打开被审核材料原文，供员工自行验真 */}
                 <div
                   className="mt-2 rounded border-l-2 p-2"
                   style={{
@@ -182,6 +184,20 @@ export function RiskAuditReportModal({
                   >
                     <FlagIcon size={11} />
                     原文证据
+                    {file.file_path && (
+                      <button
+                        type="button"
+                        className="font-normal underline decoration-dotted underline-offset-2 hover:text-[#0b6bcb]"
+                        style={{ color: "#9ca3af" }}
+                        title="点击打开被审核材料原文"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void openKbRefFile(file.file_path);
+                        }}
+                      >
+                        · 点此看材料原文
+                      </button>
+                    )}
                   </p>
                   <p
                     className="mt-1 text-2xs whitespace-pre-wrap"
@@ -214,11 +230,14 @@ export function RiskAuditReportModal({
                     >
                       <BookIcon size={11} />
                       依据（知识库）
+                      <span className="font-normal" style={{ color: "#9ca3af" }}>
+                        · 点文件名看原文
+                      </span>
                     </p>
                     {f.kb_refs!.map((ref, i) => (
                       <div key={`${f.finding_id}-kb-${i}`} className="mt-1">
                         <p className="text-[10px] font-semibold" style={{ color: "#1f1f1f" }}>
-                          {ref.source}
+                          <KbRefLink source={ref.source} filePath={ref.file_path} />
                           {ref.heading ? ` · ${ref.heading}` : ""}
                         </p>
                         {ref.excerpt && (

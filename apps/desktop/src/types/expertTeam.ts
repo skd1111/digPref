@@ -3,6 +3,33 @@
  * 专家团是系统一等资产（不以 Skill 形式存在），两级结构：团 + 成员。
  */
 
+/** 凭证要素定义（点要素名 → 在影像上定位高亮） */
+export interface ExpertCredentialField {
+  /** 字段名（与交付物表单 name 对齐，便于 OCR 填入后回查） */
+  name: string;
+  /** 展示用中文名 */
+  label: string;
+}
+
+/**
+ * 凭证节点（2026-11-09 凭证预览）：该专家办理时要求上传的影像/单据。
+ * keywords 供材料自动归类兜底匹配，fields 声明该凭证期望采集的要素。
+ */
+export interface ExpertCredential {
+  /** 凭证名称（必填，唯一） */
+  name: string;
+  /** 是否必传 */
+  required?: boolean;
+  /** 凭证介质：image 影像 / doc 文档 / any 不限 */
+  media?: "image" | "doc" | "any";
+  /** 上传要求说明（时效、完整性等） */
+  hint?: string;
+  /** 归类关键词：文件名/识别文本命中即自动挂载 */
+  keywords?: string[];
+  /** 期望采集的关键要素 */
+  fields?: ExpertCredentialField[];
+}
+
 export interface ExpertMember {
   /** 专家名称（必填） */
   name: string;
@@ -26,6 +53,8 @@ export interface ExpertMember {
       required?: boolean;
     }>
   >;
+  /** 凭证清单（凭证预览面板据此展示“该业务要上传哪些图、是否真上传了”） */
+  credentials?: ExpertCredential[];
   /** 独立 prompt */
   prompt: string;
 }

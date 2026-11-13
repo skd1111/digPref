@@ -91,7 +91,11 @@ export interface KbStatus {
   storage_available: boolean;
   embedding_available: boolean;
   reranker_available: boolean;
-  stats: { total_docs: number; total_chunks: number; by_source_type: Record<string, number> };
+  stats: {
+    total_docs: number;
+    total_chunks: number;
+    by_source_type: Record<string, number>;
+  };
   db_path: string;
   embed_model: string;
   dim: number;
@@ -346,7 +350,7 @@ export const ipc = {
     invoke<{
       ok: boolean;
       file_name: string;
-      mode: 'text' | 'markdown';
+      mode: "text" | "markdown";
       content: string;
       chars: number;
       truncated: boolean;
@@ -371,11 +375,11 @@ export const ipc = {
   evolutionFeedback: (body: {
     sessionId: string;
     messageId: string;
-    rating: 'up' | 'down';
+    rating: "up" | "down";
     correction?: string;
   }) =>
     invoke<{ ok: boolean; reflected: boolean; task_signature: string }>(
-      'evolution_feedback',
+      "evolution_feedback",
       { body },
     ),
 
@@ -391,21 +395,23 @@ export const ipc = {
         attribution: string;
         hit_count: number;
         score: number;
-        status: 'active' | 'disabled';
+        status: "active" | "disabled";
         ts: string;
       }>;
-    }>('evolution_experiences'),
+    }>("evolution_experiences"),
 
   /** Phase 19 V0：经验启停切换（后端按当前态翻转）。 */
   evolutionExperienceToggle: (experienceId: number) =>
-    invoke<{ ok: boolean; id: number; status: 'active' | 'disabled' }>(
-      'evolution_experience_toggle',
+    invoke<{ ok: boolean; id: number; status: "active" | "disabled" }>(
+      "evolution_experience_toggle",
       { experienceId },
     ),
 
   /** Phase 19 V0：删除经验（人工干预）。 */
   evolutionExperienceDelete: (experienceId: number) =>
-    invoke<{ ok: boolean; id: number }>('evolution_experience_delete', { experienceId }),
+    invoke<{ ok: boolean; id: number }>("evolution_experience_delete", {
+      experienceId,
+    }),
 
   /** Phase 19 V1：技能蒸馏草稿列表（待审）。 */
   evolutionSkillDrafts: () =>
@@ -420,20 +426,23 @@ export const ipc = {
         status: string;
         ts: string;
       }>;
-    }>('evolution_skill_drafts'),
+    }>("evolution_skill_drafts"),
 
   /** Phase 19 V1：草稿审核通过（后端写入 skills/ 并启用）。 */
   evolutionSkillDraftApprove: (draftId: number) =>
     invoke<{ ok: boolean; id: number; skill_id: string; path: string }>(
-      'evolution_skill_draft_approve',
+      "evolution_skill_draft_approve",
       { draftId },
     ),
 
   /** Phase 19 V1：草稿拒绝。 */
   evolutionSkillDraftReject: (draftId: number) =>
-    invoke<{ ok: boolean; id: number; status: string }>('evolution_skill_draft_reject', {
-      draftId,
-    }),
+    invoke<{ ok: boolean; id: number; status: string }>(
+      "evolution_skill_draft_reject",
+      {
+        draftId,
+      },
+    ),
 
   /** Phase 19 V1：进化看板统计。 */
   evolutionStats: () =>
@@ -446,7 +455,7 @@ export const ipc = {
       judge_avg: number | null;
       experiences_active: number;
       drafts_pending: number;
-    }>('evolution_stats'),
+    }>("evolution_stats"),
 
   /** Phase 19 V1.5：运行 Few-shot 影子优化实验（离线回放，同步返回结果）。 */
   evolutionPromptOptRun: (body: { skillId: string; taskSignature?: string }) =>
@@ -459,7 +468,7 @@ export const ipc = {
       significant: boolean;
       version_id: number | null;
       auto_adopted: boolean;
-    }>('evolution_prompt_opt_run', { body }),
+    }>("evolution_prompt_opt_run", { body }),
 
   /** Phase 19 V1.5：Prompt 版本列表（可按 skill 过滤）。 */
   evolutionPromptVersions: (skillId?: string) =>
@@ -471,24 +480,28 @@ export const ipc = {
         version: number;
         few_shot: Array<{ role: string; content: string }>;
         gain: number | null;
-        status: 'candidate' | 'active' | 'rolled_back';
+        status: "candidate" | "active" | "rolled_back";
         ts: string;
       }>;
-    }>('evolution_prompt_versions', { ...(skillId != null ? { skillId } : {}) }),
+    }>("evolution_prompt_versions", {
+      ...(skillId != null ? { skillId } : {}),
+    }),
 
   /** Phase 19 V1.5：采纳 Prompt 版本（写回技能 few-shot）。 */
   evolutionPromptVersionApply: (versionId: number) =>
     invoke<{ ok: boolean; id: number; skill_id: string; status: string }>(
-      'evolution_prompt_version_apply',
+      "evolution_prompt_version_apply",
       { versionId },
     ),
 
   /** Phase 19 V1.5：一键回滚到上一版本。 */
   evolutionPromptVersionRollback: (versionId: number) =>
-    invoke<{ ok: boolean; id: number; skill_id: string; rolled_back_to: number }>(
-      'evolution_prompt_version_rollback',
-      { versionId },
-    ),
+    invoke<{
+      ok: boolean;
+      id: number;
+      skill_id: string;
+      rolled_back_to: number;
+    }>("evolution_prompt_version_rollback", { versionId }),
 
   listAssets: () => invoke<unknown[]>("asset_list"),
   addAsset: (asset: Record<string, unknown>) =>
@@ -623,7 +636,11 @@ export const ipc = {
     }),
 
   /** 导出审核结果为 Word：Rust 下载 docx 二进制并写入 save_path */
-  docReviewExportWord: (doc_id: string, mode: "full" | "risks_only", save_path: string) =>
+  docReviewExportWord: (
+    doc_id: string,
+    mode: "full" | "risks_only",
+    save_path: string,
+  ) =>
     invoke<{ path: string; bytes: number }>("doc_review_export_word", {
       doc_id,
       mode,
@@ -669,7 +686,11 @@ export const ipc = {
     invoke<KbActivateResponse>("knowledge", { _op: "kb_activate", doc_id }),
   /** 修改某资料（整组全部版本）的分类；同步刷新子块 category 以对齐按类检索 */
   kbSetCategory: (doc_id: string, category: string) =>
-    invoke<KbSetCategoryResponse>("knowledge", { _op: "kb_set_category", doc_id, category }),
+    invoke<KbSetCategoryResponse>("knowledge", {
+      _op: "kb_set_category",
+      doc_id,
+      category,
+    }),
   /** 删除；allVersions=true 删该资料全部版本，否则只删该版本（删生效版本会自动切最新剩余） */
   kbDelete: (doc_id: string, allVersions?: boolean) =>
     invoke<{ deleted: boolean }>("knowledge", {
@@ -691,12 +712,15 @@ export const ipc = {
       category: category ?? "",
     }),
   kbReindex: () =>
-    invoke<{ ok: boolean; started?: boolean; already?: boolean; progress?: number }>(
-      "knowledge",
-      { _op: "kb_reindex" },
-    ),
+    invoke<{
+      ok: boolean;
+      started?: boolean;
+      already?: boolean;
+      progress?: number;
+    }>("knowledge", { _op: "kb_reindex" }),
   kbStatus: () => invoke<KbStatus>("knowledge", { _op: "kb_status" }),
-  kbConfigGet: () => invoke<KbConfigResponse>("knowledge", { _op: "kb_config_get" }),
+  kbConfigGet: () =>
+    invoke<KbConfigResponse>("knowledge", { _op: "kb_config_get" }),
   /** 保存 RAG 参数（落 kb.db + 热应用：查询期参数即生效；索引期参数回传 needs_reindex 供提示重建） */
   kbConfigSet: (config: Record<string, number | boolean>) =>
     invoke<{
@@ -711,7 +735,11 @@ export const ipc = {
   kbEntities: (doc_id: string) =>
     invoke<{
       doc_id: string;
-      entities: Array<{ entity_name: string; entity_type: string; parent_seq: number }>;
+      entities: Array<{
+        entity_name: string;
+        entity_type: string;
+        parent_seq: number;
+      }>;
       total: number;
     }>("knowledge", { _op: "kb_entities", doc_id }),
   /** 按实体名搜索，返回命中实体及其关联文档信息 */
@@ -1106,7 +1134,9 @@ export const ipc = {
 
   /** 专家团：一键导入内置种子（已存在同名团跳过；设置页兜底）。 */
   expertTeamsImportSeeds: () =>
-    invoke<{ ok: boolean; imported: string[]; count: number }>("expert_teams_import_seeds"),
+    invoke<{ ok: boolean; imported: string[]; count: number }>(
+      "expert_teams_import_seeds",
+    ),
 
   /** 专家团：业务 → 专家团推荐（预设→LLM 三级降级→关键词，永不报错）。 */
   expertTeamsRecommend: (body: Record<string, unknown>) =>
@@ -1119,16 +1149,22 @@ export const ipc = {
 
   /** 专家团：导入资产包 zip（team.yaml 提示词 + templates/ 交付物模板，base64）。 */
   expertTeamsImportPackage: (fileName: string, contentBase64: string) =>
-    invoke<{ ok: boolean; team_id: string; templates: string[] }>("expert_teams_import_package", {
-      fileName,
-      contentBase64,
-    }),
+    invoke<{ ok: boolean; team_id: string; templates: string[] }>(
+      "expert_teams_import_package",
+      {
+        fileName,
+        contentBase64,
+      },
+    ),
 
   /** 专家团：导出资产包 zip（base64，含 team.yaml + 当前生效模板）。 */
   expertTeamsExportPackage: (teamId: string) =>
-    invoke<{ file_name: string; content_base64: string }>("expert_teams_export_package", {
-      teamId,
-    }),
+    invoke<{ file_name: string; content_base64: string }>(
+      "expert_teams_export_package",
+      {
+        teamId,
+      },
+    ),
 
   /**
    * 阻塞等 Agent 就绪（轮询 GET /health）。返回 ready=true 时方可放心发业务请求。
@@ -1143,7 +1179,7 @@ export const ipc = {
     }>("agent_wait_ready", { timeoutS }),
 
   /**
-   * GET /llm/token-usage —— Token 用量快照（状态栏「Agent: 就绪」旁实时展示）。
+   * GET /llm/token-usage —— Token 用量快照（状态栏 Agent 状态徽标旁实时展示）。
    * 速率区分上传（prompt）/ 下载（completion），当日总量跨重启保留。
    */
   tokenUsageGet: () => invoke<TokenUsageSnapshot>("token_usage_get"),
@@ -1432,7 +1468,10 @@ export const ipc = {
     system_name?: string;
     conversation_summary: string;
     session_id?: string;
-  }) => invoke<{ draft: Record<string, unknown> }>("reqflow_generate_card", { body }),
+  }) =>
+    invoke<{ draft: Record<string, unknown> }>("reqflow_generate_card", {
+      body,
+    }),
 
   reqflowListCards: (opts?: {
     batchId?: string;
@@ -1474,7 +1513,7 @@ export const ipc = {
     }>("reqflow_get_card_version", { cardId, version }),
 
   /** md → {markdown}；docx → {base64, filename}（前端 atob 还原二进制落盘） */
-  reqflowExport: (batchId: string, format: 'md' | 'docx') =>
+  reqflowExport: (batchId: string, format: "md" | "docx") =>
     invoke<{
       markdown?: string;
       base64?: string;
@@ -1487,11 +1526,14 @@ export const ipc = {
     path: string,
     payload: { content_text?: string; content_base64?: string },
   ) =>
-    invoke<{ ok: boolean; path: string; bytes: number }>("reqflow_write_export", {
-      path,
-      contentText: payload.content_text,
-      contentBase64: payload.content_base64,
-    }),
+    invoke<{ ok: boolean; path: string; bytes: number }>(
+      "reqflow_write_export",
+      {
+        path,
+        contentText: payload.content_text,
+        contentBase64: payload.content_base64,
+      },
+    ),
 
   // Phase 2H：运营工作台业务记录（记录卡片 CRUD + AI 总结）
   opsCreateRecord: (body: Record<string, unknown>) =>
@@ -1524,7 +1566,9 @@ export const ipc = {
     conversation: Array<{ role: string; content: string }>;
     session_id?: string;
   }) =>
-    invoke<{ draft: Record<string, unknown> }>("ops_summarize_record", { body }),
+    invoke<{ draft: Record<string, unknown> }>("ops_summarize_record", {
+      body,
+    }),
 
   // 专家验收工作流 Case（2026-08-10，取代运营模式大 Chat）
   opsCaseGet: (opts?: { projectName?: string; featureId?: string }) =>
@@ -1533,17 +1577,25 @@ export const ipc = {
       files: Record<string, unknown>[];
       qa: Record<string, unknown>[];
       drafts?: Record<string, unknown>[];
-    }>(
-      "ops_case_get",
-      { projectName: opts?.projectName, featureId: opts?.featureId },
-    ),
+      /** 业务办理台账（业务汇总）：挂起时前端冻结当前业务界面 */
+      task?: Record<string, unknown> | null;
+    }>("ops_case_get", {
+      projectName: opts?.projectName,
+      featureId: opts?.featureId,
+    }),
 
   /** 清空 Case 重新开始办理（BUGFIX #85）。 */
   opsCaseClear: (opts?: { projectName?: string; featureId?: string }) =>
-    invoke<{ ok: boolean; case_id: string; files: number; qa: number; drafts: number }>(
-      "ops_case_clear",
-      { projectName: opts?.projectName, featureId: opts?.featureId },
-    ),
+    invoke<{
+      ok: boolean;
+      case_id: string;
+      files: number;
+      qa: number;
+      drafts: number;
+    }>("ops_case_clear", {
+      projectName: opts?.projectName,
+      featureId: opts?.featureId,
+    }),
 
   opsCaseFileAdd: (body: {
     case_id: string;
@@ -1556,7 +1608,10 @@ export const ipc = {
   opsCaseFileReview: (fileId: string) =>
     invoke<Record<string, unknown>>("ops_case_file_review", { fileId }),
 
-  opsCaseFileOverride: (fileId: string, body: { status: string; note?: string }) =>
+  opsCaseFileOverride: (
+    fileId: string,
+    body: { status: string; note?: string },
+  ) =>
     invoke<Record<string, unknown>>("ops_case_file_override", { fileId, body }),
 
   opsCaseFileDelete: (fileId: string) =>
@@ -1564,14 +1619,17 @@ export const ipc = {
 
   /** 交付物柜：预览材料内容（BUGFIX #79，base64）。 */
   opsCaseFileContent: (fileId: string) =>
-    invoke<{ file_name: string; content_base64: string }>("ops_case_file_content", { fileId }),
+    invoke<{ file_name: string; content_base64: string }>(
+      "ops_case_file_content",
+      { fileId },
+    ),
 
   /** 交付物柜：另存到指定路径（后端直接复制文件）。 */
   opsCaseFileSaveAs: (fileId: string, targetPath: string) =>
-    invoke<{ ok: boolean; path: string }>(
-      "ops_case_file_save_as",
-      { fileId, body: { target_path: targetPath } },
-    ),
+    invoke<{ ok: boolean; path: string }>("ops_case_file_save_as", {
+      fileId,
+      body: { target_path: targetPath },
+    }),
 
   opsCaseAsk: (body: {
     case_id: string;
@@ -1585,7 +1643,10 @@ export const ipc = {
     ),
 
   /** 交付草稿：保存填写值（BUGFIX #78 界面直填）。 */
-  opsCaseDraftSave: (draftId: string, body: { values: Record<string, string> }) =>
+  opsCaseDraftSave: (
+    draftId: string,
+    body: { values: Record<string, string> },
+  ) =>
     invoke<Record<string, unknown>>("ops_case_draft_save", { draftId, body }),
 
   /** 交付草稿：点交付物直开表单（零 LLM，模板来自专家团 yaml；幂等复用未通过草稿）。 */
@@ -1595,9 +1656,12 @@ export const ipc = {
     member_key: string;
     output_name: string;
   }) =>
-    invoke<{ draft: Record<string, unknown>; reused: boolean }>("ops_case_draft_direct", {
-      body,
-    }),
+    invoke<{ draft: Record<string, unknown>; reused: boolean }>(
+      "ops_case_draft_direct",
+      {
+        body,
+      },
+    ),
 
   /** 交付草稿：提交 → 自动入材料走专家审核，通过即入交付物。 */
   opsCaseDraftSubmit: (draftId: string) =>
@@ -1618,6 +1682,8 @@ export const ipc = {
       source: string;
       text_chars: number;
       text_preview: string;
+      /** 识别底图入库结果（凭证预览用）；入库失败为 null，不影响填写值 */
+      credential_image: Record<string, unknown> | null;
     }>("ops_case_draft_ocr_fill", { draftId, body }),
 
   opsCaseExport: (body: {
@@ -1628,15 +1694,134 @@ export const ipc = {
     team_name?: string;
     checklist?: string[];
   }) =>
-    invoke<{ ok: boolean; path: string; file_count: number }>("ops_case_export", { body }),
+    invoke<{ ok: boolean; path: string; file_count: number }>(
+      "ops_case_export",
+      { body },
+    ),
 
   opsCaseCrosscheck: (caseId: string) =>
     invoke<{
       case_id: string;
-      inconsistencies: Array<{ field: string; values: Array<{ file: string; value: string }> }>;
-      low_confidence: Array<{ file: string; field: string; value: string; confidence: number }>;
+      inconsistencies: Array<{
+        field: string;
+        values: Array<{ file: string; value: string }>;
+      }>;
+      low_confidence: Array<{
+        file: string;
+        field: string;
+        value: string;
+        confidence: number;
+      }>;
       consistent: boolean;
     }>("ops_case_crosscheck", { caseId }),
+
+  // 业务办理台账（业务汇总，2026-11-09）
+  /** 业务发起建档（幂等）：上传第一份材料时调用，带业务大类 / 小类标签。 */
+  opsTaskStart: (body: {
+    case_id: string;
+    project_name?: string;
+    feature_id?: string;
+    feature_label?: string;
+    category?: string;
+    category_label?: string;
+    title?: string;
+    operator?: string;
+  }) => invoke<Record<string, unknown>>("ops_task_start", { body }),
+
+  /** 台账查询：多维度筛选（状态 / 大类 / 小类 / 日期 / 关键词）+ 各状态计数。 */
+  opsTaskList: (opts?: {
+    status?: string | undefined;
+    category?: string | undefined;
+    featureId?: string | undefined;
+    projectName?: string | undefined;
+    caseId?: string | undefined;
+    dateFrom?: number | undefined;
+    dateTo?: number | undefined;
+    keyword?: string | undefined;
+    limit?: number | undefined;
+  }) =>
+    invoke<{
+      tasks: Record<string, unknown>[];
+      total: number;
+      counts: Record<string, number>;
+    }>("ops_task_list", {
+      status: opts?.status,
+      category: opts?.category,
+      featureId: opts?.featureId,
+      projectName: opts?.projectName,
+      caseId: opts?.caseId,
+      dateFrom: opts?.dateFrom,
+      dateTo: opts?.dateTo,
+      keyword: opts?.keyword,
+      limit: opts?.limit,
+    }),
+
+  /** 台账详情：待处理项 + 材料进度 + 关联的业务小结 + 凭证摘要。 */
+  opsTaskGet: (taskId: string) =>
+    invoke<{
+      task: Record<string, unknown>;
+      pending_items: Record<string, unknown>[];
+      file_stats: Record<string, number>;
+      file_total: number;
+      record: Record<string, unknown> | null;
+      credentials?: Record<string, unknown>;
+    }>("ops_task_get", { taskId }),
+
+  /** 人工状态操作：suspend 挂起 / resume 恢复办理。 */
+  opsTaskStatus: (
+    taskId: string,
+    body: { action: "suspend" | "resume"; note?: string },
+  ) => invoke<Record<string, unknown>>("ops_task_status", { taskId, body }),
+
+  // 凭证预览（2026-11-09）：凭证节点聚合 · 归类 · 影像定位
+  /** 凭证预览聚合：该业务预设要传哪几张、实传了什么、要素采到了哪里。 */
+  opsCaseCredentials: (caseId: string, teamIds: string[] = []) =>
+    invoke<Record<string, unknown>>("ops_case_credentials", {
+      caseId,
+      teamIds: teamIds.join(","),
+    }),
+
+  /** 做一次智能归类并自动挂载（关键词 → LLM → 剩下的留给人工拖动）。 */
+  opsCaseClassifyCredentials: (body: {
+    case_id: string;
+    team_ids?: string[];
+    force?: boolean;
+  }) =>
+    invoke<Record<string, unknown>>("ops_case_classify_credentials", { body }),
+
+  /** 选中某个凭证资产：一次拿回图片字节 + 识别块坐标（blocks）。 */
+  opsCredentialAssetGet: (assetId: string) =>
+    invoke<{
+      kind: string;
+      id: string;
+      file_name: string;
+      mime: string;
+      content_base64: string;
+      ocr: Record<string, unknown>;
+    }>("ops_credential_asset_get", { assetId }),
+
+  /** 手动改归属（面板拖动 / 下拉）；空串 = 退回未归属。 */
+  opsCredentialAssetAssign: (assetId: string, credential: string) =>
+    invoke<Record<string, unknown>>("ops_credential_asset_assign", {
+      assetId,
+      body: { credential },
+    }),
+
+  /** 「立即识别影像」：后台补跑失败时的手动出口（端侧 OCR，可达数十秒）。 */
+  opsCredentialAssetRecognize: (assetId: string) =>
+    invoke<{ ok: boolean; asset_id: string; ocr: Record<string, unknown> }>(
+      "ops_credential_asset_recognize",
+      { assetId },
+    ),
+
+  /** 删除凭证资产（CF-* 材料 / CI-* 识别底图）。 */
+  opsCredentialAssetDelete: (assetId: string) =>
+    invoke<{ ok: boolean; asset_id: string; kind: string }>(
+      "ops_credential_asset_delete",
+      {
+        assetId,
+      },
+    ),
 
   // Phase 2H：数据字典（公共参数独立维护，Skill 按 key 引用）
   dictListItems: (category?: string) =>
@@ -1679,17 +1864,21 @@ export const ipc = {
 
   // 任务目录文件清单（2026-08-26）：产物/中间文件，验收清理卡用
   taskFilesGet: (taskId: string) =>
-    invoke<{ task_dir: string; task_dir_exists: boolean; artifacts: string[]; intermediates: string[] }>(
-      "task_files_get",
-      { taskId },
-    ),
+    invoke<{
+      task_dir: string;
+      task_dir_exists: boolean;
+      artifacts: string[];
+      intermediates: string[];
+    }>("task_files_get", { taskId }),
 
   // 验收后清理任务目录内除产物外的文件（2026-08-26）
   taskCleanup: (taskId: string, keep: string[] = []) =>
-    invoke<{ ok: boolean; deleted: string[]; kept: string[]; task_dir_removed: boolean }>(
-      "task_cleanup",
-      { taskId, keep },
-    ),
+    invoke<{
+      ok: boolean;
+      deleted: string[];
+      kept: string[];
+      task_dir_removed: boolean;
+    }>("task_cleanup", { taskId, keep }),
 
   // 开发者工具开关（F12 / Ctrl+Shift+I；受 config.yaml 的 devtools 控制）
   openDevtools: () => invoke<string>("open_devtools"),
@@ -2444,13 +2633,13 @@ export const ipc = {
    */
   officePreviewRender: (
     path: string,
-    mode: 'html' | 'screenshot' = 'html',
+    mode: "html" | "screenshot" = "html",
     page?: number,
   ) =>
     invoke<{
       ok: boolean;
       session_id: string;
-      mode: 'html' | 'screenshot';
+      mode: "html" | "screenshot";
       html?: string;
       html_url?: string;
       image_base64?: string;
@@ -2459,7 +2648,9 @@ export const ipc = {
 
   /** 停止 Office 预览会话（后端清理临时目录；best-effort） */
   officePreviewStop: (sessionId: string) =>
-    invoke<{ ok: boolean; stopped: boolean }>("office_preview_stop", { sessionId }),
+    invoke<{ ok: boolean; stopped: boolean }>("office_preview_stop", {
+      sessionId,
+    }),
 
   // ---- MCP 服务器配置（设置页「MCP」面板）----
 

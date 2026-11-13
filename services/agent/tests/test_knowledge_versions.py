@@ -420,7 +420,8 @@ class TestVersionApi:
         r = client.post(
             "/knowledge/v1/docs/upload", json={"file_path": str(src), "base_doc_id": "base1"}
         )
-        assert r.status_code == 200 and r.json()["status"] == "indexing"
+        # 上传后先建档排队（queued），拿到入库并发槽位后才转 indexing
+        assert r.status_code == 200 and r.json()["status"] == "queued"
         nd = kb.get_doc(r.json()["doc_id"])
         assert nd["group_id"] == "base1" and nd["version"] == 2
         assert nd["is_active"] is False  # 索引期间不生效

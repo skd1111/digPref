@@ -47,6 +47,8 @@ _RAG_FIELDS: dict[str, tuple[str, float | None, float | None]] = {
     "rag_max_file_mb": ("int", 1, 500),
     # 入库并发闸门（运行期参数：保存即热应用，不需重建索引）
     "rag_ingest_concurrency": ("int", 1, 16),
+    # 云端 LLM 调用闸门（运行期参数：保存即热应用，对新入库立即生效）
+    "rag_llm_concurrency": ("int", 1, 32),
     "rag_preload_on_startup": ("bool", None, None),
     "rag_rerank_enabled": ("bool", None, None),
     "rag_rerank_top_n": ("int", 1, 100),
@@ -57,6 +59,11 @@ _RAG_FIELDS: dict[str, tuple[str, float | None, float | None]] = {
     "rag_query_expansion_enabled": ("bool", None, None),
     # 入库期增强
     "rag_auto_classify_enabled": ("bool", None, None),
+    # 嵌入相似度分类（运行期参数：保存即热应用；类中心缓存按分类列表指纹自动失效）
+    "rag_embed_classify_enabled": ("bool", None, None),
+    "rag_embed_classify_threshold": ("float", 0.0, 1.0),
+    # 分类用正文字符数（运行期参数：保存即热应用，对新分类立即生效）
+    "rag_classify_text_chars": ("int", 200, 20000),
     "rag_entity_extract_enabled": ("bool", None, None),
     # 检索期实体通道
     "rag_entity_enabled": ("bool", None, None),

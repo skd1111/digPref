@@ -965,5 +965,36 @@ export function ReplyIcon({ size = 24, className }: IconProps): JSX.Element {
   );
 }
 
+/** 运行中 —— 旋转弧 + 呼吸核心（动态 SVG，动画类见 globals.css .agent-status-*） */
+export function AgentRunningIcon({ size = 24, className }: IconProps): JSX.Element {
+  return (
+    <svg {...BASE} width={size} height={size} strokeWidth={2} className={className}>
+      {/* 底圈：静态淡环，标示图标占位 */}
+      <circle cx="12" cy="12" r="8.5" strokeOpacity="0.2" />
+      {/* 缺口弧：自转，表现「正在跑」 */}
+      <circle
+        className="agent-status-arc"
+        cx="12"
+        cy="12"
+        r="8.5"
+        strokeDasharray="16 37"
+        strokeLinecap="round"
+      />
+      {/* 核心点：呼吸缩放 */}
+      <circle className="agent-status-core" cx="12" cy="12" r="3.2" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+/** 未活动 —— 待机圆环 + 中心点（静态） */
+export function AgentIdleIcon({ size = 24, className }: IconProps): JSX.Element {
+  return (
+    <svg {...BASE} width={size} height={size} className={className}>
+      <circle cx="12" cy="12" r="8.5" strokeOpacity="0.45" />
+      <circle cx="12" cy="12" r="3" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 /** 图标组件类型（供 ITEMS 之类的映射表使用） */
 export type IconComponent = (props: IconProps) => JSX.Element;

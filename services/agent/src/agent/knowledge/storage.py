@@ -394,6 +394,22 @@ class KnowledgeStorage:
             conn.execute(f"UPDATE docs SET {', '.join(sets)} WHERE doc_id = ?", params)
             conn.commit()
 
+    def reset_orphaned_indexing_docs(self, reason: str) -> int:
+        """把残留的 status='indexing' / 'queued' 文档置为 failed，返回影响行数。
+
+        入库是后台任务：进程重启 / 崩溃后任务不会恢复，但文档状态仍停在 indexing
+        （或还没轮到、停在 queued）→ 界面永久显示「索引中 / 排队中」，且没有任何自愈
+        路径。启动时调用本方法清理，让用户能重新导入，而不是对着僵尸记录干等。
+        """
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE docs SET status = ?, error = ?, updated_at = ? "
+                "WHERE status IN ('indexing', 'queued') AND deleted_at IS NULL",
+                ("failed", reason, int(time.time())),
+            )
+            conn.commit()
+            return int(cur.rowcount or 0)
+
     def _doc_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
         return {
             "doc_id": row["doc_id"],

@@ -1,6 +1,6 @@
 /**
  * useTokenUsage —— React hook：轮询 Token 用量快照（经 Rust token_usage_get 命令
- * 转发 GET /llm/token-usage），供 TopBar / StatusBar「Agent: 就绪」旁实时展示。
+ * 转发 GET /llm/token-usage），供 TopBar / StatusBar 的 Agent 状态徽标旁实时展示。
  *
  * 展示内容：
  *   - 实时速率（区分上传 prompt / 下载 completion，后端 30s 滑动窗口均值）

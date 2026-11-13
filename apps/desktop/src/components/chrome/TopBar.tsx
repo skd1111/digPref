@@ -11,21 +11,12 @@
 import { EnvironmentIndicator } from './EnvironmentIndicator';
 import { ModeSwitcher } from './ModeSwitcher';
 import { TokenUsageBadge } from './TokenUsageBadge';
+import { AgentStatusBadge } from './AgentStatusBadge';
 import { useUIStore } from '@/store/uiStore';
-import { MessageIcon, ZapIcon } from '@/components/ui/Icons';
-
-/** Agent 状态文案 —— 与底部 StatusBar 保持一致，读真实 agentStatus。 */
-const AGENT_LABEL = {
-  idle: 'Agent: 空闲',
-  busy: 'Agent: 处理中…',
-  error: 'Agent: 未连接',
-  ready: 'Agent: 就绪',
-  unknown: 'Agent: 未连接',
-} as const;
+import { MessageIcon } from '@/components/ui/Icons';
 
 export function TopBar(): JSX.Element {
   const pendingCollabMentionCount = useUIStore((s) => s.pendingCollabMentionCount);
-  const agentStatus = useUIStore((s) => s.agentStatus);
   return (
     <div
       className="flex h-[44px] select-none items-center justify-between border-b px-4"
@@ -64,9 +55,9 @@ export function TopBar(): JSX.Element {
         <span className="rounded px-2 py-0.5" style={{ backgroundColor: '#e4e4e4' }}>
           <TokenUsageBadge placement="bottom" />
         </span>
-        <span className="flex items-center gap-1 rounded px-2 py-0.5" style={{ backgroundColor: '#ececec' }}>
-          <ZapIcon size={12} />
-          {AGENT_LABEL[agentStatus]}
+        {/* Agent 状态：运行中显示动态动画图标；未活动 / 未就绪为静态图标 */}
+        <span className="rounded px-2 py-0.5" style={{ backgroundColor: '#ececec' }}>
+          <AgentStatusBadge size={12} />
         </span>
       </div>
     </div>

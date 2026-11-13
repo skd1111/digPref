@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { ipc } from "@/ipc/invoke";
+import { scrollWithin } from "@/lib/scroll";
 import type {
   DocDetail,
   DocFinding,
@@ -296,7 +297,9 @@ export const useDocReviewStore = create<DocReviewState>((set, get) => ({
       ? document.getElementById(`finding-${findingId}`)
       : null;
     if (!el) return;
-    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    // 只滚原文面板自己的滚动容器（scrollIntoView 会顺带滚动外层裁剪容器，
+    // 把审核页顶部「审批工作台 / 文档审核 / 知识库」页签行卷出可视区）
+    scrollWithin(el, "[data-doc-scroll]");
     // 定位后闪烁强调，避免高亮淹没在正文里找不到（CSS .finding-mark-flash）
     el.classList.remove("finding-mark-flash");
     void (el as HTMLElement).offsetWidth; // 强制重排，连续点击也能重播

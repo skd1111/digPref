@@ -239,6 +239,12 @@ class PrivateLLMClient:
             )
         return self._client
 
+    async def aclose(self) -> None:
+        """关闭底层 httpx 客户端（连接池回收；幂等，关闭后可再惰性重建）。"""
+        if self._client is not None:
+            http_client, self._client = self._client, None
+            await http_client.aclose()
+
     # ---- HTTP 底层 -----------------------------------------------------------
 
     @staticmethod
@@ -409,11 +415,13 @@ class PrivateLLMClient:
         }
         if self.max_output_tokens and self.max_output_tokens > 0:
             payload["max_tokens"] = self.max_output_tokens
-        async with httpx.AsyncClient(
+        # 连接池复用（2026-11-06）：改走共享 client + 单请求超时覆盖（_post_chat
+        # 支持 timeout 参数），不再每次调用新建 AsyncClient 重付 TCP+TLS 握手。
+        body = await self._post_chat(
+            payload,
+            client=self.client,
             timeout=httpx.Timeout(timeout or 90.0, connect=5.0),
-            headers=self._auth_headers(),
-        ) as client:
-            body = await self._post_chat(payload, client=client)
+        )
         choices = body.get("choices") or []
         if not choices:
             raise ValueError("LLM 返回了空的 choices 列表")

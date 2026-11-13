@@ -47,6 +47,15 @@ members:
         - { name: conclusion, label: 预审结论, type: select, required: true, options: [资料齐全可受理, 需补件后受理, 需人工复核, 不予受理] }
         - { name: basis, label: 结论依据, type: textarea, required: true }
         - { name: next_step, label: 下一步处理, type: textarea, required: false }
+    credentials:
+      - name: 资料交接清单
+        required: false
+        media: any
+        hint: 客户随件递交的清单，用于判断受理范围
+        keywords: [交接, 清单, 受理]
+        fields:
+          - { name: doc_count, label: 材料份数 }
+          - { name: submit_date, label: 递交日期 }
     prompt: |
       你是资料预审主管，负责统筹预审并出具结论。你的任务：
       1. 制定预审顺序；2. 汇总分类、完整性、有效性、一致性结果；
@@ -74,6 +83,32 @@ members:
         - { name: doc_index, label: 材料索引（文件名→类别，一行一条）, type: textarea, required: true }
         - { name: quality_issues, label: 影像质量问题, type: textarea, required: false, hint: 模糊/缺页/倒置/重复 }
         - { name: rescan_items, label: 需重新扫描的材料, type: textarea, required: false }
+    credentials:
+      - name: 居民身份证（人像面）
+        required: true
+        media: image
+        hint: 人像、姓名、证件号、有效期均需可读
+        keywords: [身份证, 人像面, 证件]
+        fields:
+          - { name: name, label: 姓名 }
+          - { name: id_no, label: 证件号码 }
+          - { name: valid_to, label: 证件到期日 }
+      - name: 居民身份证（国徽面）
+        required: true
+        media: image
+        hint: 签发机关与有效期不可遮挡
+        keywords: [国徽面, 背面, 签发机关]
+        fields:
+          - { name: issue_authority, label: 签发机关 }
+          - { name: valid_to, label: 有效期 }
+      - name: 营业执照
+        required: true
+        media: image
+        hint: 完整版幅，统一社会信用代码不反光
+        keywords: [营业执照, 执照, 工商]
+        fields:
+          - { name: corp_name, label: 企业名称 }
+          - { name: credit_code, label: 统一社会信用代码 }
     prompt: |
       你是影像分类专家，负责给每份材料正确归类并挑出质量问题。你的任务：
       1. 判断材料类别；2. 识别模糊、缺页、倒置、重复；
@@ -131,6 +166,25 @@ members:
         - { name: auth_validity, label: 授权书有效性, type: textarea, required: false }
         - { name: conclusion, label: 有效性结论, type: select, required: true, options: [有效, 部分待核实, 无效] }
         - { name: manual_items, label: 需人工验印/核实事项, type: textarea, required: false }
+    credentials:
+      - name: 授权委托书
+        required: true
+        media: image
+        hint: 需含委托人、代理人、授权范围与签署日期
+        keywords: [委托, 授权, 代理]
+        fields:
+          - { name: principal, label: 委托人 }
+          - { name: agent_name, label: 代理人 }
+          - { name: auth_scope, label: 授权范围 }
+          - { name: signed_date, label: 签署日期 }
+      - name: 印章与签字页
+        required: true
+        media: image
+        hint: 公章/法人章清晰，不得覆盖关键要素
+        keywords: [印章, 公章, 签字, 印鉴]
+        fields:
+          - { name: seal_name, label: 印章名称 }
+          - { name: signed_date, label: 签署日期 }
     prompt: |
       你是有效性核验专家，负责判断材料是否真实有效。你的任务：
       1. 核验证件有效期；2. 核验印章与签字；3. 核验授权书；
@@ -159,6 +213,17 @@ members:
         - { name: field_compare, label: 字段比对结果（字段｜材料A｜材料B｜结论）, type: textarea, required: true }
         - { name: differences, label: 差异项与可能原因, type: textarea, required: false }
         - { name: confirm_items, label: 需客户确认事项, type: textarea, required: false }
+    credentials:
+      - name: 业务申请表
+        required: true
+        media: image
+        hint: 作为与其他材料交叉比对的基准件
+        keywords: [申请表, 申请书, 表单]
+        fields:
+          - { name: corp_name, label: 企业名称 }
+          - { name: credit_code, label: 统一社会信用代码 }
+          - { name: legal_person, label: 法定代表人 }
+          - { name: account_no, label: 账号 }
     prompt: |
       你是一致性比对专家，负责发现材料之间的矛盾。你的任务：
       1. 比对关键字段；2. 标注差异位置；3. 给出可能原因；

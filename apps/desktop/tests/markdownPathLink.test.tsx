@@ -95,6 +95,14 @@ describe('Markdown 渲染路径胶囊', () => {
     expect(screen.getByText('b.pptx')).toBeTruthy();
     expect(screen.getByText(/请查收/)).toBeTruthy();
   });
+
+  it('URL 不被误判为文件路径（BUGFIX #201：https:// 里的 s:/ 会被盘符规则命中）', () => {
+    const { container } = render(
+      <Markdown text={'原文链接：https://flk.npc.gov.cn/detail?id=ff808081777d07c50177b8d8670038d4'} />,
+    );
+    expect(container.querySelector('.md-path-chip')).toBeNull();
+    expect(container.textContent).toContain('https://flk.npc.gov.cn/detail?id=');
+  });
 });
 
 describe('点击与右键交互', () => {

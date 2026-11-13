@@ -8,7 +8,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { useOfficePreviewStore } from "@/store/officePreviewStore";
-import { Markdown } from "@/components/chat/Markdown";
+import { MarkdownDoc } from "@/components/office/MarkdownDoc";
 import { ipc } from "@/ipc/invoke";
 import { injectAnchors } from "./officeAnchor";
 
@@ -175,7 +175,7 @@ export function OfficePreviewPanel(): JSX.Element | null {
           {/* 本地 md 渲染（知识库依据/已上传 markdown）：浅色底 + .md-body 排版 */}
           {!loading && !error && source === "local-text" && mode === "markdown" && html && (
             <div className="h-full w-full overflow-auto bg-white px-6 py-4">
-              <Markdown text={html} />
+              <MarkdownDoc text={html} />
             </div>
           )}
           {/* 本地纯文本（txt/csv/log）：等宽字体、保留换行 */}

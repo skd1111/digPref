@@ -275,10 +275,25 @@ async def retrieve_examples(text: str, top_k: int = _FEW_SHOT_TOP_K) -> list[dic
 
 
 async def compose_intent_system_prompt(text: str) -> str:
-    """intent_router 基础模板 + 动态 Few-Shot 案例块（检索失败静默跳过）。"""
+    """intent_router 基础模板 + 易混淆意图消歧块 + 动态 Few-Shot 案例块（均 best-effort）。"""
     from agent.llm.prompts import load_prompt
 
     base = load_prompt("intent_router")
+    # 易混淆意图消歧（2026-11-13）：向量路由未命中回退 LLM 时，把接近带候选的
+    # tree_hint 注入 system 提示，帮模型区分查库/删库、知识库/数据库等易混意图。
+    # 懒导入避免与 semantic_route 反向依赖成环；任何故障静默跳过（不阻塞主链路）。
+    try:
+        from agent.graph.semantic_route import get_semantic_router
+
+        hints = await get_semantic_router().disambiguation_hints(text)
+    except Exception as exc:
+        logger.debug("intent_memory disambiguation compose failed: %s", exc)
+        hints = []
+    if hints:
+        hint_lines = ["", "# 易混淆意图消歧（向量召回的接近候选；据此区分，仍以当前输入为准）"]
+        for h in hints:
+            hint_lines.append(f"- {h['name']}（相似度 {h['score']}）：{h['tree_hint']}")
+        base = base + "\n" + "\n".join(hint_lines)
     try:
         examples = await retrieve_examples(text)
     except Exception as exc:

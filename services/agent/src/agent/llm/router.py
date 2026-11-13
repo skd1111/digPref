@@ -26,6 +26,7 @@ Phase 4 V0 升级：端侧模型 + 推理模式
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import logging
@@ -879,6 +880,92 @@ def build_summarise_messages(
     ]
 
 
+# ---- 跨实例共享后端客户端（httpx 连接池复用，2026-11-06）--------------------
+#
+# 背景：LMRouter 在多个调用点按请求新建（如 knowledge/retriever 的
+# LMRouter().generate_review(...)，每次入库父块 LLM 调用都新建实例），
+# 原先 _build_cloud_client/_build_private_client 每次都 new PrivateLLMClient →
+# 其内部「共享」httpx.AsyncClient 只在单次调用内有效，每次云端/内网调用
+# 都重付 TCP+TLS 握手（公网端点实测 0.1~0.3s/次）。
+# 方案：按「配置签名」在模块级缓存客户端；签名全部取自当次调用新读的
+# 注册表行与 gen_limits，任一变更（模型管理保存 / 输出上限调整）自动
+# 失效重建，无陈旧风险。被替换的旧客户端延迟 60s 关闭（grace 期让
+# 签名变更时刻的在飞请求自然结束，不中断连接）。
+
+_shared_backend_clients: dict[str, tuple[tuple[Any, ...], PrivateLLMClient]] = {}
+_retire_client_tasks: set[asyncio.Task[None]] = set()
+
+
+def _retire_client_later(client: PrivateLLMClient) -> None:
+    """延迟关闭被配置变更替换的旧客户端（60s grace，防关闭在飞连接）。"""
+
+    async def _close() -> None:
+        await asyncio.sleep(60)
+        try:
+            await client.aclose()
+        except Exception:
+            logger.debug("retire old llm backend client failed", exc_info=True)
+
+    task = asyncio.create_task(_close())
+    _retire_client_tasks.add(task)
+    task.add_done_callback(_retire_client_tasks.discard)
+
+
+async def _get_shared_backend_client(
+    kind: Literal["cloud", "private"], backend: Any
+) -> PrivateLLMClient:
+    """按配置签名取/建共享后端客户端（kind 对应注册表 backend.type）。"""
+    sig = (
+        backend.base_url.rstrip("/"),
+        backend.api_key_ref or "",
+        backend.model_name,
+        backend.max_context,
+        load_gen_limits()["max_output_tokens"],
+    )
+    slot = _shared_backend_clients.get(kind)
+    if slot is not None and slot[0] == sig:
+        return slot[1]
+    if slot is not None:
+        _retire_client_later(slot[1])
+    base_url = backend.base_url.rstrip("/")
+    if kind == "private" and base_url.endswith("/chat/completions"):
+        base_url = base_url[: -len("/chat/completions")]
+    client = PrivateLLMClient(
+        base_url=base_url,
+        api_key=backend.api_key_ref or "",
+        model=backend.model_name,
+        max_context=backend.max_context,
+        max_output_tokens=sig[4],
+    )
+    if kind == "cloud":
+        client.usage_label = "cloud"  # Token 计量区分内网 / 云端
+    _shared_backend_clients[kind] = (sig, client)
+    return client
+
+
+async def close_shared_llm_clients() -> None:
+    """关闭全部共享后端客户端（lifespan shutdown 调用；幂等）。"""
+    for kind in list(_shared_backend_clients):
+        slot = _shared_backend_clients.pop(kind, None)
+        if slot is None:
+            continue
+        try:
+            await slot[1].aclose()
+        except Exception:
+            logger.debug("close shared llm client %s failed", kind, exc_info=True)
+
+
+def reset_shared_llm_clients() -> None:
+    """测试隔离：清空共享客户端缓存并取消待执行的旧客户端延迟关闭任务。
+
+    不做异步关闭（conftest 同步 fixture 内调用；测试内客户端多为伪对象）。
+    """
+    _shared_backend_clients.clear()
+    for task in list(_retire_client_tasks):
+        task.cancel()
+    _retire_client_tasks.clear()
+
+
 class LMRouter:
     """多后端：mock / ollama / private，按 task kind 选取，并支持 Fallback 链。
 
@@ -1386,20 +1473,14 @@ class LMRouter:
         注意：当前 llm_backends.api_key_ref 存的是明文 API Key（模型管理现状）。
         若未来按 CLAUDE.md 切 keyring 占位符语义，此处必须先解析占位符再传入，
         否则会静默变成认证失败。
+
+        客户端跨调用复用（连接池）：见模块级 _get_shared_backend_client。
         """
         from agent.llm.storage import list_backends
 
         for backend in await list_backends(enabled_only=True):
             if backend.type == "cloud":
-                client = PrivateLLMClient(
-                    base_url=backend.base_url,
-                    api_key=backend.api_key_ref or "",
-                    model=backend.model_name,
-                    max_context=backend.max_context,
-                    max_output_tokens=load_gen_limits()["max_output_tokens"],
-                )
-                client.usage_label = "cloud"  # Token 计量区分内网 / 云端
-                return client
+                return await _get_shared_backend_client("cloud", backend)
         return None
 
     async def _build_private_client(self):
@@ -1410,21 +1491,14 @@ class LMRouter:
         注册表里有没有启用的 private 后端。
 
         兼容：base_url 已带 /chat/completions 后缀时先去掉（客户端会再拼）。
+
+        客户端跨调用复用（连接池）：见模块级 _get_shared_backend_client。
         """
         from agent.llm.storage import list_backends
 
         for backend in await list_backends(enabled_only=True):
             if backend.type == "private":
-                base_url = backend.base_url.rstrip("/")
-                if base_url.endswith("/chat/completions"):
-                    base_url = base_url[: -len("/chat/completions")]
-                return PrivateLLMClient(
-                    base_url=base_url,
-                    api_key=backend.api_key_ref or "",
-                    model=backend.model_name,
-                    max_context=backend.max_context,
-                    max_output_tokens=load_gen_limits()["max_output_tokens"],
-                )
+                return await _get_shared_backend_client("private", backend)
         return None
 
     async def resolve_native_backend(self) -> tuple[str, Any] | None:

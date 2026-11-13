@@ -33,8 +33,13 @@ function pathCore(body: string): string {
   return `(?:[A-Za-z]:[\\\\/](?:${body})|\\\\\\\\(?:${body})|/(?:home|tmp|var|opt|usr|Users)/(?:${body}))`;
 }
 
-/** 全局扫描用（识别一段文本中的所有路径；不含空格，防吞散文） */
-export const FILE_PATH_RE = new RegExp(pathCore(PATH_BODY), 'g');
+/**
+ * 全局扫描用（识别一段文本中的所有路径；不含空格，防吞散文）。
+ * 前置否定回顾（BUGFIX #201）：`https://…` 里的 `s:/` 会被 `[A-Za-z]:[\\/]` 命中，
+ * 导致 URL 被截成「htt」+ 路径胶囊。路径前面不能紧跟字母/数字/下划线，
+ * 这样 `C:\…` 仍能命中，而 `https://` 不再误判。
+ */
+export const FILE_PATH_RE = new RegExp(`(?<![A-Za-z0-9_])${pathCore(PATH_BODY)}`, 'g');
 
 /** 整体判定用（行内代码是否就是一个路径；容忍内部空格） */
 const FILE_PATH_EXACT_RE = new RegExp(`^${pathCore(PATH_BODY_SPACED)}$`);

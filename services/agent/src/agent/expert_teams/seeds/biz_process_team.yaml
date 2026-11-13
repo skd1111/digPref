@@ -46,6 +46,25 @@ members:
         - { name: steps, label: 办理步骤（按顺序）, type: textarea, required: true }
         - { name: need_review, label: 是否需复核/授权, type: select, required: true, options: [需要复核, 需要授权, 复核且授权, 不需要] }
         - { name: next_action, label: 下一步与交接, type: textarea, required: false }
+    credentials:
+      - name: 客户身份证件影像
+        required: true
+        media: image
+        hint: 人像面与国徽面都需清晰完整，证件在有效期内
+        keywords: [身份证, 证件, 身份]
+        fields:
+          - { name: customer_name, label: 客户名称 }
+          - { name: id_no, label: 证件号码 }
+          - { name: valid_to, label: 证件到期日 }
+      - name: 业务委托书或授权书
+        required: false
+        media: image
+        hint: 非本人办理时必须上传，需含授权范围与签署
+        keywords: [委托, 授权, 代理]
+        fields:
+          - { name: principal, label: 委托人 }
+          - { name: agent_name, label: 代理人 }
+          - { name: auth_scope, label: 授权范围 }
     prompt: |
       你是业务办理引导专家，负责判断客户要办什么业务、怎么走流程。你的任务：
       1. 识别业务类型与办理渠道；2. 拆解流程节点与前置条件；
@@ -78,6 +97,26 @@ members:
         - { name: auth_docs, label: 需书面授权的材料, type: textarea, required: false, hint: 征信、个人流水、身份核验等 }
         - { name: validity_note, label: 时效与版本要求, type: textarea, required: false }
         - { name: remark, label: 备注, type: textarea, required: false }
+    credentials:
+      - name: 营业执照（副本）
+        required: true
+        media: image
+        hint: 四角完整、统一社会信用代码可读，注意营业期限
+        keywords: [营业执照, 执照, 工商]
+        fields:
+          - { name: corp_name, label: 企业名称 }
+          - { name: credit_code, label: 统一社会信用代码 }
+          - { name: legal_person, label: 法定代表人 }
+          - { name: valid_to, label: 营业期限截止 }
+      - name: 开户/变更申请书
+        required: true
+        media: image
+        hint: 客户已签章的申请表单据
+        keywords: [申请书, 申请表, 开户]
+        fields:
+          - { name: biz_type, label: 业务类型 }
+          - { name: customer_name, label: 客户名称 }
+          - { name: signed_date, label: 签署日期 }
     prompt: |
       你是材料清单专家，负责生成准确、可执行的材料清单。你的任务：
       1. 按业务类型列出客户需提供的材料；2. 单列银行外查事项；
@@ -107,6 +146,15 @@ members:
         - { name: key_fields, label: 关键录入字段与校验点, type: textarea, required: false }
         - { name: auth_level, label: 权限/授权要求, type: text, required: false }
         - { name: fail_cases, label: 常见失败原因, type: textarea, required: false }
+    credentials:
+      - name: 系统交易回单或截图
+        required: false
+        media: image
+        hint: 用于核对交易码与菜单路径，需含关键字段
+        keywords: [回单, 截图, 交易, 流水]
+        fields:
+          - { name: txn_code, label: 交易码 }
+          - { name: menu_path, label: 系统菜单路径 }
     prompt: |
       你是交易码与系统操作专家，负责给出可直接上手的交易码与操作路径。你的任务：
       1. 根据业务类型给出交易码与菜单路径；2. 说明关键字段与校验点；
@@ -149,6 +197,23 @@ members:
       - 办理合规检查清单
       - 客户告知要点
       - 潜在投诉风险提示
+    credentials:
+      - name: 双录影像或截图
+        required: false
+        media: image
+        hint: 应双录的业务必须提供，画面需可见客户与经办人
+        keywords: [双录, 录音, 录像, 视频]
+        fields:
+          - { name: record_date, label: 双录日期 }
+          - { name: record_scope, label: 双录内容要点 }
+      - name: 客户告知与授权签署件
+        required: true
+        media: image
+        hint: 收费告知、征信查询授权等签署页，需可见签字/盖章
+        keywords: [告知, 授权, 签署, 签字]
+        fields:
+          - { name: auth_items, label: 授权事项 }
+          - { name: signed_date, label: 签署日期 }
     prompt: |
       你是办理合规质检专家，负责在办理前做合规与服务质检。你的任务：
       1. 核对双录、收费、公示、告知要求；2. 检查授权与身份核验是否到位；

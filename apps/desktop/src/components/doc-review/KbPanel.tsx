@@ -1,8 +1,6 @@
 /**
  * KbPanel —— 审核专家「知识库 / 参考资料」页（与「审批工作台」「文档审核」平级的顶层页签）。
  *
- * 上传的参考资料经 RAG 分块 + 向量化入库，文档审核与聊天时按混合检索
- * （SQLite FTS5 BM25 + sqlite-vec 向量 + RRF + ONNX reranker）召回注入提示词。
  * 上传走本地路径（Tauri 对话框/多选），文件复制入库，数据落安装目录 knowledge/，复制即迁移。
  */
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
@@ -36,6 +34,8 @@ const FALLBACK_CATEGORIES: DictOption[] = [
 const CLASSIFY_BATCH_SIZE = 5;
 /** 某批失败（限流）后下一批的退避等待（ms） */
 const CLASSIFY_BATCH_BACKOFF_MS = 3000;
+/** 分类筛选下拉的「全部」哨兵（后端传空串等于不过滤，故不能用 ''） */
+const CATEGORY_ALL = '__all__';
 
 /** 阻塞等待（分批之间的让速/退避用） */
 function sleep(ms: number): Promise<void> {
@@ -52,13 +52,14 @@ function friendlyError(raw: unknown): string {
     return '请求超时：Agent 繁忙或模型响应慢，请稍后重试';
   }
   if (/connect|连接|refused|网络/i.test(text)) {
-    return '无法连接 Agent：请确认 Agent 进程在运行（状态栏应显示「Agent: 就绪」）';
+    return '无法连接 Agent：请确认 Agent 进程在运行（状态栏应显示「Agent: 未活动」或「Agent: 运行中」）';
   }
   return text;
 }
 
 const STATUS_META: Record<string, { label: string; color: string }> = {
   pending: { label: '待索引', color: '#616161' },
+  queued: { label: '排队中', color: '#616161' },
   indexing: { label: '索引中', color: '#0e639c' },
   ready: { label: '就绪', color: '#059669' },
   failed: { label: '失败', color: '#cd3131' },
@@ -89,7 +90,8 @@ export function KbPanel(): JSX.Element {
   const navigate = useNavigate();
   const [docs, setDocs] = useState<KbDocSummary[]>([]);
   const [status, setStatus] = useState<KbStatus | null>(null);
-  const [category, setCategory] = useState('__auto__');
+  // 分类筛选（只看该分类下的文档）；'__all__' = 全部
+  const [filterCategory, setFilterCategory] = useState(CATEGORY_ALL);
   const [importing, setImporting] = useState(false);
   const [reindexing, setReindexing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -131,9 +133,13 @@ export function KbPanel(): JSX.Element {
     // 反过来打满 Agent 单 worker 触发 read_body 截断。这里丢弃重入，保证同一时刻只有一组在飞。
     if (inflightRef.current) return;
     inflightRef.current = true;
+    // 搜索 + 分类筛选一起下推后端；「全部」不传 category
+    const listParams: { q?: string; category?: string } = {};
+    if (debouncedQuery) listParams.q = debouncedQuery;
+    if (filterCategory !== CATEGORY_ALL) listParams.category = filterCategory;
     try {
       const [list, st] = await Promise.all([
-        ipc.kbList(debouncedQuery ? { q: debouncedQuery } : undefined),
+        ipc.kbList(listParams),
         ipc.kbStatus(),
       ]);
       setDocs(list.docs ?? []);
@@ -147,7 +153,7 @@ export function KbPanel(): JSX.Element {
     } finally {
       inflightRef.current = false;
     }
-  }, [debouncedQuery]);
+  }, [debouncedQuery, filterCategory]);
 
   // 列表变化（搜索/刷新）后裁剪选中集：只保留仍在列表中的条目
   useEffect(() => {
@@ -183,7 +189,8 @@ export function KbPanel(): JSX.Element {
   // 有文档在索引中或正在重建 → 轮询，直到落定
   useEffect(() => {
     const busyNow =
-      reindexing || docs.some((d) => d.status === 'indexing' || d.status === 'pending');
+      reindexing ||
+      docs.some((d) => d.status === 'indexing' || d.status === 'pending' || d.status === 'queued');
     if (busyNow && pollRef.current === null) {
       pollRef.current = window.setInterval(() => void refresh({ silent: true }), 1500);
     } else if (!busyNow && pollRef.current !== null) {
@@ -205,7 +212,9 @@ export function KbPanel(): JSX.Element {
     const busyVersions =
       expandedGroup !== null &&
       !!anchor &&
-      versions.some((v) => v.status === 'indexing' || v.status === 'pending');
+      versions.some(
+        (v) => v.status === 'indexing' || v.status === 'pending' || v.status === 'queued',
+      );
     if (!busyVersions || !anchor) return;
     const t = window.setInterval(() => {
       void (async () => {
@@ -352,7 +361,8 @@ export function KbPanel(): JSX.Element {
       key: `imp-${now}-${i}`,
       path: p,
       name: p.split(/[\\/]/).pop() ?? p,
-      category,
+      // 分类统一交给导入弹窗的「自动识别」（模型预判），可逐条手改
+      category: '__auto__',
       addedAt: now,
     }));
     setPending(list);
@@ -598,9 +608,6 @@ export function KbPanel(): JSX.Element {
           <div className="text-ui font-semibold" style={{ color: '#1f1f1f' }}>
             知识库 / 参考资料
           </div>
-          <div className="mt-0.5 text-2xs" style={{ color: '#616161' }}>
-            上传法规/制度/案例等文件，分块 + 向量化入库；文档审核与聊天时经混合检索（BM25 + 向量 + RRF + 重排）自动引用。
-          </div>
         </div>
         <div className="flex flex-shrink-0 items-center gap-2">
           <button
@@ -628,15 +635,20 @@ export function KbPanel(): JSX.Element {
         className="flex flex-shrink-0 items-center gap-2 border-b px-4 py-2"
         style={{ borderColor: '#e0e0e0' }}
       >
+        {/* 分类筛选：选中某分类只列该分类下的文档 */}
         <select
-          value={category}
-          onChange={(e) => setCategory(e.target.value)}
+          value={filterCategory}
+          onChange={(e) => {
+            setFilterCategory(e.target.value);
+            // 筛选后列表会变，收起已展开的版本历史
+            setExpandedGroup(null);
+            setVersions([]);
+          }}
           className="rounded border px-2 py-1 text-2xs outline-none"
           style={{ borderColor: '#d4d4d4', backgroundColor: '#ffffff', color: '#1f1f1f' }}
-          title="上传时打的分类标签（检索可按类过滤）"
+          title="按分类筛选文档"
         >
-          <option value="__auto__">自动识别</option>
-          <option value="">未分类</option>
+          <option value={CATEGORY_ALL}>全部</option>
           {categories.map((c) => (
             <option key={c.key} value={c.value}>
               {c.label}
@@ -693,9 +705,7 @@ export function KbPanel(): JSX.Element {
         </span>
         {status && (
           <span className="ml-auto text-2xs" style={{ color: '#616161' }}>
-            共 {status.stats.total_docs} 文档 · {status.stats.total_chunks} 分块 · 向量
-            {status.embedding_available ? '就绪' : '不可用'} · 重排
-            {status.reranker_available ? '就绪' : '未就绪'}
+            共 {status.stats.total_docs} 文档
             {status.needs_reindex && <span style={{ color: '#b25c1a' }}> · 需重建</span>}
           </span>
         )}
@@ -755,7 +765,7 @@ export function KbPanel(): JSX.Element {
               <>
                 暂无参考资料。点击「＋ 上传参考资料」导入法规/制度/案例等文件，
                 <br />
-                之后文档审核与聊天会自动混合检索并引用其中内容。
+                之后文档审核与聊天会自动引用其中内容。
               </>
             )}
           </div>

@@ -186,7 +186,17 @@ export function OperationsWorkbench(): JSX.Element {
   }, [selection, selectedItemId, skills, teams]);
 
   const handleSelect = (itemId: string): void => {
+    const same = useOpsNavStore.getState().selectedItemId === itemId;
     useOpsNavStore.getState().selectItem(itemId);
+    // 再点同一业务：selectedItemId 不变 → ExpertWorkflowPanel 的 loadCase effect
+    // 不会重跑；若上一次加载失败/挂起，界面会彻底「点了没反应」，只能切模式强制
+    // 重挂载 —— 这里检测失败态手动补一次加载（BUGFIX #207）
+    if (same) {
+      const cs = useOpsCaseStore.getState();
+      if (cs.error !== null || cs.case_id !== `${projectName}__${itemId}`) {
+        void cs.loadCase(projectName, itemId);
+      }
+    }
   };
 
   // 中期改造：保存功能点的专家团预设（替代 Skill 绑定，运营链路全看专家团）

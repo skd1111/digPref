@@ -137,6 +137,12 @@ export interface OpsCaseFile {
   reject_marks?: OpsRejectMark[];
   /** 系统合规审核报告（2026-11-05）：有 findings → 前端弹审核报告 */
   risk_report?: OpsRiskReport;
+  /** 归属凭证节点名（凭证预览，2026-11-09）：空 = 未归属 */
+  credential?: string | undefined;
+  /** 归类来源：关键词 / AI / 人工拖动 */
+  classified_by?: CredentialClassifiedBy | undefined;
+  /** 影像识别轻摘要（块坐标选中时另拉，不随 Case 下发） */
+  ocr?: CredentialOcrBrief | undefined;
   created_at: number;
   updated_at: number;
 }
@@ -192,6 +198,238 @@ export interface OpsCaseState {
   files: OpsCaseFile[];
   qa: OpsCaseQa[];
   drafts: OpsCaseDraft[];
+  /** 业务办理台账（业务汇总，2026-11-09）：挂起时前端冻结当前业务界面 */
+  task: OpsBusinessTask | null;
+}
+
+// ---------------------------------------------------------------------------
+// 业务办理台账（业务汇总，2026-11-09，与 agent/ops/tasks.py 对齐）
+//
+// 与「业务记录卡片」不同：台账是**业务发起即建**、状态随办理流转的一行记录。
+// 四态：正在办理 / 挂起 / 人工确认 / 结束。
+// ---------------------------------------------------------------------------
+
+export type OpsTaskStatus =
+  "in_progress" | "suspended" | "manual_review" | "closed";
+
+export const OPS_TASK_STATUSES: OpsTaskStatus[] = [
+  "in_progress",
+  "suspended",
+  "manual_review",
+  "closed",
+];
+
+export const OPS_TASK_STATUS_META: Record<
+  OpsTaskStatus,
+  { label: string; icon: string; color: string }
+> = {
+  in_progress: { label: "正在办理", icon: "🟦", color: "#0451a5" },
+  suspended: { label: "挂起", icon: "🟨", color: "#b25c1a" },
+  manual_review: { label: "人工确认", icon: "🟧", color: "#cd3131" },
+  closed: { label: "结束", icon: "⬜", color: "#059669" },
+};
+
+/** 待人工接入项（被打回 / 审核异常的材料） */
+export interface OpsTaskPendingItem {
+  file_id: string;
+  file_name: string;
+  member_key: string;
+  kind: "rejected" | "review_error";
+  note: string;
+}
+
+export interface OpsBusinessTask {
+  id: string;
+  /** 关联专家验收 Case（项目__功能点） */
+  case_id: string;
+  project_name: string;
+  /** 小类 id（如 corp_open） */
+  feature_id: string;
+  /** 小类名（如 对公开户辅助） */
+  feature_label: string;
+  /** 业务大类 id（如 corp_account） */
+  category: string;
+  /** 业务大类名（如 对公账户管理） */
+  category_label: string;
+  title: string;
+  status: OpsTaskStatus;
+  status_label: string;
+  status_note: string;
+  pending_items: OpsTaskPendingItem[];
+  operator: string;
+  /** 关联完成后的业务小结卡片 */
+  record_id: string;
+  created_at: number;
+  updated_at: number;
+  suspended_at: number;
+  closed_at: number;
+}
+
+/** 建档参数（业务发起时带上业务大类 / 小类标签） */
+export interface OpsTaskStartMeta {
+  project_name: string;
+  feature_id: string;
+  feature_label: string;
+  category: string;
+  category_label: string;
+  title: string;
+}
+
+/** 台账查询筛选条件（业务汇总页） */
+export interface OpsTaskQuery {
+  status?: OpsTaskStatus[] | undefined;
+  category?: string | undefined;
+  feature_id?: string | undefined;
+  project_name?: string | undefined;
+  case_id?: string | undefined;
+  date_from?: number | undefined;
+  date_to?: number | undefined;
+  keyword?: string | undefined;
+  limit?: number | undefined;
+}
+
+/** 台账列表响应（含各状态计数） */
+export interface OpsTaskListResult {
+  tasks: OpsBusinessTask[];
+  total: number;
+  counts: Record<OpsTaskStatus, number>;
+}
+
+/** 台账详情 */
+export interface OpsTaskDetail {
+  task: OpsBusinessTask;
+  pending_items: OpsTaskPendingItem[];
+  file_stats: Record<string, number>;
+  file_total: number;
+  record: BusinessRecord | null;
+  /** 凭证摘要（凭证预览，2026-11-09）：不齐哪几张在汇总页明细行直接可见 */
+  credentials?: CredentialStats | undefined;
+}
+
+// ---------------------------------------------------------------------------
+// 凭证预览（2026-11-09，与 agent/ops/api.py 的 /ops/case/credentials 对齐）
+//
+// 一次业务办理需要哪几张凭证（专家团 member.credentials 预设）→
+// 实传了哪几张（凭证资产）→ 每张采到了哪些要素 →
+// 点要素名在影像上放大高亮对应区域（RapidOCR 四点框）。
+// ---------------------------------------------------------------------------
+
+/** 归类来源：关键词命中 / AI 判定 / 人工拖动（空 = 尚未归类） */
+export type CredentialClassifiedBy = "" | "keyword" | "ai" | "manual";
+
+/** 凭证资产类型：已审材料 / OCR 识别底图 / 录入表单（无影像） */
+export type CredentialAssetKind = "file" | "image" | "draft";
+
+/** 影像识别块（RapidOCR 原始四点框，像素坐标） */
+export interface OcrBlock {
+  text: string;
+  /** 四点多边形 [[x,y]×4]（部分引擎返 4 点以上，按 ≥3 点处理） */
+  bbox: number[][];
+  confidence: number;
+}
+
+/** 影像识别轻摘要（聚合响应里只带计数，完整 blocks 选中资产时再拉） */
+export interface CredentialOcrBrief {
+  engine: string;
+  width: number;
+  height: number;
+  blocks: number;
+  confidence: number;
+  elapsed_ms: number;
+  error: string;
+}
+
+/** 完整影像元数据（GET /case/credential-asset/{id} 的 ocr 字段） */
+export interface CredentialOcrMeta {
+  engine?: string;
+  width?: number;
+  height?: number;
+  blocks?: OcrBlock[];
+  text?: string;
+  confidence?: number;
+  elapsed_ms?: number;
+  error?: string;
+}
+
+/** 凭证资产（材料行 CF-* 或识别底图行 CI-*） */
+export interface CredentialAsset {
+  kind: CredentialAssetKind;
+  id: string;
+  case_id: string;
+  team_id: string;
+  member_key: string;
+  credential: string;
+  classified_by: CredentialClassifiedBy;
+  file_name: string;
+  /** 材料审核状态（pending/reviewing/passed/rejected）；底图为空串 */
+  status: string;
+  /** upload / ocr-fill / manual */
+  source: string;
+  draft_id: string;
+  review_note: string;
+  is_image: boolean;
+  has_ocr: boolean;
+  ocr: CredentialOcrBrief;
+  created_at: number;
+}
+
+/** 凭证要素的采集结果（点 label 定位到影像区域） */
+export interface CredentialFieldValue {
+  name: string;
+  label: string;
+  value: string;
+  /** ai = 审核提取，ocr = 影像识别填入，manual = 人工录入 */
+  source: "ai" | "ocr" | "manual";
+  asset_id: string;
+  asset_kind: CredentialAssetKind;
+  asset_credential: string;
+  confidence: number;
+  /** 来源资产有无块坐标（false = 只能看值，无法定位） */
+  can_locate: boolean;
+}
+
+/** 单个凭证节点：预设要求 + 实挂资产 + 要素采集情况 */
+export interface CredentialNodeView {
+  name: string;
+  required: boolean;
+  media: string;
+  hint: string;
+  keywords: string[];
+  satisfied: boolean;
+  assets: CredentialAsset[];
+  field_values: CredentialFieldValue[];
+  fields_missing: Array<{ name: string; label: string }>;
+}
+
+export interface CredentialMemberView {
+  member_key: string;
+  /** 该专家是否预设了凭证清单（false = 只能看已传材料，判不了缺失） */
+  has_preset: boolean;
+  credentials: CredentialNodeView[];
+  /** 未归属任何节点的资产（可拖到节点上） */
+  unassigned: CredentialAsset[];
+}
+
+export interface CredentialTeamView {
+  team_id: string;
+  team_name: string;
+  members: CredentialMemberView[];
+}
+
+/** 凭证齐备度统计（业务汇总明细行也用同一口径） */
+export interface CredentialStats {
+  required_total: number;
+  required_ok: number;
+  missing: Array<{ member_key: string; credential: string }>;
+  has_preset: boolean;
+  asset_total: number;
+  unassigned_total: number;
+}
+
+export interface CredentialView {
+  case_id: string;
+  teams: CredentialTeamView[];
+  stats: CredentialStats;
 }
 
 export const CASE_FILE_STATUS_META: Record<

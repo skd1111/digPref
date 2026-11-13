@@ -35,6 +35,8 @@ vi.mock("@/ipc/invoke", () => ({
     opsCaseFileContent: vi.fn(),
     opsCaseFileSaveAs: vi.fn(),
     opsCaseClear: vi.fn(),
+    // 业务台账（业务汇总）：草稿 OCR 上传 / 草稿内文件随提交上传时补建档（BUGFIX #212）
+    opsTaskStart: vi.fn(),
   },
 }));
 
@@ -94,7 +96,7 @@ function passedFile() {
     file_name: "营业执照.txt",
     file_path: "/tmp/营业执照.txt",
     status: "passed" as const,
-    review_note: "通过",
+    review_note: "材料齐全，与系统登记一致",
     reviewed_by: "ai" as const,
     extracted_fields: [
       { field: "统一社会信用代码", value: "91310000XXXX", confidence: 0.95 },
@@ -110,7 +112,7 @@ const selection = { staticHit: null, featureHit: FEATURE as never };
 
 /** 草稿区默认收起（BUGFIX #134）：历史草稿需点提醒栏展开后才可见表单 */
 function expandDraftPanel(): void {
-  fireEvent.click(screen.getByText(/展开填写/).closest("button")!);
+  fireEvent.click(screen.getByText(/继续填写/).closest("button")!);
 }
 
 beforeEach(() => {
@@ -136,6 +138,9 @@ beforeEach(() => {
     error: null,
     busyMembers: {},
     exporting: false,
+    // 直开标记跨测试不能沿用（否则下一个用例一进来交付物区就自动展开）
+    lastDirectDraftId: "",
+    lastNewDraftId: "",
   });
 });
 
@@ -148,10 +153,17 @@ describe("ExpertWorkflowPanel", () => {
         onSaveTeamPreset={() => undefined}
       />,
     );
-    expect(screen.getByText("客户身份识别专家")).toBeTruthy();
+    // 断言限定在专家卡内：专家名也可能出现在其他区域（如交付物页签区的出处专家）
+    expect(
+      document.getElementById(`expert-card-${TEAM.id}-客户身份识别专家`)
+        ?.textContent,
+    ).toContain("客户身份识别专家");
     expect(screen.getByText("营业执照.txt")).toBeTruthy();
-    // 材料详情默认折叠（2026-11 交互优化）：点文件名展开后才见关键要素与证据链
-    fireEvent.click(screen.getByText("营业执照.txt"));
+    // 材料行默认只给结论 + 结果 + 两个入口（2026-11 交互优化）：
+    // 审核意见直接可见，关键要素/证据链点「查看审核明细」才展开
+    expect(screen.getByText(/材料齐全/)).toBeTruthy();
+    expect(screen.queryByText("关键要素")).toBeNull();
+    fireEvent.click(screen.getByText(/查看审核明细/));
     // 关键要素卡：低置信项标红置顶 + 证据链原文摘录
     expect(screen.getByText("关键要素")).toBeTruthy();
     expect(screen.getByText(/⚠ 有效期：模糊不清/)).toBeTruthy();
@@ -217,6 +229,47 @@ describe("ExpertWorkflowPanel", () => {
     fireEvent.click(exportBtn);
     await waitFor(() => expect(saveMock).toHaveBeenCalled());
     expect(ipc.opsCaseExport).not.toHaveBeenCalled();
+  });
+
+  it("审核中的材料给出「重审」出口（BUGFIX #202：不让用户对着转圈干等）", async () => {
+    const reviewing = {
+      ...passedFile(),
+      id: "CF-REVIEWING",
+      status: "reviewing" as const,
+      reviewed_by: "" as const,
+      review_note: "",
+    };
+    (ipc.opsCaseGet as ReturnType<typeof vi.fn>).mockResolvedValue({
+      case_id: "bank__ops_open",
+      files: [reviewing],
+      qa: [],
+      drafts: [],
+    });
+    (ipc.opsCaseFileReview as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...reviewing,
+      status: "passed",
+      review_note: "审核通过",
+      reviewed_by: "ai",
+    });
+    useOpsCaseStore.setState({ files: [reviewing as never] });
+
+    render(
+      <ExpertWorkflowPanel
+        selection={selection}
+        projectName="bank"
+        onSaveTeamPreset={() => undefined}
+      />,
+    );
+
+    // 展开材料详情 → 「↻ 重审」可见（审核中也能点）
+    fireEvent.click(screen.getByText("营业执照.txt"));
+    const reReviewBtn = screen.getByText("↻ 重审").closest("button")!;
+    expect(reReviewBtn).toBeTruthy();
+    fireEvent.click(reReviewBtn);
+    await waitFor(() => expect(ipc.opsCaseFileReview).toHaveBeenCalledTimes(1));
+    expect((ipc.opsCaseFileReview as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe(
+      "CF-REVIEWING",
+    );
   });
 });
 
@@ -292,7 +345,7 @@ describe("交付草稿表单（BUGFIX #78）", () => {
     const submitBtn = screen.getByText("提交给专家审核").closest("button")!;
     expect(submitBtn.disabled).toBe(true);
 
-    // 填写企业名称 → 可提交（专家卡内也有提问输入框，按无 placeholder 区分）
+    // 填写企业名称 → 可提交（专家卡内提问输入框带 placeholder，按无 placeholder 区分）
     const draftInputs = screen
       .getAllByRole("textbox")
       .filter((el) => !(el as HTMLInputElement).placeholder);
@@ -392,6 +445,57 @@ describe("上传文件 OCR 自动填入", () => {
     fireEvent.click(screen.getByText(/撤销本次识别/).closest("button")!);
     expect((textInputs[0] as HTMLInputElement).value).toBe("");
     expect(screen.queryByText("OCR 填入")).toBeNull();
+  });
+
+  it("草稿 OCR 上传也算业务发起：自动补建档（否则挂起/业务汇总不可用）", async () => {
+    (ipc.opsTaskStart as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: "BT-OCR",
+      case_id: "bank__ops_open",
+      status: "in_progress",
+      status_label: "正在办理",
+      pending_items: [],
+    });
+    (ipc.opsCaseDraftOcrFill as ReturnType<typeof vi.fn>).mockResolvedValue({
+      values: { corp_name: "某某贸易有限公司" },
+      filled: ["corp_name"],
+      engine: "document",
+      source: "llm",
+      text_chars: 26,
+      text_preview: "企业名称：某某贸易有限公司",
+    });
+    (ipc.opsCaseGet as ReturnType<typeof vi.fn>).mockResolvedValue({
+      case_id: "bank__ops_open",
+      files: [],
+      qa: [],
+      drafts: [DRAFT],
+      task: null,
+    });
+    useOpsCaseStore.setState({ drafts: [DRAFT as never], task: null });
+
+    render(
+      <ExpertWorkflowPanel
+        selection={selection}
+        projectName="bank"
+        onSaveTeamPreset={() => undefined}
+      />,
+    );
+    expandDraftPanel();
+    // 等 Case 加载完成（否则 loadCase 返回值会把刚建的台账覆盖回 null）
+    await waitFor(() => expect(useOpsCaseStore.getState().loading).toBe(false));
+
+    const fileInput = document.querySelector(
+      'input[type="file"][accept*=".pdf"]',
+    ) as HTMLInputElement;
+    fireEvent.change(fileInput, {
+      target: {
+        files: [new File(["企业名称：某某贸易有限公司"], "执照.txt", { type: "text/plain" })],
+      },
+    });
+
+    await waitFor(() => expect(ipc.opsCaseDraftOcrFill).toHaveBeenCalledTimes(1));
+    // 首次用 OCR 填单即视为业务发起 → 建档
+    await waitFor(() => expect(ipc.opsTaskStart).toHaveBeenCalledTimes(1));
+    expect(useOpsCaseStore.getState().task?.id).toBe("BT-OCR");
   });
 });
 
@@ -512,6 +616,46 @@ describe("系统合规审核报告", () => {
     expect(screen.queryByText(/系统合规审核发现/)).toBeNull();
     expect(screen.queryByText(/合规风险/)).toBeNull();
   });
+
+  it("材料行默认只给结论 + 两个入口：合规风险是独立按钮，审核明细点开才展开", async () => {
+    const risky = {
+      ...passedFile(),
+      id: "CF-RISK",
+      status: "rejected" as const,
+      review_note: "统一社会信用代码未提供",
+      risk_report: riskReportFixture(),
+    };
+    (ipc.opsCaseGet as ReturnType<typeof vi.fn>).mockResolvedValue({
+      case_id: "bank__ops_open",
+      files: [risky],
+      qa: [],
+      drafts: [],
+    });
+    useOpsCaseStore.setState({ files: [risky as never], drafts: [], riskAuditFileId: "" });
+
+    render(
+      <ExpertWorkflowPanel
+        selection={selection}
+        projectName="bank"
+        onSaveTeamPreset={() => undefined}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText("营业执照.txt")).toBeTruthy());
+    // 结论直显：驳回原因不用展开就能看到
+    expect(screen.getByText(/统一社会信用代码未提供/)).toBeTruthy();
+    // 审核明细默认收起：关键要素/证据链不铺屏
+    expect(screen.queryByText("关键要素")).toBeNull();
+    expect(screen.queryByText("审核依据（原文摘录）")).toBeNull();
+    // 合规风险是独立按钮（走 .btn 体系），一点就开报告
+    const riskBtn = screen.getByText(/合规风险 1/).closest("button")!;
+    expect(riskBtn.className).toContain("btn");
+    fireEvent.click(riskBtn);
+    await waitFor(() => expect(screen.getByText(/系统合规审核发现 1 项风险/)).toBeTruthy());
+    fireEvent.click(screen.getByText("知道了"));
+    // 明细入口存在，点开才见关键要素
+    fireEvent.click(screen.getByText(/查看审核明细/));
+    expect(screen.getByText("关键要素")).toBeTruthy();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -536,7 +680,7 @@ describe("草稿区默认收起（BUGFIX #134）", () => {
       />,
     );
     // 提醒栏可见，表单控件与提交按钮不出现
-    expect(screen.getByText(/展开填写/)).toBeTruthy();
+    expect(screen.getByText(/继续填写/)).toBeTruthy();
     expect(screen.queryByText("提交给专家审核")).toBeNull();
     // 点开提醒栏 → 表单出现，可再收起
     expandDraftPanel();
@@ -558,7 +702,7 @@ describe("草稿区默认收起（BUGFIX #134）", () => {
       />,
     );
     // 无草稿时连提醒栏都没有
-    expect(screen.queryByText(/展开填写/)).toBeNull();
+    expect(screen.queryByText(/继续填写/)).toBeNull();
     // 通过专家卡提问框发起提问（专家卡输入框带 placeholder，按此区分）
     // 提问框默认收起（2026-11 交互优化），点「追问」展开后才输入
     fireEvent.click(screen.getByTitle(/向客户身份识别专家追问/));
@@ -567,7 +711,7 @@ describe("草稿区默认收起（BUGFIX #134）", () => {
     fireEvent.keyDown(askInput, { key: "Enter" });
     // 新草稿到达 → 自动展开，无需点提醒栏（此时也不存在提醒栏）
     await waitFor(() => {
-      expect(screen.queryByText(/展开填写/)).toBeNull();
+      expect(screen.queryByText(/继续填写/)).toBeNull();
       expect(screen.getByText("提交给专家审核")).toBeTruthy();
     });
   });
@@ -610,7 +754,8 @@ describe("打回定位（BUGFIX #80）", () => {
       />,
     );
 
-    // 入口按钮
+    // 入口按钮在审核明细里（材料行默认只给结论 + 两个入口）
+    fireEvent.click(screen.getByText(/查看审核明细/));
     const entry = screen.getByText(/1 处打回/);
     fireEvent.click(entry);
 
@@ -831,14 +976,15 @@ describe("全屏草稿表单（BUGFIX #93）", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 直开草稿只自动全屏一次（2026-11-05）：页签来回切换不应再弹全屏
+// 直开草稿专家卡下方展开（2026-11-09）：点交付物不再铺满全屏，
+// 交付物页签区在专家卡下面铺平（替代原右侧抽屉）
 // ---------------------------------------------------------------------------
 
-describe("直开草稿全屏只弹一次（2026-11-05）", () => {
+describe("直开草稿专家卡下方展开（2026-11-09）", () => {
   const draftA = { ...DRAFT, id: "DR-A", title: "资料预审意见书" };
   const draftB = { ...DRAFT, id: "DR-B", title: "资料预审信息及补件申请表" };
 
-  it("退出全屏后切页签再切回，保持紧凑卡不再全屏", async () => {
+  it("点交付物直开草稿只展开专家卡下方页签区，不自动全屏", async () => {
     (ipc.opsCaseGet as ReturnType<typeof vi.fn>).mockResolvedValue({
       case_id: "bank__ops_open",
       files: [],
@@ -857,15 +1003,53 @@ describe("直开草稿全屏只弹一次（2026-11-05）", () => {
         onSaveTeamPreset={() => undefined}
       />,
     );
-    // 直开草稿仍然自动全屏一次
-    await waitFor(() => expect(screen.getByText(/✕ 退出全屏/)).toBeTruthy());
-    fireEvent.click(screen.getByText(/✕ 退出全屏/));
-    await waitFor(() => expect(screen.queryByText(/✕ 退出全屏/)).toBeNull());
-    // 切到另一份草稿，再切回直开草稿：不应再次全屏
+    // 交付物区自动打开（页签区头部提示可见），且没有全屏页头
+    await waitFor(() =>
+      expect(screen.getByText(/填写 → 提交专家审核/)).toBeTruthy(),
+    );
+    expect(screen.queryByText(/✕ 退出全屏/)).toBeNull();
+    // 切换草稿页签来回：仍是下方页签区，不弹全屏
     fireEvent.click(screen.getAllByText("资料预审信息及补件申请表")[0]);
     fireEvent.click(screen.getAllByText("资料预审意见书")[0]);
     expect(screen.queryByText(/✕ 退出全屏/)).toBeNull();
-    expect(screen.getByText(/⛶ 全屏/)).toBeTruthy();
+    expect(screen.getByText(/📝 交付草稿/)).toBeTruthy();
+  });
+
+  it("离开再回到业务办理（组件重挂）不再自动弹交付物区", async () => {
+    (ipc.opsCaseGet as ReturnType<typeof vi.fn>).mockResolvedValue({
+      case_id: "bank__ops_open",
+      files: [],
+      qa: [],
+      drafts: [draftA, draftB],
+    });
+    useOpsCaseStore.setState({
+      drafts: [draftA as never, draftB as never],
+      lastDirectDraftId: "DR-A",
+      lastNewDraftId: "DR-A",
+    });
+    const first = render(
+      <ExpertWorkflowPanel
+        selection={selection}
+        projectName="bank"
+        onSaveTeamPreset={() => undefined}
+      />,
+    );
+    // 首次直开：交付物区自动展开
+    await waitFor(() =>
+      expect(screen.getByText(/填写 → 提交专家审核/)).toBeTruthy(),
+    );
+    // 切到其他界面再回来：面板卸载后重新挂载，标记已在首次消费清标
+    first.unmount();
+    render(
+      <ExpertWorkflowPanel
+        selection={selection}
+        projectName="bank"
+        onSaveTeamPreset={() => undefined}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText(/继续填写/)).toBeTruthy());
+    expect(screen.queryByText(/填写 → 提交专家审核/)).toBeNull();
+    expect(screen.queryByText(/✕ 退出全屏/)).toBeNull();
   });
 });
 
@@ -925,6 +1109,8 @@ describe("点交付物直开表单（2026-08-14）", () => {
         onSaveTeamPreset={() => undefined}
       />,
     );
+    // 等专家卡稳定出现（compact 卡也保留交付标准）再点击，避免事件落在重建前的分离节点上
+    await screen.findByText("交付标准");
     const btn = await screen.findByRole("button", { name: /客户身份基本信息表/ });
     fireEvent.click(btn);
     await waitFor(() =>
@@ -937,12 +1123,17 @@ describe("点交付物直开表单（2026-08-14）", () => {
     );
     // 未走问专家链路
     expect(ipc.opsCaseAsk).not.toHaveBeenCalled();
-    // 草稿入 store 且标记为直开目标（面板据此自动全屏）
+    // 草稿入 store；直开标记被面板消费后清标（防止重挂时重复弹交付物区）
     await waitFor(() => {
       const st = useOpsCaseStore.getState();
       expect(st.drafts.some((d: { id: string }) => d.id === "DR-DIRECT")).toBe(true);
-      expect(st.lastDirectDraftId).toBe("DR-DIRECT");
+      expect(st.lastDirectDraftId).toBe("");
     });
+    // 交付物区自动展开（不再自动全屏，2026-11-09）
+    await waitFor(() =>
+      expect(screen.getByText(/填写 → 提交专家审核/)).toBeTruthy(),
+    );
+    expect(screen.queryByText(/✕ 退出全屏/)).toBeNull();
   });
 
   it("无模板的交付物：点击自动拼好提问发给该专家（免手动输入）", async () => {
@@ -958,6 +1149,8 @@ describe("点交付物直开表单（2026-08-14）", () => {
         onSaveTeamPreset={() => undefined}
       />,
     );
+    // 同上：等专家卡稳定后再点击，避免事件落在重建前的分离节点上
+    await screen.findByText("交付标准");
     const btn = await screen.findByRole("button", { name: /身份风险疑点清单/ });
     fireEvent.click(btn);
     await waitFor(() =>

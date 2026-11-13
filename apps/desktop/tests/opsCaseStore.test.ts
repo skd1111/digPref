@@ -83,6 +83,26 @@ describe("opsCaseStore", () => {
     }
   });
 
+  it("loadCase 响应体截断（decoding）错误也静默退避重试（BUGFIX #207）", async () => {
+    vi.useFakeTimers();
+    try {
+      const get = ipc.opsCaseGet as ReturnType<typeof vi.fn>;
+      get
+        .mockRejectedValueOnce(
+          new Error("ops command failed: error decoding response body"),
+        )
+        .mockResolvedValueOnce({ case_id: CASE_ID, files: [], qa: [] });
+      const p = useOpsCaseStore.getState().loadCase("bank", "ops_open");
+      await vi.advanceTimersByTimeAsync(1500);
+      await p;
+      expect(get).toHaveBeenCalledTimes(2);
+      expect(useOpsCaseStore.getState().error).toBeNull();
+      expect(useOpsCaseStore.getState().case_id).toBe(CASE_ID);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("loadCase 非瞬态错误立即展示且不重试", async () => {
     const get = ipc.opsCaseGet as ReturnType<typeof vi.fn>;
     get.mockRejectedValue(new Error("case not found"));

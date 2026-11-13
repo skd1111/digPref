@@ -5,7 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Enterprise AI IDE</title>
   </head>
-  <body class="bg-bg-base text-fg antialiased">
+  <!-- 不再加 antialiased：Windows 下会关闭 ClearType 导致小字发虚（2026-11-09） -->
+  <body class="bg-bg-base text-fg">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

@@ -56,6 +56,9 @@ class Route:
     threshold：显式命中阈值；None 时按风险取全局默认（高风险路由走
         settings.semantic_route_high_risk_threshold）。
     high_risk：高风险路由标记——阈值更高，命中强制追问确认。
+    tree_hint：面向 LLM 的消歧说明（本意图是什么、区别于哪个易混意图）。
+        不参与向量化（不进指纹 / 不影响命中），仅在向量路由未命中回退 LLM 时
+        经 disambiguation_hints 注入意图分析 system 提示。
     """
 
     name: str
@@ -64,6 +67,7 @@ class Route:
     hard_negatives: tuple[str, ...] = ()
     threshold: float | None = None
     high_risk: bool = False
+    tree_hint: str = ""
 
 
 # 预置路由（高频 + 确定性场景；analysis 字段与 IntentAnalysis.to_dict 对齐）
@@ -132,6 +136,10 @@ DEFAULT_ROUTES: tuple[Route, ...] = (
             "confidence": 0.85,
             "reason": "语义路由命中：知识库检索/确认追问（走 RAG 召回直接作答，不动用文件工具）",
         },
+        tree_hint=(
+            "从内部知识库/文档检索答案，走 RAG 召回直接作答（need_tool=False）。"
+            "区别于 db_query：后者查结构化数据库表、需要数据工具（need_tool=True）。"
+        ),
     ),
     Route(
         name="time_query",
@@ -181,6 +189,11 @@ DEFAULT_ROUTES: tuple[Route, ...] = (
             "confidence": 0.85,
             "reason": "语义路由命中：数据库只读查询",
         },
+        tree_hint=(
+            "实际读取/查看数据库表数据（只读 SELECT，need_tool=True）。"
+            "区别于 db_drop（删除/清空，写操作）；区别于 kb_lookup（查文档非查库）；"
+            "区别于「编写查询脚本但不执行」（代码生成，非实际查询）。"
+        ),
     ),
     Route(
         name="db_drop",
@@ -208,6 +221,11 @@ DEFAULT_ROUTES: tuple[Route, ...] = (
             "clarification_message": "这是不可逆的删除操作。请确认：要删除/清空的是哪张表？目标库是哪个？",
         },
         high_risk=True,
+        tree_hint=(
+            "实际删除/清空数据库表或其中数据（不可逆写操作，需二次确认）。"
+            "区别于 db_query（只读查询）；区别于「讨论删除脚本/删了怎么恢复/为什么删不掉」"
+            "（排障或代码生成，非执行删除）。"
+        ),
     ),
     Route(
         name="ssh_execute",
@@ -233,6 +251,10 @@ DEFAULT_ROUTES: tuple[Route, ...] = (
             "clarification_message": "即将在远程服务器上执行操作。请确认目标主机与要执行的命令。",
         },
         high_risk=True,
+        tree_hint=(
+            "实际登录远程服务器执行命令（运维写操作，需二次确认）。"
+            "区别于「编写 SSH 脚本/排查连接超时/写脚本别执行」（代码生成或排障，非实际执行）。"
+        ),
     ),
 )
 
@@ -651,6 +673,65 @@ class SemanticIntentRouter:
                 "clarification_message", "这是高风险操作，请确认目标与操作内容后再执行。"
             )
         return analysis
+
+    async def disambiguation_hints(
+        self, text: str, top_k: int | None = None
+    ) -> list[dict[str, Any]]:
+        """接近带候选 + tree_hint（供 LLM 消歧），与 route() 同打分口径但不套命中阈值。
+
+        向量路由未命中回退 LLM 时由 compose_intent_system_prompt 调用：返回相似度
+        >= hint_floor 且带 tree_hint 的 top_k 候选（按分降序），让 LLM 据消歧说明判别
+        易混意图。未启用 / embedding 不可用 / 无候选 / 任何故障 → []（best-effort，
+        绝不阻塞意图主链路）。tree_hint 不向量化，故不影响命中与向量缓存。
+        """
+        if not getattr(settings, "semantic_route_enabled", False):
+            return []
+        prompt = (text or "").strip()
+        if not prompt:
+            return []
+        try:
+            if not await self._ensure_vectors():
+                return []
+            client = await self._get_embedding_client()
+            if client is None:
+                return []
+            qvec = await client.embed(prompt)
+            if not any(qvec):
+                return []
+            pos_best: dict[str, float] = {}
+            for name, vec in self._vectors or []:
+                score = _cosine(qvec, vec)
+                if score > pos_best.get(name, 0.0):
+                    pos_best[name] = score
+            if not pos_best:
+                return []
+            bm25_scores = _bm25_route_scores(_tokenize(prompt), self._routes)
+            bm25_max = max(bm25_scores.values(), default=0.0)
+            weight = settings.semantic_route_hybrid_weight
+            fused: dict[str, float] = dict(pos_best)
+            if bm25_max > 0 and 0 < weight < 1:
+                for name in pos_best:
+                    fused[name] = (
+                        pos_best[name] * (1 - weight)
+                        + (bm25_scores.get(name, 0.0) / bm25_max) * weight
+                    )
+            floor = settings.semantic_route_hint_floor
+            k = top_k if top_k is not None else settings.semantic_route_hint_top_k
+            route_map = {r.name: r for r in self._routes}
+            candidates: list[dict[str, Any]] = []
+            for name in sorted(fused, key=lambda n: fused[n], reverse=True):
+                route = route_map.get(name)
+                if route is None or not route.tree_hint or fused[name] < floor:
+                    continue
+                candidates.append(
+                    {"name": name, "score": round(fused[name], 4), "tree_hint": route.tree_hint}
+                )
+                if len(candidates) >= k:
+                    break
+            return candidates
+        except Exception as exc:  # 消歧提示故障绝不影响意图主链路
+            logger.debug("semantic_route disambiguation_hints failed: %s", exc)
+            return []
 
 
 # ---- 单例 --------------------------------------------------------------------

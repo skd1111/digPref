@@ -52,6 +52,12 @@ export function ExpertTeamSelector(): JSX.Element | null {
       ? '未选择，可手动指定'
       : (SOURCE_LABEL[selectionSource] ?? selectionSource);
 
+  // 「AI 推荐」来源标签不再展示（用户要求 2026-11-09）：AI 推荐/关键词匹配选出的团
+  // 已经体现在下拉框里，再挂一个来源标签只是噪音；其余来源（业务预设/手动/未选择）保留。
+  const hideSourceHint =
+    !recommending && selectedTeamIds.length > 0 &&
+    (selectionSource === 'llm' || selectionSource === 'keyword');
+
   return (
     <div
       className="flex flex-col justify-center gap-0.5 self-stretch rounded border px-1.5 py-1"
@@ -76,9 +82,11 @@ export function ExpertTeamSelector(): JSX.Element | null {
           </option>
         ))}
       </select>
-      <span className="text-[10px]" style={{ color: isAuto ? '#059669' : '#b45309' }}>
-        {isAuto ? sourceHint : `手动 · ${selectedTeamIds.length} 个团`}
-      </span>
+      {!hideSourceHint && (
+        <span className="text-[10px]" style={{ color: isAuto ? '#059669' : '#b45309' }}>
+          {isAuto ? sourceHint : `手动 · ${selectedTeamIds.length} 个团`}
+        </span>
+      )}
     </div>
   );
 }

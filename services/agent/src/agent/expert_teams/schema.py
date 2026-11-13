@@ -57,6 +57,41 @@ EXPERT_TEAM_JSON_SCHEMA: dict = {
                             },
                         },
                     },
+                    "credentials": {
+                        "type": "array",
+                        "maxItems": 20,
+                        "items": {
+                            "type": "object",
+                            "required": ["name"],
+                            "properties": {
+                                "name": {"type": "string", "minLength": 1, "maxLength": 64},
+                                "required": {"type": "boolean"},
+                                "media": {"type": "string", "enum": ["image", "doc", "any"]},
+                                "hint": {"type": "string", "maxLength": 200},
+                                "keywords": {
+                                    "type": "array",
+                                    "items": {"type": "string", "maxLength": 32},
+                                    "maxItems": 12,
+                                },
+                                "fields": {
+                                    "type": "array",
+                                    "maxItems": 12,
+                                    "items": {
+                                        "type": "object",
+                                        "required": ["name"],
+                                        "properties": {
+                                            "name": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 64,
+                                            },
+                                            "label": {"type": "string", "maxLength": 64},
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
                     "prompt": {"type": "string", "maxLength": 4000},
                 },
             },

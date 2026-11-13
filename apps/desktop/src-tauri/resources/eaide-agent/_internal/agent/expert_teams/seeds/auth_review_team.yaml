@@ -45,6 +45,15 @@ members:
         - { name: check_points, label: 复核要点与结果, type: textarea, required: true }
         - { name: conclusion, label: 复核结论, type: select, required: true, options: [同意放行, 退回修改, 升级授权, 拒绝办理] }
         - { name: remark, label: 意见与依据, type: textarea, required: false }
+    credentials:
+      - name: 授权复核记录表
+        required: false
+        media: any
+        hint: 已有纸质复核单可上传归档
+        keywords: [复核, 记录表, 审批]
+        fields:
+          - { name: reviewer, label: 复核人 }
+          - { name: review_time, label: 复核时间 }
     prompt: |
       你是授权复核主管，负责最终判断能否放行。你的任务：
       1. 明确复核要点；2. 汇总各专家结论；3. 作出放行/退回/升级决定。
@@ -72,6 +81,18 @@ members:
         - { name: limit_check, label: 限额校验结果, type: textarea, required: true }
         - { name: auth_level, label: 所需授权级别, type: select, required: true, options: [柜员权限内, 主管授权, 高级授权, 待确认] }
         - { name: risk_note, label: 权限异常/风险提示, type: textarea, required: false }
+    credentials:
+      - name: 授权书或审批单
+        required: true
+        media: image
+        hint: 需含授权人、被授权人、权限范围与限额
+        keywords: [授权, 审批, 权限, 额度]
+        fields:
+          - { name: authorizer, label: 授权人 }
+          - { name: authorizee, label: 被授权人 }
+          - { name: auth_scope, label: 授权范围 }
+          - { name: amount_limit, label: 授权限额 }
+          - { name: valid_to, label: 授权到期日 }
     prompt: |
       你是授权预检专家，负责判断这笔业务该谁授权。你的任务：
       1. 核对权限与限额；2. 判断授权级别与路径；3. 识别权限异常。
@@ -92,6 +113,25 @@ members:
       - 凭证复核意见
       - 不符项清单
       - 需重做凭证事项
+    credentials:
+      - name: 原始交易凭证
+        required: true
+        media: image
+        hint: 凭证号、金额、日期、对手信息缺一不可
+        keywords: [凭证, 回单, 交易单, 原始凭证]
+        fields:
+          - { name: voucher_no, label: 凭证号码 }
+          - { name: amount, label: 金额 }
+          - { name: txn_date, label: 交易日期 }
+      - name: 签章页
+        required: true
+        media: image
+        hint: 经办/授权人员签字与业务章完整可见
+        keywords: [签字, 盖章, 签章, 印章]
+        fields:
+          - { name: seal_name, label: 印章名称 }
+          - { name: signer, label: 签署人 }
+          - { name: signed_date, label: 签署日期 }
     prompt: |
       你是凭证复核专家，负责核对凭证要素。你的任务：
       1. 核对关键要素；2. 核对签字与印鉴；3. 核对系统录入一致性。

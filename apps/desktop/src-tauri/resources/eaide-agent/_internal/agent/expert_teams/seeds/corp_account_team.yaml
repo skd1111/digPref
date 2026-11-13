@@ -46,6 +46,17 @@ members:
         - { name: conclusion, label: 办理结论, type: select, required: true, options: [可办理, 需补正后办理, 需强化审查, 不予办理] }
         - { name: basis, label: 结论依据, type: textarea, required: false }
         - { name: escalate, label: 需上报事项, type: textarea, required: false }
+    credentials:
+      - name: 开户/变更申请书
+        required: true
+        media: image
+        hint: 客户已签章，账户名称与账号清晰
+        keywords: [开户, 申请书, 申请表, 变更]
+        fields:
+          - { name: account_name, label: 账户名称 }
+          - { name: account_no, label: 账号 }
+          - { name: biz_type, label: 业务类型 }
+          - { name: signed_date, label: 签署日期 }
     prompt: |
       你是账户业务主管，负责给出账户业务办理结论。你的任务：
       1. 确认业务类型；2. 汇总各专家结论；3. 判断可否办理；
@@ -75,6 +86,39 @@ members:
         - { name: beneficial_owner, label: 受益所有人识别, type: textarea, required: true }
         - { name: doubts, label: 疑点清单, type: textarea, required: false }
         - { name: conclusion, label: 资料结论, type: select, required: true, options: [齐全合规, 需补正, 存在重大疑点] }
+    credentials:
+      - name: 营业执照（副本）
+        required: true
+        media: image
+        hint: 需在有效期内，代码与名称可读
+        keywords: [营业执照, 执照, 工商]
+        fields:
+          - { name: corp_name, label: 企业名称 }
+          - { name: credit_code, label: 统一社会信用代码 }
+          - { name: valid_to, label: 营业期限截止 }
+      - name: 法定代表人身份证
+        required: true
+        media: image
+        hint: 正反面都要，姓名与证件号不得反光
+        keywords: [法人, 法定代表人, 身份证]
+        fields:
+          - { name: legal_person, label: 法定代表人 }
+          - { name: id_no, label: 证件号码 }
+      - name: 受益所有人证明材料
+        required: true
+        media: image
+        hint: 股权穿透或受益所有人声明表，需含持股比例
+        keywords: [受益所有人, 股权, 穿透]
+        fields:
+          - { name: beneficiary_name, label: 受益所有人 }
+          - { name: benefit_ratio, label: 持股比例 }
+      - name: 预留印鉴卡
+        required: true
+        media: image
+        hint: 章面完整，与营业执照名称一致
+        keywords: [印鉴, 公章, 预留印鉴]
+        fields:
+          - { name: seal_name, label: 印章名称 }
     prompt: |
       你是开户合规专家，负责开户资料与受益所有人审查。你的任务：
       1. 核对证照与授权；2. 识别受益所有人；3. 列出疑点。
@@ -103,6 +147,23 @@ members:
         - { name: unsettled, label: 未结清业务与余额, type: textarea, required: false }
         - { name: conclusion, label: 核查结论, type: select, required: true, options: [可办理, 需补正, 暂不可办理] }
         - { name: advice, label: 后续处理建议, type: textarea, required: false }
+    credentials:
+      - name: 变更申请书或决议文件
+        required: true
+        media: image
+        hint: 重大变更需股东会/董事会决议与签署页
+        keywords: [变更, 决议, 股东会, 申请书]
+        fields:
+          - { name: change_item, label: 变更事项 }
+          - { name: effective_date, label: 生效日期 }
+      - name: 销户申请与余额证明
+        required: false
+        media: image
+        hint: 销户业务提供，含账户余额与未结事项
+        keywords: [销户, 余额, 结算]
+        fields:
+          - { name: account_no, label: 账号 }
+          - { name: balance, label: 账户余额 }
     prompt: |
       你是变更销户专家，负责账户变更与销户审查。你的任务：
       1. 核对变更材料；2. 检查未结清业务；3. 判断能否办理。

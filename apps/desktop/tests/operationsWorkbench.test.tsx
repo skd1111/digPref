@@ -6,10 +6,11 @@
  * 另：recommend 走 LLM 需数秒，期间必须展示「专家团准备中」动效，避免误判卡死。
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { OperationsWorkbench } from "@/views/OperationsWorkbench";
 import { useExpertTeamStore } from "@/store/expertTeamStore";
 import { useOpsNavStore } from "@/store/opsNavStore";
+import { useOpsCaseStore } from "@/store/opsCaseStore";
 import { useBiznavStore } from "@/store/biznavStore";
 import { useSkillsStore } from "@/store/skillsStore";
 import { useChatStore } from "@/store/chatStore";
@@ -139,7 +140,11 @@ describe("OperationsWorkbench 选团链路（BUGFIX #76）", () => {
     await waitFor(() => {
       expect(screen.getByText(/尽职调查专家团/)).toBeTruthy();
     });
-    expect(screen.getByText("报告撰写专家")).toBeTruthy();
+    // 断言限定在专家卡内：专家名也可能出现在其他区域（如交付物页签区的出处专家）
+    expect(
+      document.getElementById(`expert-card-${TEAM.id}-报告撰写专家`)
+        ?.textContent,
+    ).toContain("报告撰写专家");
     expect(useExpertTeamStore.getState().recommending).toBe(false);
   });
 
@@ -216,5 +221,40 @@ describe("OperationsWorkbench 选团链路（BUGFIX #76）", () => {
     });
     expect(useExpertTeamStore.getState().selectionSource).toBe("preset");
     expect(ipc.expertTeamsRecommend).not.toHaveBeenCalled();
+  });
+
+  it("Case 加载失败后再点同一业务会手动重试（防「切模式才恢复」，BUGFIX #207）", async () => {
+    (ipc.expertTeamsList as ReturnType<typeof vi.fn>).mockResolvedValue({
+      teams: [TEAM],
+    });
+    (ipc.expertTeamsRecommend as ReturnType<typeof vi.fn>).mockResolvedValue({
+      team_ids: [],
+      source: "none",
+    });
+    // 非瞬态错误：一次失败即落 error（Rust 侧重试已耗尽的场景）
+    (ipc.opsCaseGet as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("ops command failed: agent returned HTTP 500 body=boom"),
+    );
+    useOpsCaseStore.setState({
+      case_id: "",
+      files: [],
+      qa: [],
+      drafts: [],
+      task: null,
+      error: null,
+    });
+
+    render(<OperationsWorkbench />);
+    // 默认展开「工作台」模块：首次点静态业务 → loadCase 失败落 error
+    const item = await screen.findByText("今日待办");
+    fireEvent.click(item);
+    await waitFor(() =>
+      expect(useOpsCaseStore.getState().error).toBeTruthy(),
+    );
+    expect(ipc.opsCaseGet).toHaveBeenCalledTimes(1);
+
+    // 再点同一业务：selectedItemId 未变但处于失败态 → 手动补一次加载
+    fireEvent.click(item);
+    await waitFor(() => expect(ipc.opsCaseGet).toHaveBeenCalledTimes(2));
   });
 });

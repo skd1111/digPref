@@ -174,15 +174,6 @@ export function KbImportDialog({
                             识别中…
                           </span>
                         )}
-                        {!classifying && it.detected === 'llm' && (
-                          <span
-                            className="rounded px-1 py-0.5"
-                            style={{ backgroundColor: '#eef3f8', color: '#0e639c' }}
-                            title="由模型自动判定的分类（可手动修改）"
-                          >
-                            AI 判定
-                          </span>
-                        )}
                         {!classifying && it.detected === 'heuristic' && (
                           <span
                             className="rounded px-1 py-0.5"
@@ -228,7 +219,7 @@ export function KbImportDialog({
           <span className="min-w-0 flex-1 text-2xs" style={{ color: '#9a9a9a' }}>
             {classifying
               ? (hint ?? '正在自动识别分类…（识别完成后可直接确认导入）')
-              : (hint ?? `共 ${items.length} 个文件待导入 · 分类留「自动识别」时由模型按内容判定`)}
+              : (hint ?? `共 ${items.length} 个文件待导入 · 分类留「自动识别」时按内容自动归类`)}
           </span>
           <button
             type="button"

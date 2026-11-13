@@ -1591,3 +1591,905 @@ v2.141 把主窗口 url 配成 `eaide://localhost/index.html`（CustomProtocol �
 **教训**
 
 「转发型」命令把后端 HTTP 细节一比一映射成用户可见错误时，任何瞬时连接抖动都会穿透成红字。对幂等 GET 加有界重试是廉价且安全的兜底，但边界必须划清：写操作/审批永不自动重试。前端轮询一定要带在飞闸门，否则 `setInterval` 在慢响应下不是「保持节奏」而是「无上限叠加」，自己就成了压垮后端的那根稻草——排查这类问题要同时看后端**过载源**（429/并发）与前端**请求放大**（轮询叠加），二者常互为因果。
+
+### #198 知识库上传后一直在「索引中」——限流加错层级，批量导入退化成排队长龙
+
+**现象**
+
+批量导入 45 个法规文档后，43 个长期停在「索引中」，只有 2 个 ready；单文档耗时 30~140 秒。界面看不到任何进度感，怀疑是卡死。
+
+**根因（两层叠加，都不是「精度必需的代价」）**
+
+① **限流加错层级**：为修 #197 的 429，新增的 `rag_ingest_concurrency`（默认 2）把**文档级**并发压到 2 路。而 429 的真实来源是「入库期每父块一次云端 LLM 调用」，不是「文档数量」。单文档要串行等 父块数×2 次云端往返（每父块：上下文前缀 + 实体抽取），45 个文档排 23 批 → 墙钟 20~40 分钟。对照组：13:41 那批 20 个文档 2.5 分钟跑完（那时 6 个 RAG 开关同样全开，唯一变量就是并发闸门）。
+
+② **界面语义误导**：上传瞬间就写 `status="indexing"`，只有 ingest 完成才改 ready/failed → **排队等闸门的文档也显示「索引中」**，用户无法区分「在排队」与「真在索引」。
+
+③ **无自愈路径**：入库是后台任务，进程重启/崩溃后任务不恢复，但状态永远停在 indexing → 永久僵尸记录，界面一直显示「索引中」且无任何自愈。
+
+**修复（把闸门从文档级下移到 LLM 调用级）**
+
+① 新增**全局 LLM 调用闸门** `rag_llm_concurrency`（默认 8，可热调 1~32）：`ingestion._call_llm()` 统一包裹「自动分类 / 上下文前缀 / 实体抽取」三类调用（含导入前预判路径），限制同时在飞的云端请求数。取值 8 的依据：实测 9 路并发仍返回 200，30+ 路才成片 429。
+② **文档级闸门放开到 8**（`rag_ingest_concurrency`）：文档级只管解析/ONNX 向量化的 CPU/内存并行度，不再承担云端限流职责。
+③ **父块级并行**：上下文前缀与实体抽取的父块循环由串行改 `asyncio.gather`（共享全局闸门 → 云端并发仍受控），单文档不再串行等 N 次往返。
+④ **状态语义**：新增 `queued` 态——上传建档为「排队中」，拿到并发槽位后由 `ingest_file` 翻为「索引中」，完成后 ready；前端 STATUS_META 增「排队中」标签，两处轮询判定纳入 queued。
+⑤ **启动自愈**：`storage.reset_orphaned_indexing_docs()` 把残留的 indexing/queued 置 failed（附「上次索引被中断，请重新导入」）；Agent 启动时调用，不再产生永久僵尸。
+
+**验证**
+
+`ruff check` 全过；`mypy --strict` 在改动文件零新增错误；`pytest services/agent/tests` 全量 EXITCODE=0；新增 `test_knowledge_llm_concurrency.py` 6 个用例（闸门上限 / 分类与前缀走闸门 / 父块并行 / 自愈幂等）；前端 `vitest tests/kbPanel.test.tsx` 21 通过、`tsc --noEmit` 与 `eslint` 零告警。真机验证由用户自行打包：批量导入应在数分钟内完成，列表可见「排队中 → 索引中 → 就绪」推进。
+
+**教训**
+
+限流要先问「被限的资源到底是谁」：429 是**云端 API 的速率约束**，对应的是「同时在飞的请求数」，而不是「同时在跑的任务数」。把调用级约束错加到任务级，会用吞吐换限流效果——批量场景下就是排队长龙。更根本的是：**限流不能消除等待，等待就得能被看见**——状态语义（排队 vs 执行中）和中断自愈（僵尸态回收）是限流机制的必要配套，否则用户只能对着「索引中」干等。另有一条通用教训：父子/分块级循环里的远程调用默认是串行的，块数一多就线性放大墙钟时间；只要这些调用受一个全局信号量约束，就可以放心并行化。
+
+---
+
+### #199 点「原文链接」后审核页顶部页签（审批工作台 / 文档审核 / 知识库）整行消失
+
+| 字段 | 内容 |
+|---|---|
+| **是否修复** | 已修复 |
+| **修复时间** | 2026-11-06 |
+
+**现象**
+
+审核模式 → 文档审核页，点风险卡里的原文定位（「第 X 页 第 Y 行」/「定位原文高亮」）或点正文里的高亮块后，
+顶部那行页签（审批工作台 / 文档审核 / 知识库）整行不见了，三栏内容顶到 TopBar 下沿；刷新后恢复。
+
+**根因（两层叠加）**
+
+① **布局溢出**：`AuditDashboard` 根是 `flex h-full flex-col`，页签行是第一个子项，三个视图（`DocReviewDashboard` /
+`KbPanel` / `AuditApprovalDashboard`）根部都是 `h-full` 且**直接平铺**成第二个子项 → 内容总高 = 容器高 + 页签行高（约 33px），
+多出的那截被外层 `section.overflow-hidden` 裁掉，平时看不见。
+
+② **scrollIntoView 会滚裁剪容器**：`overflow: hidden` 只挡鼠标滚轮，挡不住编程滚动 —— 浏览器仍把它当 scroll container。
+定位跳转原实现是 `el.scrollIntoView({ block: "center" })`，它顺带滚动**所有**可滚动祖先：外层那个裁剪容器被滚到 `scrollTop = 33`，
+正好把顶部页签行卷出可视区。所以现象只在「点了定位」之后出现，且内容同时上移 33px。
+
+**修复**
+
+① `AuditDashboard`：根加 `overflow-hidden`，页签行下方的分支包进 `<div className="min-h-0 flex-1 overflow-hidden">`，
+高度归位后不再有 33px 溢出（页签行不再可能被滚走）。
+② 新增 `apps/desktop/src/lib/scroll.ts`（`scrollIntoContainer` / `scrollWithin`）：定位只滚目标面板**自己的**滚动容器。
+原文视图内容区标 `data-doc-scroll`，风险卡列表标 `data-findings-scroll`；`jumpToBlock`、`scrollToFindingCard`、
+`docReviewStore.selectFinding` 三处 `scrollIntoView` 全部改走它（找不到容器才回退原行为；jsdom 无 `scrollBy` 时退化为改 `scrollTop`）。
+
+**验证**
+
+`vitest` 跑 `docReviewDashboard / docReviewStore / findingsPanel / kbPanel` 共 4 文件 32 用例全绿（新增回归用例：
+`jumpToBlock` 在存在 `data-doc-scroll` 容器时不得调用 `scrollIntoView`）；`tsc --noEmit` 零错误。
+真机验证由用户自行打包：文档审核页点任意「原文位置 / 定位原文高亮 / 正文高亮块」后页签应保持可见。
+
+**教训**
+
+「overflow: hidden = 不可滚动」是错觉：它只是对用户隐藏滚动条与滚轮，编程滚动照样生效。所以面板内做定位，
+一律滚该面板自己的滚动容器，不要用 `scrollIntoView` 这种“顺带滚所有祖先”的 API —— 否则相邻固定区域（页签、工具栏）
+会被静默卷走，且只在特定交互后复现。另一条：flex 容器里给子视图写 `h-full` 时必须同时给它 `flex-1 min-h-0`，
+否则它按“容器 100%”算高度，和兄弟行一起就必然溢出。
+
+---
+
+### #200 知识库页点「设置」再关闭，回来被踢回「审批工作台」
+
+| 字段 | 内容 |
+|---|---|
+| **是否修复** | 已修复 |
+| **修复时间** | 2026-11-06 |
+
+**现象**
+
+审核模式 → 知识库页签 → 点右上「设置」（RAG 参数）→ 关闭设置回到主界面，页签变成「审批工作台」，知识库列表/筛选全没了，用户需重新点回去。
+
+**根因**
+
+`WorkspaceLayout` 用 `settingsOpen = location.pathname.startsWith('/settings')` 分支渲染设置页（`<Outlet />`），
+所以进设置会把 `AuditDashboard` **整体卸载**；而页签状态原先是 `useState("approval")`，组件重建即回默认值。
+
+**修复**
+
+页签状态提升到 `uiStore`：新增 `auditTab`（`'approval' | 'doc' | 'kb'`）+ `setAuditTab`，
+并纳入 `eaide.ui` 持久化（`partialize` + `onRehydrateStorage` 合法性校验，旧 localStorage 无此字段时回默认 `approval`）；
+`AuditDashboard` 改从 store 读写页签，不再持有本地 state。
+
+**验证**
+
+新增 `tests/auditDashboard.test.tsx` 2 用例：① 卸载（模拟进设置页）后重新挂载仍在「知识库」；② 点页签写入 uiStore。
+连同 `docReviewDashboard / docReviewStore / findingsPanel / kbPanel / settingsRoutes / routerEntryFallback / knowledgeRagPanel`
+共 8 文件 41 用例全绿；`tsc --noEmit` 与 `eslint` 零告警。
+
+**教训**
+
+只要存在「跨路由分支卸载重挂载」的布局（设置页/Diff 页/全屏页走 Outlet 或条件分支），页面级视图状态就不能放组件 useState——
+组件一卸载就回到默认值，用户看到的是「我明明选过」。判断标准很简单：这个状态在“离开再回来”之后是否应该保持？
+应该保持的一律提升到 store。
+
+---
+
+### #201 文件预览里 Markdown 的 YAML 头被当正文渲染，URL 还被路径胶囊截断
+
+| 字段 | 内容 |
+|---|---|
+| **是否修复** | 已修复 |
+| **修复时间** | 2026-11-09 |
+
+**现象**
+
+审核模式 → 知识库 → 点法规文档「预览」，文档顶部出现一大段挤在一起的原始 YAML：
+
+```
+title: 防范和处置非法集资条例 LinkTitle: 防范和处置非法集资条例（2021）  author: 国务院 …
+categories:
+• 行政法规
+tags:
+• 国务院
+• 有效
+urls:
+• htt  [detail?id=ff808081777d07c50177b8d8670038d4]
+```
+
+最后一行尤其离谱：URL 被截成「htt」+ 一个蓝色「文件路径」胶囊，胶囊里是 `detail?id=…` —— 点开只会让系统去找一个叫 `detail?id=…` 的文件。
+
+**根因**
+
+两处叠加：
+
+1. 预览面板的 md 分支直接用通用 Markdown 渲染器（`Markdown`）渲染全文，而渲染器不认识 frontmatter ——
+   `---` 被当成水平线，YAML 键值被当成段落，`- xxx` 被当成裸列表。
+2. `FilePathChip` 的全局路径正则 `FILE_PATH_RE` 里，盘符分支是 `[A-Za-z]:[\\/]`。
+   URL `https://…` 里的 `s:/` 正好命中这个分支，于是从 `s:` 开始的一段被当成 Windows 路径，
+   交给 FilePathChip 渲染（胶囊只显示末段文件名）→ 只剩「htt」留在正文里。
+
+**修复**
+
+- 新增 `apps/desktop/src/lib/frontmatter.ts`：零依赖 YAML-lite 解析器（标量 / 行内数组 / 块数组 /
+  引号 / 注释 / CRLF 归一 / 未闭合围栏兜底）+ `fmText` / `fmItems` / `fmValue`（键名大小写不敏感，兼容 `LinkTitle`）。
+- 新增 `apps/desktop/src/components/office/DocMetaCard.tsx`：frontmatter → 元数据卡
+  （标题 + 效力状态徽标 + 制定机关/法规层级 + 发布/施行日期 + 分类/标签胶囊 + 未识别字段兜底网格），右上角可收起/展开；
+  `urls` 外链字段直接不展示（文档都在本地，外链对用户无意义）。
+- 新增 `apps/desktop/src/components/office/MarkdownDoc.tsx`：解析 → 渲染元数据卡 + 正文
+  （正文首行与 frontmatter 标题重复时自动去重）；`OfficePreviewPanel` 的 md 分支改用它（无 frontmatter 的文档渲染不变）。
+- `apps/desktop/src/components/chat/FilePathChip.tsx`：`FILE_PATH_RE` 加前置否定回顾 `(?<![A-Za-z0-9_])` ——
+  路径前不能紧跟字母/数字/下划线，`C:\…` 仍能命中，`https://` 不再误判。
+
+**验证**
+
+新增 `tests/frontmatter.test.ts` 12 例、`tests/markdownDoc.test.tsx` 8 例，
+`tests/markdownPathLink.test.tsx` 补 URL 回归 1 例；全量 `pnpm vitest run --no-file-parallelism`
+68 文件 / 463 例全绿；`npx tsc --noEmit` 与 `npx eslint --max-warnings=0` 零告警。
+
+**教训**
+
+两条。其一：Markdown 渲染器遇到「文档级结构」（frontmatter）要显式识别，而不是让它掉进正文兜底分支 ——
+掉进兜底不会报错，只会难看。其二：正则里的「单字母 + 冒号 + 斜杠」这种宽松写法，要先想清楚会不会命中 `http://`；
+凡是「前面紧邻一个字母」的匹配，都该加否定回顾把 URL 排除掉。
+
+
+### #202 交付草稿审核一直转圈 —— 审核状态永久停在 reviewing 且无自愈入口
+
+| 字段 | 内容 |
+|---|---|
+| **是否修复** | 已修复 |
+| **修复时间** | 2026-11-09 |
+
+**现象**
+
+运营模式 → 交付草稿「业务办理路径单」提交后，右侧抽屉一直显示「业务办理引导专家正在审核草稿」转圈，
+专家卡上同一份材料也一直挂「⏳ 审核中」；关闭应用重开仍然转圈，既不报错也不出结果。
+
+**根因**
+
+查 `ops.db`（安装目录）确认材料行 `CF-20261106180551-bd92` 的 `status` 停在 `reviewing`，
+`updated_at` 停留在 2026-11-06 18:05:51 —— 即提交那一刻，此后**再没有任何更新**。
+
+对照 `logs/eaide.log`：18:05:51 有 `PUT /ops/case/drafts/DR-...` 200，但**没有**对应的
+`POST /ops/case/drafts/DR-.../submit` 记录；紧接着 18:08:35 `stop_agent_process: 终止 Agent`。
+即：**提交请求发出后，Agent 被重启/关闭，请求被硬断在审核中途**。
+
+三处设计缺口叠加，导致状态永远卡在 `reviewing`：
+
+1. `ops/api.py` 的 `_do_review_file` 形态是「先写 `status=reviewing` → 再调长耗时外部 LLM」。
+   LLM 不可用时有 `RuntimeError` 分支回落到 `pending`，但**超时 / CancelledError / 其它未预期异常
+   没有兜底** —— 请求一断，材料永远停在 `reviewing`。
+2. **没有僵尸状态自愈**。同类问题在知识库侧已修过（`reset_orphaned_indexing_docs`，
+   BUGFIX #198「知识库上传后一直在索引中」），但运营模式的 `case_files` 从未做过。
+3. **前端没有自救出口**。材料行的「↻ 重审」按钮只在 `pending`/`rejected` 时出现，
+   `reviewing` 状态下既不能重审也不能取消，用户只能对着转圈干等。
+
+**修复**
+
+- `services/agent/src/agent/config.py`：新增 `ops_review_timeout_sec`（默认 240s）—— 审核全流程墙钟上限。
+- `services/agent/src/agent/ops/api.py`：`_do_review_file` 拆成「状态守护壳 + `_run_review_pipeline` 主体」。
+  壳层用 `asyncio.wait_for` 加墙钟上限；`TimeoutError` → 落 `pending` 并写明「超时…可点重审」；
+  `CancelledError` → 落 `pending`（Agent 重启/连接断开）；其余异常 → 落 `pending`。
+  **任何路径都不再把材料留在 `reviewing`。**
+- `services/agent/src/agent/ops/cases.py`：新增 `CaseStorage.reap_orphaned_reviews(inflight=..., reason=...)`
+  —— 把「状态是 reviewing 但本进程没在跑」的材料落回 `pending`，关联草稿从 `submitted` 退回 `draft`（可重新提交）。
+- `services/agent/src/agent/ops/api.py`：新增进程级 `_INFLIGHT_REVIEWS` 登记表 + `_reap_orphaned_reviews()`；
+  在 `GET /ops/case`（用户打开面板/刷新）时触发自愈。
+- `services/agent/src/agent/main.py`：Agent 启动时自愈一次（对齐知识库 orphan heal 的既有模式）。
+- `apps/desktop/src/components/ops/ExpertWorkflowPanel.tsx`：材料行「↻ 重审」在 `reviewing` 状态同样可见；
+  交付草稿卡（全屏 + 紧凑两种形态）的「正在审核草稿」旁新增「↻ 重新审核」按钮。
+- `apps/desktop/src-tauri/src/commands/ops.rs`：`ops_case_file_review` / `ops_case_draft_submit`
+  补 300s HTTP 超时 —— 否则 Agent 挂死时桌面端命令永远不返回。
+
+**验证**
+
+`services/agent/tests/test_ops_case.py` 新增 4 例（审核超时回落 pending、未预期异常回落 pending、
+僵尸 reviewing 读取时自愈、正在审核中的材料不被误自愈）；`apps/desktop/tests/expertWorkflow.test.tsx`
+新增 1 例（审核中材料可见「↻ 重审」并能触发重新审核）。
+`services/agent` 全量 pytest 0 失败 / 0 错误（30 例因内网模型不可达跳过）；
+`apps/desktop` vitest 22 例全绿；`npx tsc --noEmit` 与 `npx eslint --max-warnings=0` 零告警；
+`ruff check` 全通过；`mypy --strict` 无新增错误（改动前后基线 1192 → 1189）；
+Rust `cargo check` 通过。
+
+**教训**
+
+「先写中间态 → 再调外部资源」这个形态，**必须配三件套**：墙钟上限、异常兜底落终态、僵尸状态自愈。
+少任何一件，外部资源一挂（LLM 不可达 / 进程重启 / 连接断开），状态就永远停在中间态，
+而界面只会诚实地显示「审核中」——用户既看不到错误，也找不到出路。
+知识库侧 #198 已经踩过「索引中」这个坑，运营模式这次是同一个坑的第二次出现：
+**同类状态机必须成体系地治理，不能修一处漏一处。**
+
+---
+
+### #176 合规审核报告「点依据打不开原文」+ 专家团选择器多余「AI 推荐」标签（两项体验修复）
+
+| 字段 | 内容 |
+|---|---|
+| **是否修复** | 已修复 |
+| **修复时间** | 2026-11-09 |
+| **影响范围** | 运营模式「系统合规审核报告」弹窗（专家验收前置）、运营工作台专家团选择器 |
+| **相关链接** | 本条（前端体验，无后端协议变更） |
+
+**现象**
+
+1. 运营模式 → 上传材料 → 弹出「系统合规审核发现 N 项风险」→ 展开「依据（知识库）」
+   区（《私募投资基金监督管理条例》等条目）→ **点文件名没有任何反应**，看不到原文。
+2. 专家团选择器下拉框下方挂着一行绿色的「**AI 推荐**」标签，纯噪音（用户要求去掉这四个字）。
+
+**问题原因**
+
+**第 1 项（真缺陷）**：`RiskAuditReportModal.tsx` 把 `kb_refs` 渲染成**纯文本** `<p>{ref.source}</p>`，
+而同一份知识库依据在「审核专家 · 文档审核」模块（`FindingsPanel.tsx`）里是**可点击按钮**，
+点击走 `previewLocalFile` 打开原文件。同一个数据、同一个诉求，两处 UI 行为不一致 ——
+运营模式这侧漏了可点性，所以「点了没反应」。
+
+后端链路是通的：`ops/doc_audit.py::_run_doc_audit` 调 `doc_review/api.py::_attach_kb_refs`，
+`kb_refs` 里已带 `file_path`（`knowledge/storage.py::resolve_file_path` 解析出的绝对路径），
+字段与文档审核模块完全一致 —— **数据齐了，只是前端没接**。
+
+**第 2 项（体验冗余）**：`ExpertTeamSelector.tsx` 把选择来源映射成角标展示
+（`SOURCE_LABEL.llm = 'AI 推荐'`）。AI 推荐选出的团已经显示在下拉框里，
+再挂一个「AI 推荐」角标不提供任何新信息（业务预设/手动才有区分价值）。
+
+**修复**
+
+- 新增 `apps/desktop/src/components/doc-review/KbRefLink.tsx`：抽出统一的「知识库依据条目」组件
+  —— 带 `file_path` 渲染为可点击按钮（`previewLocalFile`：md/txt/html 内置预览、pdf 内嵌、
+  doc 等交系统默认程序），无 `file_path`（知识文件已清理）降级为纯文本。
+- `apps/desktop/src/components/doc-review/FindingsPanel.tsx`：删除本地重复的 `openRefFile` 与内联按钮，
+  改用 `KbRefLink`（消除两份同逻辑实现）。
+- `apps/desktop/src/components/ops/RiskAuditReportModal.tsx`：
+  - 「依据（知识库）」区每条依据改用 `KbRefLink` → 点文件名直接打开命中的知识库原文件；
+  - 「原文证据」标题旁新增「· 点此看材料原文」入口 → 打开被审核材料原文（`file.file_path`），
+    补齐「报告里的原文摘录 ↔ 材料原文」的验真闭环；
+  - 依据区标题旁加「· 点文件名看原文」提示，避免用户不知道可点。
+- `apps/desktop/src/components/chat/ExpertTeamSelector.tsx`：`llm` / `keyword` 两种来源不再展示角标；
+  `业务预设` / `手动` / `未选择` 保留（它们有区分价值）。
+
+**验证**
+
+- 新增 `apps/desktop/tests/riskAuditReport.test.tsx`（3 例）：依据可点 → 打开知识库原文件；
+  原文证据入口可点 → 打开材料原文；无 `file_path` → 纯文本且不触发预览。
+- 新增 `apps/desktop/tests/expertTeamSelector.test.tsx`（4 例）：AI 推荐/关键词来源不展示角标；
+  业务预设/手动来源角标保留。
+- 既有 `tests/findingsPanel.test.tsx`（2 例）保持全绿 —— 抽取共享组件无行为回退。
+- `apps/desktop` 相关 vitest 36 例全绿；`pnpm tsc --noEmit` 零错误；
+  `pnpm eslint --max-warnings=0`（改动文件）零告警。
+
+**教训**
+
+同一份数据在两个模块里各自渲染时，**可点性这类交互语义必须收敛到共享组件**，
+否则「一边能点、一边不能点」几乎必然发生，且用户只会认为另一边坏了。
+同理，**角标只在能提供额外信息时才显示**：来源已是「AI 推荐」时，
+再标一个「AI 推荐」是纯噪音；「业务预设」才值得标。
+
+---
+
+### #203 专家验收材料行臃肿 + 「⚠ 合规风险 N」不像按钮（正常人会点吗？）
+
+| 字段 | 内容 |
+|---|---|
+| **是否修复** | 已修复 |
+| **修复时间** | 2026-11-09 |
+| **影响范围** | 运营模式「专家验收工作流」材料行（ExpertWorkflowPanel / CaseFileRow） |
+| **相关链接** | 本条（前端交互，无后端协议变更） |
+
+**现象**
+
+1. 用户反馈：“**合规风险按钮不太明确啊，正常人会点这里吗？**” —— 材料行上的「⚠ 合规风险 N」
+   只是一段红色小字，与状态徽标、低置信计数排在一行，没有任何可点提示，普通人不会去点。
+2. 用户反馈：“**这一块太臃肿了，要简洁明确，直接显示结果和点击查看审核明细就可以**” ——
+   截图里一张被打回的材料默认铺开了「上传材料大按钮 + 状态行 + 四步步骤链 + 意见气泡 +
+   关键要素卡（多行胶囊）+ 操作按钮行」，把整张专家卡撑满，真正要看的结论反而被埋在中间。
+
+**问题原因**
+
+- **入口不明确**：`CaseFileRow` 把「⚠ 合规风险 N」渲染成 `<button>` 但只给了 `color` 内联，
+  没有边框、没有底色、没有尺寸类 —— 视觉上与旁边两个静态文本徽标几乎同构，
+  “可点”完全靠用户猜（且未走 `.btn` 按钮体系，与全局按钮规范脱节）。
+- **默认展开造成臃肿**：`detailOpen` 初值为 `file.status === "rejected"` —— 被打回的材料
+  默认展开全部明细；而审核意见（结果）本来就在明细区里，于是“先看结论”这个动线被拆成两段。
+- **结论与结果各说各话**：状态徽标已经写了「打回」，审核意见又被塞进气泡里（3 行钳制），
+  两处信息重叠，且意见与徽标同文（如都是「通过」）时白白占一个框。
+
+**修复**
+
+- `apps/desktop/src/components/ops/ExpertWorkflowPanel.tsx` → `CaseFileRow` 重排为三层：
+  - **摘要行**：文件名 + 结论徽标 + `⚠N 待核`（低置信计数补上「待核」二字，不再是光秃秃的 `⚠N`）；
+  - **结果行（默认可见）**：专家审核意见直接显示（2 行钳制、点开看全文），左侧色条随结论状态
+    （打回红 / 通过绿 / 待审橙）；意见与徽标同文时不再重复铺框；草稿材料只给「审核意见见草稿卡」指引；
+  - **入口行（默认可见）**：`⚠ 合规风险 N` 改为独立按钮（`.btn btn-xs btn-danger`，
+    灰底红字红边 + hover 变红底），另配「查看审核明细 / 收起审核明细」文字入口；
+  - **审核明细（默认收起）**：步骤链 / 关键要素 / 证据链 / 人工干预（重审 · 打回定位 · 通过 · 打回 · 删除）
+    全部收进此处，打回材料也不再默认展开。
+- 步骤链、关键要素、证据链的渲染逻辑与数据接口均未变，只换了收纳位置。
+
+**验证**
+
+- `apps/desktop/tests/expertWorkflow.test.tsx` 新增 1 例：结论直显可见、明细默认收起（关键要素/证据链不出现）、
+  「合规风险」为 `.btn` 独立按钮且点击能开报告、点「查看审核明细」才见关键要素。
+- 同步更新 2 例受影响用例：明细入口改点「查看审核明细」（打回定位用例）、
+  「通过」材料不再重复铺结果框（渲染用例）。
+- `apps/desktop` 全量 vitest 70 文件 / 472 例全绿；`npx tsc --noEmit` 零错误；
+  `npx eslint --max-warnings=0`（改动文件）零告警。
+
+**教训**
+
+- **可点的东西必须长得像按钮**：用了 `<button>` 标签不等于用户看得见 —— 没有边框/底色/尺寸类时，
+  它和旁边的静态文本没区别（与 #176「点依据打不开原文」同源：交互语义必须被看见）。
+- **默认展开要克制，被打回也不例外**：结果（审核意见）应当在第一屏直显，明细（步骤链/要素/证据链）
+  应当按需展开；展开明细不应随状态自动打开。
+- **同一句话说两遍就是臃肿**：结论徽标与审核意见同文时，只留一处。
+
+---
+
+### #204 运营模式点「数据字典」无反应（CSS 特异性竞争 + center 分支缺失）+ 侧栏占位项隐藏 + 数据字典全屏树形改造
+
+| 字段 | 内容 |
+|---|---|
+| **是否修复** | 已修复 |
+| **修复时间** | 2026-11-09 |
+| **影响范围** | 左侧 ActivityBar（侧边栏）、数据字典入口、WorkspaceLayout 布局分支优先级 |
+| **涉及文件** | `apps/desktop/src/components/chrome/ActivityBar.tsx`、`apps/desktop/src/layouts/WorkspaceLayout.tsx`、`apps/desktop/src/views/DataDictView.tsx`（新增）；删除 `apps/desktop/src/components/ops/DataDictionaryPanel.tsx` |
+
+**现象**
+
+1. 运营模式（operator）下点击 ActivityBar「📖 数据字典」**没有任何反应**：主区仍是运营工作台、左侧栏也不展开；审核/数据专家模式同样点不动。
+2. 侧边栏里「审计/版本」「运行/调试」「扩展」「代码符号」四个入口全是占位/装饰项，用户要求隐藏。
+3. 数据字典原 SideBar 260px 窄条卡片列表太挤，用户要求：隐藏会话与控制台、全屏铺平、按树维护。
+
+**根因**
+
+「点不动」是两处叠加：
+
+① **center 分支缺 data-dict**：`WorkspaceLayout` 中央区条件链里没有 `active === 'data-dict'` 分支，全接管模式下 mode 分支（`mode === 'operator' → OperationsWorkbench`）兑底 —— 主区永远渲染运营工作台，点数据字典主区纹丝不动。
+
+② **SideBar CSS 特异性竞争**：operator/auditor/analyst 折叠规则 `[data-mode="operator"]:not(...):not(...) .workspace-sidebar`（4 个选择器）与 data-dict 恢复规则 `.workspace-root:has(.data-dict-active) .workspace-sidebar`（3 个选择器）都带 `!important`，前者特异性更高胜出 → 左侧栏保持 `width: 0`，永远打不开。这正是「三处协同模板」里 CSS `:has` 覆盖方案的已知短板（SideBar early-return 方案注释里早写着「V1 应统一为一种模式」）。
+
+**修复**
+
+1. **数据字典升级为横切全屏视图**（与「需求工作台」同款模式）：
+   - center 条件链在 mode 分支之前新增 `active === 'data-dict'` → `<DataDictView />`（横切优先于专家模式分支，任何模式点击都接管主区）；
+   - SideBar 对 data-dict early-return 折叠（JS 方案替代失效的 CSS `:has` 覆盖），删除 CSS 恢复规则与 `data-dict-active` class；
+   - RightPanel（控制台）在 data-dict activity 下不挂载 —— 「会话与控制台都隐藏，铺平维护」。
+2. **新建 `DataDictView` 全屏树形维护视图**：左 280px 分类树（分组可折叠、key+名称叶子、内置 seed 徽章、搜索实时过滤）｜右详情/编辑区（详情直显 key/分类/名称/值/说明/更新时间，编辑表单右置替代原顶部挤压条）。复用 dictStore 与 `/dict/*` IPC，无后端改动。
+3. **侧边栏优先级第一（用户要求：除设置外，任何模式点侧栏都能出来）**：
+   - explorer/sessions/search 的折叠例外补全（`:not([data-activity="explorer"])`），专家模式下点 explorer 也展开 SideBar；
+   - SideBar 内容分支 explorer 提前到 mode 分支之前（专家模式下显示资源管理器内容而非模式占位）；
+   - LeftPanelDevSwitcher（系统资产/文件列表/系统功能点切换）与 SideBarHeader 标题跟随从仅 `full` 模式扩展到全模式。
+4. **隐藏 4 个占位项**：ActivityBar `ITEMS` 增加 `hidden` 标志过滤渲染（source-control / run-debug / extensions / code-nav），ActivityId 类型与 TITLES 保留，日后想恢复改一个布尔即可。
+
+**验证**
+
+- `npx tsc --noEmit` 零错误；全量 `vitest run` 70 文件 / 472 例全绿。
+- 行为核对：运营/审核/数据专家模式下点数据字典 → 全屏树形视图；点 explorer → SideBar 展开资源管理器；点搜索/会话/协作/需求 → 各自视图照常；设置页穿透优先级不变。
+
+**教训**
+
+全接管模式与横切入口共存时，「谁覆盖谁」必须单点裁决：要么统一 JS early-return（SideBar 折叠 + center 分支前置），要么统一 CSS `:has` 高特异性 —— 两种方案并存时，CSS 方案在特异性竞赛中必输（4 vs 3），且输得毫无报错、表现为「点了没反应」。`!important` 对 `!important` 比的是特异性不是书写顺序，布局冲突排查第一步是数选择器。
+
+占位入口不上线就先藏起来：`hidden` 标志比删代码更可逆，且 ActivityId 类型保留使 Record 完备性检查继续生效。
+
+---
+
+### #205 专家卡提问框收起⇄展开瞬间跳变 + 智能体运行/思考指示去绿色改简洁黑（全局 + chat）
+
+| 字段 | 内容 |
+|---|---|
+| **是否修复** | 已修复 |
+| **修复时间** | 2026-11-09 |
+| **影响范围** | 运营模式专家卡（ExpertCaseCard 提问框）、全局 Agent 状态徽标（TopBar/StatusBar）、chat 思考中动效（AiThinkingIndicator） |
+| **涉及文件** | `apps/desktop/src/components/ops/ExpertWorkflowPanel.tsx`、`apps/desktop/src/styles/globals.css`、`apps/desktop/src/components/chrome/AgentStatusBadge.tsx`；测试 `apps/desktop/tests/agentStatusBadge.test.tsx` |
+
+**现象**
+
+1. 专家卡「💬 向XX追问」收起时是一条窄按钮（卡片底部），点开后输入框行瞬间出现 —— 无任何过渡，突兀。
+2. 智能体运行的绿色图标（状态栏/顶栏「运行中」、chat「思考中」的绿色 orb/能量柱）用户认为土，要求全局改简洁黑色。
+
+**根因**
+
+① 提问区是 `{askOpen ? <输入行> : <按钮>}` 的条件渲染，两态互斥卸载/挂载，无过渡。
+② 运行/思考指示绿色硬编码：`AgentStatusBadge` busy 色 `#10a37f`；`globals.css` 里 `ai-thinking-glow`、`ai-orb-ring`（锥形渐变）、`ai-orb-core`（径向渐变球）、`ai-orb-satellite`（粒子）、`ai-eq-bar`（能量柱）、`thinking-shimmer`（流光高光）全部用科技绿 `#10a37f/#34d399/#6ee7b7`。
+
+**修复**
+
+1. **提问框过渡动画（ask-dock）**：两态 pane 常驻叠放在同一 grid 格，外层 `grid-template-rows 0fr⇄1fr`（240ms）裁切高度实现展开/收起动画，pane 层 `opacity`（200ms）淡入淡出 + `pointer-events` 穿透防透明层挡点击；`autoFocus` 因常驻渲染失效，改 `askInputRef` + `useEffect` 展开时聚焦；发送按钮同步黑化 `#1f1f1f`。
+2. **运行/思考指示黑色化**：`AgentStatusBadge` busy `#10a37f → #1f1f1f`（弧自转+呼吸动画保留，只换色）；`ai-thinking-glow/orb-ring/orb-core/orb-satellite/eq-bar/shimmer` 全部改黑灰系（`#1f1f1f/#52525b/#3f3f46`）。语义性绿色（验收通过/成功/交付标准勾选）保留不动。
+
+**验证**
+
+`npx tsc --noEmit` 零错误；全量 vitest 71 文件 / 478 例全绿；改动文件 eslint 零告警。
+真机验证：专家卡点「追问」应平滑展开输入框并自动聚焦，点 ✕ 平滑收起；Agent 运行时顶栏/状态栏/chat 思考胶囊均为黑色动效。
+
+**教训**
+
+条件渲染 `A ? B : C` 切换布局位置/形态的交互，用户感知的是「瞬间跳变」；要平滑就把两态都常驻、用高度裁切（grid 0fr⇄1fr）+ 透明度过渡来切换，注意用 `pointer-events` 防止透明层挡点击、用 ref+effect 补回被常驻渲染废掉的 `autoFocus`。语义色要分层管理：状态指示色（运行/思考）与业务语义色（成功/通过）分开，改主题时只动前者，别把「验收通过」的绿也误伤。
+
+---
+
+### #206 业务办理无台账：侧边栏缺「业务汇总」入口，业务发起即登记 + 四态流转 + 多维查询
+
+| 字段 | 内容 |
+|---|---|
+| **是否修复** | 已修复 |
+| **修复时间** | 2026-11-09 |
+| **影响范围** | 运营模式（专家验收工作流）、左侧 ActivityBar 新增顶级入口 |
+| **相关链接** | 本条（新增功能，无既有行为回退） |
+
+**需求（用户原话）**
+
+「侧边栏多加一个业务汇总，作为对业务的查询，**只要业务发起了就要记录**，状态为正在办理，挂起，人工确认，结束。支持按多个维度查询（业务大类，小类，日期，状态等）」。
+
+澄清后的口径（逐项与用户确认）：
+
+1. **发起时点**：客户经理**上传第一份材料**才算发起（不是点业务、不是提交草稿）；
+2. **记录粒度**：一条业务一条记录（同一业务反复办理不新增行），状态随办理变化；
+3. **状态流转**：
+   - 正在办理 —— 系统自动（发起建档）；
+   - 挂起 —— **人工**点「挂起」→ 当前交易界面**只读冻结**，客户经理可去办另一个交易，回来**接着原记录继续办**；
+   - 人工确认 —— **系统自动**：业务审核出问题需要人工接入（材料被打回 / 审核异常）时转入；
+   - 结束 —— **系统自动**：业务没问题、办理结束（导出交付物）后转入；
+4. **界面形态**：侧边栏点「业务汇总」→ **全屏查询页**（不是窄栏面板）。
+
+**问题原因**
+
+- 业务**只在办完之后**才留痕：现有 `business_records` 表是「导出交付物时 AI 生成的小结卡片」，**业务发起到办完之间没有任何台账** —— 客户经理中途挂起、被打回待处理时，管理层看不到任何「有哪些业务在办」。
+- 侧边栏没有业务查询入口：ActivityBar 只有资产/搜索/协作/会话/需求/数据字典，运营侧只能靠人记。
+
+**修复**
+
+- 后端（新增 `services/agent/src/agent/ops/tasks.py` + `ops/schema.sql` 新表 `business_tasks`）：
+  - 台账与「业务记录卡片」**分表**（前者发起即建、状态流转；后者完成后的小结），用 `case_id` 关联；
+  - 状态四态：`in_progress` 正在办理 / `suspended` 挂起 / `manual_review` 人工确认 / `closed` 结束；`case_id` 唯一索引（一条业务一行）；
+  - 状态**派生式**同步：`_sync_task_status()` 按 Case 现有材料状态重算（被打回 / 审核异常 → 人工确认；处理完 → 回到正在办理），挂起与已结束不自动改写（人工优先）；
+  - 触发点四处：上传材料（建档）、审核出结果（打回/异常 → 人工确认）、人工改判（清待处理项 → 回到办理中）、导出交付物（→ 结束）；
+  - 新增 4 个端点：`POST /ops/tasks/start`（幂等建档）、`GET /ops/tasks`（状态/大类/小类/日期/关键词多维筛选 + 各状态计数）、`GET /ops/tasks/{id}`（详情：待处理项 + 材料进度）、`POST /ops/tasks/{id}/status`（挂起 / 恢复）；
+  - `GET /ops/case` 顺带带回当前业务的台账状态（前端据此冻结界面）。
+- 前端：
+  - [ActivityBar.tsx](../apps/desktop/src/components/chrome/ActivityBar.tsx) 新增「业务汇总」图标（`TableIcon`）；[uiStore.ts](../apps/desktop/src/store/uiStore.ts) 增 `biz-summary`；[WorkspaceLayout.tsx](../apps/desktop/src/layouts/WorkspaceLayout.tsx) 增 center 分支 + SideBar early-return 折叠（横切所有模式，含运营模式）；
+  - 新增 [BusinessSummaryView.tsx](../apps/desktop/src/views/BusinessSummaryView.tsx)：状态计数条（点一下即筛选，可多选）+ 筛选行（业务大类 / 小类 / 发起日期区间 / 关键词）+ 结果表（业务名称｜大类｜小类｜状态｜发起时间｜最后更新｜经办人）+ 点行展开明细（待处理项 / 材料进度 / 关联小结）；
+  - [ExpertWorkflowPanel.tsx](../apps/desktop/src/components/ops/ExpertWorkflowPanel.tsx)：页头新增「⏸ 挂起 / ▶ 恢复办理」按钮 + 挂起横幅（黄色，提示可先去办别的业务）；挂起期间上传 / 提问 / 重审 / 改判 / 导出全部只读（按钮禁用 + store 侧双重拦截）；
+  - [opsCaseStore.ts](../apps/desktop/src/store/opsCaseStore.ts)：新增 `task` 状态与 `startTask / suspendTask / resumeTask / isSuspended`。
+- Rust（[ops.rs](../apps/desktop/src-tauri/src/commands/ops.rs)）：新增 `ops_task_list / ops_task_get / ops_task_status / ops_task_start` 四个 Tauri 命令并注册。
+
+**验证**
+
+- 新增 [test_ops_tasks.py](../services/agent/tests/test_ops_tasks.py) 12 例：上传即建档（含标签）/ 无 start 兵底建档 / 幂等 / 打回转人工确认 / 审核异常转人工确认 / 改判回到办理中 / 挂起与恢复 / 挂起期间不改状态 / 非法动作 400 / 导出结束 / 多维查询（大小类、状态多值、关键词、日期区间、计数）/ 详情；
+- 新增 [businessSummary.test.tsx](../apps/desktop/tests/businessSummary.test.tsx) 6 例：查询页渲染 + 计数条、点状态即筛选、筛选参数下发、点行展开明细、挂起冻结（上传禁用 + 横幅）、恢复解冻；
+- `services/agent` 全量 pytest 0 失败 / 0 错误（9 例因内网模型不可达跳过）；`apps/desktop` vitest 71 文件 / 478 例全绿；`npx tsc --noEmit` 零错误；改动文件 eslint 零告警；`ruff check` 全通过；`mypy --strict` 无新增错误；Rust `cargo check` 通过。
+
+**教训**
+
+- **「办完之后留痕」不等于「有台账」**：小结卡片只能回答「做过什么」，回答不了「现在有多少业务在办、卡在谁那里」—— 两者要分表、各司其职。
+- **状态要有唯一权威来源**：台账状态不是另存一份，而是**从材料现状派生**（被打回 → 人工确认），否则两处状态各说各话；同时人工状态（挂起）必须**压过**自动派生，否则用户刚点挂起就被系统改回去。
+- **发起即建档要有双保险**：前端建档 + 后端上传接口兵底建档，前端调用失败也不会漏登记。
+
+### #207 运营模式首开红字「ops command failed: error decoding response body」+ 点业务无反应（切模式才恢复）
+
+**现象**
+
+启动 EAIDE 进入运营模式，中间区顶部红字 `ops command failed: error decoding response body`；此时点左侧业务列表毫无反应（界面不变、也不发请求），要切到其他模式再切回才恢复正常。
+
+**排查（安装目录 logs/eaide.log + logs/agent.log，2026-11-09 14:26 启动窗口）**
+
+- Agent access log 里首笔 `GET /ops/case` 是 `200 OK`，但 Rust 侧 `resp.json()` 失败 → 响应体在传完前被中断（与 #197 同源：Agent 单 worker 忙时个别连接瞬时截断）；
+- #197 新增的有界重试 `agent_http::send_json` 当时只改造了 knowledge / doc_review / audit_expert 三处，**ops.rs 的全部 GET 仍是裸 `reqwest::get` + `resp.json()`、无重试**，一次截断直接冒泡成前端红字；
+- 失败后 `opsCaseStore.error` 置位，但 `selectedItemId` 未变 → `ExpertWorkflowPanel` 的 loadCase effect（deps 仅 projectName / selectedItemId）不会重跑 → 再点同一业务彻底无操作，只有切模式强制重挂载才重新加载，即「切模式才恢复」的由来。
+
+**修复**
+
+- Rust（[ops.rs](../apps/desktop/src-tauri/src/commands/ops.rs)）：8 处幂等 GET 全部改走 `agent_http::send_json`（3 次有界重试 + 线性退避）；POST/PUT/DELETE 保持单次不重试（HITL 写操作绝不重复副作用）；错误文案经 `to_cmd_err` 原样透传，前端瞬态判定仍命中；
+- 前端（[opsCaseStore.ts](../apps/desktop/src/store/opsCaseStore.ts)）：`isTransient` 增加 `decoding response body` / `read_body` 两个响应体截断瞬态模式 —— Rust 重试耗尽仍冒泡到前端时再静默退避重试一轮，不把红字甩给用户；
+- 前端（[OperationsWorkbench.tsx](../apps/desktop/src/views/OperationsWorkbench.tsx)）：`handleSelect` 再点同一业务时检测失败态（error 非空或 case_id 与选中不匹配，含在途挂起）手动补发一次 loadCase —— 再点同一业务 = 重试，不再依赖切模式；
+- Rust：`ops_task_list` 加 `#[allow(clippy::too_many_arguments)]`（Tauri 命令参数必须平铺，台账多维查询维度多）。
+
+**验证**
+
+`cargo check --all-targets` 与 `cargo clippy --all-targets -- -D warnings` 零告警；`pnpm vitest run tests/opsCaseStore.test.ts tests/operationsWorkbench.test.tsx` 19 例全过（含新增 2 例：decoding 错误静默退避重试、加载失败后再点同一业务手动重试）；改动文件 eslint 零告警。真机验证需用户自行打包：首开再遇瞬时截断应重试自愈、不出红字；加载失败后再点同一业务应立即重新加载。
+
+**教训**
+
+- **公共自愈机制补齐要一次扫全同类命令模块**：#197 只修了报障的三处，同一根因换个模块（ops）又冒头；「access log 200 OK 但客户端报 decode error」是响应体截断的指纹，排查此类红字先看该命令有没有有界重试。
+- **「effect deps 未变 = 不重新加载」必须给失败态留手动重试入口**：否则用户会自己发明「切模式再切回」的绕法并固化为使用习惯，故障就被掩盖成操作仪式。
+
+---
+
+### #208 办理业务点交付物「填写」直接全屏铺满，改为右侧抽屉侧边出现
+
+**现象**
+
+办理业务时点专家交付物（如「对公开户资料清单」）→ 草稿表单整屏铺开（`fixed inset-0`），
+遮住专家卡与材料行；想对照审核意见填表只能反复退出全屏再进入。
+
+**问题原因**
+
+[ExpertWorkflowPanel.tsx](../apps/desktop/src/components/ops/ExpertWorkflowPanel.tsx) 里 `lastDirectDraftId`
+的 effect 把直开草稿 id 直接写进 `expandedDraftId` —— 等于替用户点了一次「⛶ 全屏」。
+
+**修复**
+
+- [ExpertWorkflowPanel.tsx](../apps/desktop/src/components/ops/ExpertWorkflowPanel.tsx)：`lastDirectDraftId`
+  effect 改为只做三件事 —— 清掉可能残留的全屏状态（`setExpandedDraftId("")`）、展开右侧交付草稿抽屉
+  （`setDraftsOpen(true)` + 收起交付物柜）、切到该草稿页签；不再自动全屏；
+- 全屏能力保留在草稿卡的「⛶ 全屏」按钮上（需要更大空间时用户手动进入），删除的只是「点击即铺屏」的默认行为。
+
+**验证**
+
+`pnpm vitest run tests/expertWorkflow.test.tsx` 23 例全过（原「直开草稿只自动全屏一次」用例改写为
+「直开草稿侧边展开」：断言抽屉头部出现、无「✕ 退出全屏」、页签来回切换不弹全屏）；
+`npx tsc --noEmit` 零错误；改动文件 eslint 零告警。
+
+**教训**
+
+- **默认视图要选「不打断业务上下文」的那一种**：办理区（专家卡 + 材料行）是填表时的参照物，
+  铺屏等于把参照物关掉，用户只能靠记忆填表。
+
+---
+
+### #209 资源管理器（系统资产）在专家模式误展示，收敛为仅开发模式可见
+
+**现象**
+
+切到运营 / 审核 / 数据 3 个专家模式时，最左侧 ActivityBar 仍挂着「Explorer 系统资产」入口，
+左侧栏还会渲染资源管理器内容（系统资产树 + 「系统资产 / 文件列表 / 系统功能点」子切换），
+与专家工作台自带的左栏（业务列表 / 审批工作台 / 数据源树）重复占位。
+
+**问题原因**
+
+- 2026-11-09 为修「专家模式下点侧栏图标无反应」，把 explorer 也加进了专家模式的侧栏可见白名单：
+  `[data-mode="..."]:not([data-activity="explorer"])` 的例外被取消，SideBar 内容分支也从
+  `mode` 判断改成 `activity === 'explorer'` 优先 —— 资源管理器（开发模式专属资产）被当成了横切能力；
+- ActivityBar 的 ITEMS 没有「仅开发模式」的概念，explorer 条目对所有模式一视同仁。
+
+**修复**
+
+- [ActivityBar.tsx](../apps/desktop/src/components/chrome/ActivityBar.tsx)：新增 `devOnly` 标记，
+  explorer 条目标 `devOnly: true`，渲染时按 `mode === 'full'` 过滤 → 专家模式不再出现该入口；
+- [WorkspaceLayout.tsx](../apps/desktop/src/layouts/WorkspaceLayout.tsx)：
+  - 专家模式侧栏折叠 CSS 去掉 `:not([data-activity="explorer"])` 例外 → 专家模式外层 SideBar 恒折叠
+    （sessions / search 仍保留例外，横切能力不受影响）；
+  - SideBar 内容分支由 `activity === 'explorer'` 改为 `mode === 'full'` → 资源管理器主体
+    （系统资产 / 文件列表 / 系统功能点）只在开发模式挂载，专家模式走各自工作台；
+  - explorer 子切换（LeftPanelDevSwitcher）与标题跟随逻辑加 `mode === 'full'` 条件。
+
+**验证**
+
+新增 `tests/activityBar.test.tsx`（3 例：入口的模式可见性 + 横切能力不受影响）与
+`tests/explorerDevModeOnly.test.tsx`（3 例：真实 App 渲染，断言专家模式既无入口也无子切换）；
+`pnpm test` 75 个测试文件 / 517 例全过；`npx tsc --noEmit` 零错误；改动文件 eslint 零告警。
+
+**教训**
+
+- **「跨模式可见」应是白名单而不是默认**：`sessions` / `search` 是横切能力（任何模式都要点得动），
+  资源管理器是开发模式专属资产 —— 两者不能共用同一套例外规则。把专属能力塞进白名单，
+  就会在专家模式里长出与工作台重复的左栏。
+
+---
+
+### #210 从其他界面返回业务办理又弹出草稿表单 —— 直开/新草稿标记从未真正清标
+
+**现象**
+
+点交付物填完表后，切到业务汇总 / 其他 Activity 再回到业务办理，表单又自动弹出来（#208 之前是全屏，
+之后是自动拉开右侧抽屉）；同一份草稿反复弹，用户只能每次手动收起。
+
+**根因**
+
+[ExpertWorkflowPanel.tsx](../apps/desktop/src/components/ops/ExpertWorkflowPanel.tsx) 的注释一直写着「消费即清标」，
+但实际只用组件内的 `autoExpandedDraftRef` 去重 —— 而 `WorkflowBody` 随界面切换会卸载，ref / `draftsOpen` /
+`expandedDraftId` 全部重置，store 里的 `lastDirectDraftId` / `lastNewDraftId` 却一直保留。
+重新挂载时 effect 读到旧标记 → 又当作一次新的直开。这与 #208 是同一处逻辑的两层问题：
+前者是「默认展开成全屏」，后者是「标记没有生命周期，跨挂载重复消费」。
+
+**修复**
+
+- [opsCaseStore.ts](../apps/desktop/src/store/opsCaseStore.ts)：新增 `consumeDraftSignals()` —— 同时清空
+  `lastDirectDraftId` / `lastNewDraftId`，与 `markTeamRead` 同属「一次信号一次性消费」的写法；
+- [ExpertWorkflowPanel.tsx](../apps/desktop/src/components/ops/ExpertWorkflowPanel.tsx)：两个消费 effect
+  （新草稿 / 直开草稿）处理完后立即 `consumeDraftSignals()`；离开再回来只剩「📝 交付草稿（N）· 继续填写」
+  提醒栏（对齐 BUGFIX #134「历史草稿不自动铺屏」的意图）。
+
+**验证**
+
+`apps/desktop/tests/expertWorkflow.test.tsx` 24 例全绿，新增 1 例「离开再回到业务办理（组件重挂）不再自动弹抽屉」
+（首次挂载抽屉自动展开 → unmount 后重挂 → 只剩提醒栏、无全屏页头）；「有模板的交付物」用例断言改为
+「直开标记消费后归空 + 侧边抽屉展开 + 无全屏」；`npx tsc --noEmit` 与改动文件 eslint 零告警。
+
+**教训**
+
+- **一次性信号必须有生命周期**：用「标记 + 组件本地去重」代替「消费即清标」，只要组件会重挂
+  （切页签 / 切界面 / 路由返回）就一定重复触发；本地 ref 只能防同一挂载内的重复，防不了重新挂载。
+
+---
+
+### #211 业务办理找不到「挂起」按钮 —— 台账未建档时按钮根本不渲染
+
+**现象**
+
+新建一个业务（还没上传材料）进入办理界面，页头只有「凭证预览 / 交付物柜 / 专家团预设 / ⋯」，
+没有「⏸ 挂起」，用户以为核功能没做。上传过材料的业务就能看到。
+
+**根因**
+
+- [ExpertWorkflowPanel.tsx](../apps/desktop/src/components/ops/ExpertWorkflowPanel.tsx) 里按钮包在 `{task && (...)}` 中；
+  而台账是「**业务发起即建档**」—— 首次上传材料才调 `startTask`（后端 `/ops/tasks/start`）；
+  新业务的 `task` 恒为 `null` → 按钮不渲染，功能“不存在”。
+- `startTask` 失败只在控制台 `console.warn`，用户完全无感，也分不清是「没建档」还是「没做功能」。
+
+**修复**
+
+- [ExpertWorkflowPanel.tsx](../apps/desktop/src/components/ops/ExpertWorkflowPanel.tsx)：挂起按钮**常显**；
+  未建档时 `disabled` + 置灰，悬浮提示「上传第一份材料后可用：业务发起即建档……」；
+  已建档后行为不变（挂起↔恢复，到顶后横幅 + 上传/提问双冻结）。
+- [opsCaseStore.ts](../apps/desktop/src/store/opsCaseStore.ts)：`startTask` 失败写入可见错误条
+  （「业务建档失败：…（挂起与业务汇总暂不可用）」），不再静默——否则挂起不可用时用户无从得知原因。
+
+**验证**
+
+`apps/desktop/tests/businessSummary.test.tsx` 新增 1 例「未建档也看得到挂起，但置灰并提示何时可用」；
+挂起冻结/恢复 2 例维持通过（`businessSummary.test.tsx` 7 例 + `expertWorkflow.test.tsx` 24 例 = 31 例全绿）；
+`npx tsc --noEmit` 与改动文件 eslint 零告警。后端台账实现已存在：`ops/tasks.py` +
+`/ops/tasks/start`、`/ops/tasks`、`/ops/tasks/{id}/status` 三端点 + `tests/test_ops_tasks.py` 12 例。
+
+**教训**
+
+- **主操作按钮不要被「数据还没建出来」这种前置条件藏掉**：应当可见但置灰，并告知触发条件；
+  藏起来的按钮不会让用户觉得「还没开始」，只会让用户觉得「没这个功能」。
+
+---
+
+### #212 靠「交付草稿 → 上传文件 OCR 自动填入」办的业务永远没有台账（挂起/汇总不可用）
+
+**现象**
+
+用户反馈「新开业务找不到挂起按钮」（附图：页头只有 凭证预览 / 交付物柜 / 专家团预设 / ⋯）。
+排查发现：该业务是通过交付草稿卡里的「⬆ 上传文件 OCR 自动填入」入件的，专家卡上一个材料也没传。
+
+**根因**
+
+建档（`startTask`）只在 `attachFiles` 里触发 —— 即专家卡的上传/拖拽/粘贴三条路径；
+但「草稿 OCR 自动填入」走的是 `ocrFillDraft` → 直接调后端 `opsCaseDraftOcrFill`，
+草稿里 `file` 字段随提交上传的那次 `attachFiles` 也没传 `taskMeta`（不会建档）。
+结果是：**用 OCR 填单/草稿文件办完整笔业务，`business_tasks` 里始终没有这一行**，
+挂起不可用、业务汇总查不到（叠加 #211 的按钮隐藏条件 → 看起来就是「功能不存在」）。
+
+**修复**
+
+- [opsCaseStore.ts](../apps/desktop/src/store/opsCaseStore.ts)：`ocrFillDraft(draftId, file, taskMeta?)`
+  新增可选业务上下文；首次 OCR 上传且当前无台账时先 `startTask`（后端按 `case_id` 幂等）；
+- [ExpertWorkflowPanel.tsx](../apps/desktop/src/components/ops/ExpertWorkflowPanel.tsx)：`DraftFormCard`
+  接收 `taskMeta` 并下传：草稿 OCR 上传与草稿内文件随提交上传（`attachFiles(..., taskMeta)`）都会补建档。
+
+**验证**
+
+`apps/desktop/tests/expertWorkflow.test.tsx` 新增 1 例「草稿 OCR 上传也算业务发起：自动补建档」
+（断言 `opsTaskStart` 被调且 store.task 就位）；`expertWorkflow` 25 例 + `businessSummary` 7 例 = 32 例全绿；
+`npx tsc --noEmit` 与改动文件 eslint 零告警。
+
+**教训**
+
+- **「发起即建档」必须把入口穷举**：同一件事（上传材料发起业务）有多条技术路径
+  （专家卡上传/拖拽/粘贴、草稿 OCR、草稿文件字段），只在一块里埋 hook 就一定会漏；
+  建档这类幂等副作用的正确位置是 store 层的“材料/凭证新增”入口，而不是各个 UI 入口。
+
+---
+
+### #213 办理区提问要找卡展开输入框、专家卡下沿参差 —— 输入框常驻到专家卡下面、卡片底部拉平
+
+**现象**
+
+运营模式办理界面：专家卡底部参差不齐（空卡短一截、有料卡长一截），卡片下方留大片空白；
+想向某位专家提问，要先找到那张卡里收起的「💬 向XX追问」展开才能打字，路径绕。
+用户直接点名方案：「直接把输入框显示在专家下面不就好了吗？然后把专家的下面拉平」。
+
+**问题原因**
+
+- 紧凑卡（无材料且无在途动作）在卡片行里 `alignSelf: "flex-start"`，只占内容高度 → 卡底参差；
+- 提问入口按 2026-11 交互优化收进每张卡（默认收起），但在「无需对话」的产品语境里提问本就是
+  次要动作，逐卡藏输入框既费找又费展开。
+
+**修复**
+
+- [ExpertWorkflowPanel.tsx](../apps/desktop/src/components/ops/ExpertWorkflowPanel.tsx)：
+  - 新增 `TeamAskBar` 共享提问行，常驻在专家卡正下方（主体区底部）：下拉选提问对象 +
+    输入框（回车 / 发送按钮）+ busy 态思考动效；切团 / 团成员变化时目标自动回落到第一位
+    （键用 `team.id::member.name`，跨团重名不串）；
+  - 删除每张卡内嵌的收起/展开提问框（ask-dock 两态动画整块下线，`globals.css` 同步清理），
+    问答记录仍落在对应专家卡的滚动区；提问中的卡片在常驻区显示「思考中」动效；
+  - 卡片行去掉 `alignSelf` 短一截的写法，全部专家卡等高铺满（底部拉平）。
+- 测试：`expertWorkflow.test.tsx` 提问用例改走共享提问行；两处「卡头渲染专家名」断言
+  改为限定在专家卡节点内（专家名现在同时出现在卡头与共享下拉里）。
+
+**验证**
+
+`pnpm vitest run tests/expertWorkflow.test.tsx tests/operationsWorkbench.test.tsx
+ tests/opsCaseStore.test.ts` 44 例全过；`pnpm test` 76 个测试文件 / 526 例全过；
+`npx tsc --noEmit` 零错误；改动文件 eslint 零告警。
+
+**教训**
+
+- **次要动作要降到「顺手就能做」的位置，而不是藏进各自的作用域**：6 张卡各藏一个收起输入框
+  看似降噪，实际把「提问」从一步变成「找卡 → 展开 → 打字」三步；一条共享输入行 + 目标下拉，
+  同时解决入口绕和卡底参差两个观感问题。
+- **加了新入口要排查同名文本的全局断言**：`getByText("专家名")` 这类断言在共享下拉出现后会
+  命中多元素，渲染断言应限定在目标节点内（卡片 id）而不是全局 first-match。
+
+---
+
+### #214 凭证预览没有层次感 —— 缺什么/必传/已齐同权重，一眼看不到重点
+
+**现象**
+
+用户反馈「凭证预览没有层次性，看不到重点」（附图）：顶部必传齐备度、缺口、未归属三个小徽章平铺在同一行；
+左栏所有凭证项都是同一个白底小卡，已齐/缺图/选传只看得到左边一个符号；右侧选中空态只居中两行小字，
+大片留白。用户要自己逐项扫列表才能知道「到底缺哪张」。
+
+**根因**
+
+信息本身都在，但**用同一个字号 / 同一个颜色 / 同一个容器**平铺 —— 没有视觉优先级：
+
+1. 头部把「进度」与「缺口」混成同级徽章，缺什么没有位置优势；
+2. 左栏分组（团/专家/凭证）只靠缩进区分，缺图项与已齐项无差别；
+3. 右栏抬头名称/必传/类型/要求挤在一行，空态无引导；要素区未采集与已采集同权重。
+
+**修复**（[CredentialPreviewModal.tsx](../apps/desktop/src/components/ops/CredentialPreviewModal.tsx)）
+
+- **头部两层**：第一行标题 + 操作；第二行「必传进度条 + 数字」+ 红色缺口 chip
+  （「缺 N 张：…」可点击 → 直接定位第一张缺失凭证，新增 `focusFirstMissing`）+ 未归属提示；
+- **左栏状态化**：团名加分隔线与「本团必传 n/m」徽章；专家行加「缺 N」徽章；
+  凭证卡改为「圆形状态点 + 名称 + 必传/选传」两行结构，缺图卡置白底 + 左侧红竖条 + 深色文字，
+  已齐卡降饱和灰化，选中卡蓝竖条 —— 一眼能分出「先看哪几张」；
+- **右栏聚焦**：抬头两行（名称 + 状态徽章 + 份数；介质 + 要求）；空态改为卡片式引导
+  （图标 + 主文案 + 去哪位专家上传 + 拖动提示）；要素区加「已采 x/y」计数，未采集改灰虚线降噪。
+
+**验证**
+
+`apps/desktop/tests/credentialPreview.test.tsx` 新增 1 例「点顶部缺 N 张直接定位到第一张缺失凭证」，
+12 例全绿；全量 vitest 76 文件 / 527 例全绿；`npx tsc --noEmit` 与改动文件 eslint 零告警。
+
+**教训**
+
+- **「看不到重点」通常不是信息不够，而是信息同级**：先把「最该做什么」（缺哪张）放到位置/色彩/尺寸三者中
+  至少两个维度上占优，再考虑加内容。
+- **状态不能只靠符号**：一个小 ✓/✗ 在 300px 宽的列表里几乎不可扫；底板色 + 左竖条 + 文字权重的组合
+  才能支持「扫视」而不是「逐行读」。
+
+---
+
+### #215 #213 理解偏差返工 —— 专家卡下方要的是「交付物页签区」而不是提问输入框
+
+**现象**
+
+#213 把用户说的「输入框」理解成了提问输入框，在专家卡下方加了共享提问行并拆掉了每张卡
+内嵌的追问入口。用户澄清：「我意思是交付物的页签直接放在专家下面，不是输入框」——
+即 2026-11 抽屉化后搬去右侧的交付草稿区（一份草稿一个页签）应回到专家卡正下方铺平。
+
+**返工内容**
+
+- [ExpertWorkflowPanel.tsx](../apps/desktop/src/components/ops/ExpertWorkflowPanel.tsx)：
+  - 撤销共享提问行 TeamAskBar，恢复每张卡内嵌的「💬 向XX追问」收起/展开提问框
+    （ask-dock 两态动画与 globals.css 规则同步恢复），提问交互回到原状；
+  - 交付草稿区从右侧抽屉（absolute 右侧 54% 宽）改为主体区内专家卡正下方的
+    「交付物页签区」：占 45% 高度铺平，页签 / 收起 / ⛶ 全屏行为不变，
+    收起时仍走「📝 交付草稿（N）· 继续填写」提醒栏；
+  - 专家卡等高铺平（alignSelf 移除）保留 —— 交付物区上沿与卡底平齐。
+- 测试：提问用例恢复「点追问 → 展开 → 输入」链路；直开草稿用例的断言不变
+  （页签区头部提示 / 页签切换 / 不自动全屏），仅用例名与注释改为「专家卡下方展开」。
+
+**验证**
+
+`expertWorkflow / operationsWorkbench / opsCaseStore` 44 例全过；`pnpm test`
+76 个测试文件 / 527 例全过；`npx tsc --noEmit` 与改动文件 eslint 零告警。
+
+**教训**
+
+- **用户的「输入框 / 页签」要对着界面实体核对，不能按字面词猜**：同一段话里的
+  「输入框」指的其实是草稿表单（一堆输入框），「页签」是草稿页签；返工一轮的代价
+  远高于动手前用一句话确认「你指的是右侧抽屉里那个草稿表单区吗」。
+- **界面区域搬家时保留原有可见文本（页签提示、收起按钮）**：断言锚点不变，测试只需改
+  用例名与注释，不用动逻辑。
+
+---
+
+### #216 上传文件 OCR 报「error decoding response body」—— 超时被 reqwest 伪装成解码错误，ops 的 POST 从未拿到 #207 的重试
+
+**现象**
+
+交付草稿里点「⬆ 上传文件 OCR 自动填入」，卡片内红字：
+`识别失败：ops command failed: error decoding response body`，表单一个字段也没填上。
+
+**排查**
+
+1. **后端其实是成功的**。安装目录 `logs/eaide.log:552` →
+   `17:16:20 POST /ops/case/drafts/DR-20261105104557-8183/ocr-fill 200 OK`；`audit.sqlite` 同刻有
+   `ops_case_draft_ocr_fill` 记录。直接重放该端点（合成含中文凭证图）：`200` /
+   `application/json` / `Content-Length 1041` / UTF-8 与 JSON 均合法 —— 响应体本身没问题。
+2. **错误串来自 reqwest，而不是 JSON 解析**。`reqwest-0.12.28/src/async_impl/response.rs`：
+   `bytes()` 末尾 `.map_err(crate::error::decode)` 把 **任何** body 流错误统一归到 `Kind::Decode`，
+   而 `TotalTimeoutBody` 在截止时间到期时抛的 `error::body(TimedOut)` 也要经过这一行
+   （`async_impl/body.rs`）。于是 `is_decode()` 为 true、`is_timeout()` 为 false ——
+   **「服务端卡到超时」与「连接被瞬断」在错误形态上完全一样**，光看文案分不出来。
+3. **自愈机制没覆盖 POST**。#207 当时只把 ops.rs 的 8 处幂等 GET 改走 `agent_http::send_json`，
+   POST 仍走 `json_or_err` 的裸 `resp.json()`：既不重试，又把已取到的 `status` 丢掉，
+   连 HTTP 码都无法透到前端。
+4. **附带查出第二个独立问题**（本次未修）：audit 该次记录 `engine=rapidocr, source=regex, filled=[]` ——
+   端侧 OCR 识别成功，失败的是第二步「把文字对应到表单字段」的模型抽取，异常被
+   `_ocr_fill_values` 的 `logger.warning` 吞掉。根上是环境：Ollama 未运行（11434 连接被积极拒绝）、
+   无 `llm-config.json`（`eaide.log:13` 已告警）、`router.db.llm_kv` 为空，唯一启用后端是公网 minimax。
+
+**修复**
+
+- [agent_http.rs](../apps/desktop/src-tauri/src/commands/agent_http.rs)：新增 `send_json_bounded(err_prefix,
+  max_attempts, total_budget, make)` —— 重试次数与**总预算**双约束，每次尝试的 reqwest 超时
+  设为「剩余预算」；错误文案带上 `(attempt n/m)`，至少留下快/慢失败的区分线索；
+- [ops.rs](../apps/desktop/src-tauri/src/commands/ops.rs)：`ops_case_draft_ocr_fill` 改走它，
+  `max_attempts = 5` / `total_budget = 300s`。**预算取 300s 与改动前的单次超时等值** —— 慢失败
+  不会比原来更久，只有毫秒级的连接瞬断能多拿 4 次机会；
+- [api.py](../services/agent/src/agent/ops/api.py) `_register_ocr_source_image` +
+  [cases.py](../services/agent/src/agent/ops/cases.py) `find_image_by_draft_file`：底图登记改为按
+  「同表单 + 同文件名」幂等（命中则就地覆盖文件 + update 行，不再 INSERT）。POST 一旦重试就
+  会重跑该端点，不幂等会把凭证预览面板刷成一堆重复影像。
+
+**验证**
+
+`cargo check --all-targets` 与 `cargo clippy --all-targets -- -D warnings` 零告警；
+`cargo test --lib commands::agent_http` 2 例全过（新增 1 例锁住「总预算封住累计等待时长」这一
+性质，防止被改回只限次数）；`pytest tests/test_ops_credentials.py tests/test_ops_case.py` 59 例全过
+（新增 1 例断言连发 3 次 ocr-fill 只留 1 行底图、无 `_1/_2` 文件副本）；`ruff check` 与
+`ruff format --check` 对改动代码零问题。
+
+**遗留（本次未改，已告知用户）**
+
+- 重试只消除红字，**不会让字段填上**：模型链路不可用时 `filled` 仍为空，而前端文案会说成
+  「没找到能对应到表单的字段」，误导排查方向。需要后端回传 `llm_error`、前端在
+  `source=regex && filled=[]` 时明说「识别模型不可用」；
+- `extract_chat` 在 ollama / private_llm 两侧均硬编码 300s，而 `_ocr_fill_values` 是三级**串行**
+  → 服务端最坏 900s，Rust 侧预算只有 300s，两边错配；且 `llm_backends.timeout_seconds=30`
+  在这条路上根本没被使用；
+- `_make_summarize_llm` 手搓 ollama→private→cloud 链，绕过 `router.route(task=...)`，不受
+  `_LOCAL_ONLY_TASKS` 任务分类治理 —— 证件号/余额这类敏感要素在本地不可用时会直接发到公网云端。
+
+**教训**
+
+- **reqwest 的「error decoding response body」不等于 JSON 格式错**：`bytes()` 把超时与截断全归到
+  `Kind::Decode`。看到这句先去对后端 access log：如果那边是 `200 OK`，那本端就是没读完 body，
+  该查重试/超时而不是该查序列化。
+- **重试上限要用「总预算」而不是「次数」**：两者对快失败等价，对慢失败差出 N 倍。一个模块内
+  自制的降级链（如 `_make_summarize_llm`）会把超时叠成串行乘法，外层预算必须覆盖最坏情况。
+- **给一类故障上自愈，要按「同类命令」穷举而不是按「报障的那几行」**：#207 修了 GET 就收工，
+  同一根因在 POST 上隔了一天又冒出来。
+
+
+
+

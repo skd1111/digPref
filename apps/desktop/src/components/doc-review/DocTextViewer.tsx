@@ -4,6 +4,7 @@ import {
   DOC_REVIEW_RISK_COLORS,
 } from "@/store/docReviewStore";
 import { splitBlockSegments } from "./highlight";
+import { scrollWithin } from "@/lib/scroll";
 import { useOfficePreviewStore } from "@/store/officePreviewStore";
 import { OFFICE_RENDERABLE_EXTS } from "@/components/office/officeAnchor";
 import {
@@ -14,10 +15,15 @@ import {
   SearchIcon,
 } from "@/components/ui/Icons";
 
+/**
+ * 只在面板自己的滚动容器内滚动定位（见 @/lib/scroll）。
+ * 用 scrollIntoView 会顺带滚动外层 overflow:hidden 裁剪容器，把顶部页签行
+ * （审批工作台 / 文档审核 / 知识库）卷出可视区。
+ */
 function scrollToFindingCard(findingId: string): void {
   const el = document.getElementById(`finding-card-${findingId}`);
   if (!el) return;
-  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  scrollWithin(el, "[data-findings-scroll]");
   // 强调闪烁：粗红边框 + 呼吸光环（CSS .finding-card-flash，约 2.1s）
   el.classList.remove("finding-card-flash");
   void (el as HTMLElement).offsetWidth; // 强制重排，保证连续点击时动画重播
@@ -56,7 +62,7 @@ export function computeLineNumber(
 export function jumpToBlock(blockId: string): void {
   const el = document.getElementById(`block-${blockId}`);
   if (!el) return;
-  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  scrollWithin(el, "[data-doc-scroll]");
   el.classList.remove("finding-mark-flash");
   void (el as HTMLElement).offsetWidth;
   el.classList.add("finding-mark-flash");
@@ -594,7 +600,9 @@ export function DocTextViewer(): JSX.Element {
           Office 版式预览（高亮全部 {findings.length} 处风险）
         </button>
       </div>
+      {/* 原文视图自己的滚动容器：定位跳转只滚这里，不惊动外层页签 */}
       <div
+        data-doc-scroll=""
         className="min-h-0 flex-1 overflow-auto p-4"
         style={{
           filter: analyzing && blurred ? "blur(6px)" : "none",

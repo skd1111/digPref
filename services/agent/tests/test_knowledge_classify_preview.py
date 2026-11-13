@@ -30,9 +30,14 @@ CATEGORIES = [
 
 @pytest.fixture
 def preview_env(monkeypatch, tmp_path):
-    """开启自动分类相关开关，注入 fake LLM 与字典分类。"""
+    """开启自动分类相关开关，注入 fake LLM 与字典分类。
+
+    本文件专注测 LLM 预判路径：关掉嵌入相似度分类（开发机存在真实 bge ONNX
+    模型时会优先命中嵌入路径，fake LLM 不再被调用）。
+    """
     monkeypatch.setattr(settings, "rag_llm_enhance_enabled", True)
     monkeypatch.setattr(settings, "rag_auto_classify_enabled", True)
+    monkeypatch.setattr(settings, "rag_embed_classify_enabled", False)
 
     import agent.knowledge.category as cat_mod
 

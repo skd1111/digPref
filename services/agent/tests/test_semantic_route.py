@@ -20,6 +20,7 @@ from agent.graph.semantic_route import (
     Route,
     SemanticIntentRouter,
     _cosine,
+    _routes_fingerprint,
 )
 
 # ---- 确定性伪 embedding 客户端 ----------------------------------------------
@@ -253,3 +254,67 @@ class TestSemanticRouteIntegration:
 
         out = await responder_node(st, _ExplodingLLM())
         assert "EAIDE 企业 AI 助理" in out["final_answer"]
+
+
+# ---- 消歧提示（tree_hint / disambiguation_hints）-----------------------------
+
+
+class TestDisambiguationHints:
+    async def test_returns_candidates_sorted_with_hint(self, monkeypatch):
+        monkeypatch.setattr(settings, "semantic_route_enabled", True)
+        fake = _FakeEmbedding()
+        hints = await _router(fake).disambiguation_hints("查询订单表的数据")
+        assert hints
+        names = [h["name"] for h in hints]
+        assert "db_query" in names
+        assert all(h["tree_hint"] for h in hints)  # 仅含带消歧说明的路由
+        scores = [h["score"] for h in hints]
+        assert scores == sorted(scores, reverse=True)  # 按分降序
+
+    async def test_disabled_returns_empty_no_embed(self, monkeypatch):
+        monkeypatch.setattr(settings, "semantic_route_enabled", False)
+        fake = _FakeEmbedding()
+        assert await _router(fake).disambiguation_hints("查询订单表") == []
+        assert fake.embed_calls == 0 and fake.batch_calls == 0
+
+    async def test_unhealthy_embedding_returns_empty(self, monkeypatch):
+        monkeypatch.setattr(settings, "semantic_route_enabled", True)
+        fake = _FakeEmbedding()
+        fake.healthy = False
+        assert await _router(fake).disambiguation_hints("查询订单表") == []
+
+    async def test_top_k_cap(self, monkeypatch):
+        monkeypatch.setattr(settings, "semantic_route_enabled", True)
+        fake = _FakeEmbedding()
+        hints = await _router(fake).disambiguation_hints("查询订单表的数据", top_k=1)
+        assert len(hints) <= 1
+
+    async def test_floor_filters_low_score(self, monkeypatch):
+        """受控向量：候选余弦≈0.707，floor=0.9 过滤、floor=0.5 纳入。"""
+        monkeypatch.setattr(settings, "semantic_route_enabled", True)
+
+        class _PartialEmb:
+            model = "fake-partial"
+
+            async def health_check(self):
+                return True
+
+            async def embed(self, text):
+                return [1.0, 1.0] if text == "半匹配请求" else [0.0, 1.0]
+
+            async def embed_batch(self, texts):
+                return [await self.embed(t) for t in texts]
+
+        routes = (Route(name="db_query", utterances=("查询订单表",), tree_hint="只读查询"),)
+        router = SemanticIntentRouter(routes, embedding=_PartialEmb())
+        monkeypatch.setattr(settings, "semantic_route_hint_floor", 0.9)
+        assert await router.disambiguation_hints("半匹配请求") == []
+        monkeypatch.setattr(settings, "semantic_route_hint_floor", 0.5)
+        hints = await router.disambiguation_hints("半匹配请求")
+        assert [h["name"] for h in hints] == ["db_query"]
+
+    async def test_tree_hint_not_in_fingerprint(self):
+        """tree_hint 不参与向量化：改文案不应失效向量缓存指纹。"""
+        r1 = Route(name="x", utterances=("查询订单表",), tree_hint="说明A")
+        r2 = Route(name="x", utterances=("查询订单表",), tree_hint="说明B")
+        assert _routes_fingerprint((r1,), "m") == _routes_fingerprint((r2,), "m")

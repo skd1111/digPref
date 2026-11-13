@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { ipc } from "@/ipc/invoke";
-import { previewLocalFile, useOfficePreviewStore } from "@/store/officePreviewStore";
+import { useOfficePreviewStore } from "@/store/officePreviewStore";
 import { OFFICE_RENDERABLE_EXTS } from "@/components/office/officeAnchor";
 import {
   useDocReviewStore,
@@ -9,8 +9,8 @@ import {
 } from "@/store/docReviewStore";
 import type { DocFinding } from "@eaide/shared-protocol";
 import { computeLineNumber, jumpToBlock } from "./DocTextViewer";
+import { KbRefLink } from "./KbRefLink";
 import {
-  BookIcon,
   BulbIcon,
   CloseIcon,
   FlagIcon,
@@ -18,15 +18,6 @@ import {
   MaximizeIcon,
   SearchIcon,
 } from "@/components/ui/Icons";
-
-/** 点击依据→预览命中的知识原文件（md/txt/html 内置预览，pdf/doc 等走系统默认程序）。 */
-async function openRefFile(path: string): Promise<void> {
-  try {
-    await previewLocalFile(path);
-  } catch (e) {
-    window.alert(`打开依据原文件失败：${path}\n${String(e)}`);
-  }
-}
 
 /** OfficeCLI 可渲染的格式（版式预览 + 风险定位高亮） */
 const OFFICE_RENDERABLE = OFFICE_RENDERABLE_EXTS;
@@ -45,28 +36,7 @@ function KbRefBlock({ finding }: { finding: DocFinding }): JSX.Element | null {
       {refs.map((ref, i) => (
         <div key={`${finding.finding_id}-kb-${i}`} className="mt-1.5">
           <p className="text-2xs font-semibold" style={{ color: "#1f1f1f" }}>
-            {ref.file_path ? (
-              <button
-                type="button"
-                className="cursor-pointer rounded underline decoration-dotted underline-offset-2 hover:text-[#0b6bcb]"
-                style={{ color: "#1f1f1f" }}
-                title="点击预览依据原文件"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  void openRefFile(ref.file_path);
-                }}
-              >
-                <span className="flex items-center gap-1">
-                  <BookIcon size={12} />
-                  {ref.source}
-                </span>
-              </button>
-            ) : (
-              <span className="flex items-center gap-1">
-                <BookIcon size={12} />
-                {ref.source}
-              </span>
-            )}
+            <KbRefLink source={ref.source} filePath={ref.file_path} />
             {" · "}
             {ref.heading}
           </p>
@@ -383,7 +353,9 @@ export function FindingsPanel(): JSX.Element {
           </button>
         </span>
       </div>
+      {/* 风险卡自己的滚动容器：定位跳转只滚这里，不惊动外层页签 */}
       <div
+        data-findings-scroll=""
         className="flex-1 overflow-auto p-2"
         onMouseLeave={() => setHint(null)}
       >

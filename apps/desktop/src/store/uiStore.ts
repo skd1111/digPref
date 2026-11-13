@@ -5,6 +5,7 @@
  */
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import { clampUiZoom, UI_ZOOM_DEFAULT, zoomInFrom, zoomOutFrom } from '@/lib/uiZoom';
 
 export type WorkMode = 'full' | 'operator' | 'auditor' | 'analyst';
 
@@ -32,7 +33,9 @@ export type ActivityId =
   | 'code-nav'
   | 'sessions'
   // 数据字典：独立顶级入口（公共参数维护，原运营工作台右侧 tab 迁出）
-  | 'data-dict';
+  | 'data-dict'
+  // 业务汇总：业务办理台账查询（业务汇总，2026-11-09）
+  | 'biz-summary';
 
 /**
  * Agent 启动闸门状态（2026-09-04）。
@@ -139,9 +142,19 @@ interface UIState {
   // 仅 'full' 模式 + explorer activity 生效。持久化保留用户选择。
   leftView: 'explorer' | 'plan';
 
+  // 审核模式的顶层页签（审批工作台 / 文档审核 / 知识库）。
+  // 提到 store 且持久化：设置页会走 `<Outlet />` 把 AuditDashboard 整体卸载，
+  // 页签若留在组件 useState 里，从知识库点「设置」再关闭就会被重置回「审批工作台」。
+  auditTab: 'approval' | 'doc' | 'kb';
+
   // 中央拆分比例（2026-08-28）：对话区与编辑器/预览区的宽度（水平拆分时为高度）
   // 占比，0.15–0.85，默认 0.5；分隔条可拖拽，持久化。
   chatPaneRatio: number;
+
+  // 界面缩放（2026-11-09）：1 = 100%，档位 100/110/125，默认 110。
+  // 走 WebView 原生 zoom（见 lib/uiZoom.ts）；组件里 px 硬编码太多，
+  // 逐处改字号不现实，整体等比放大最稳。持久化：下次启动直接生效。
+  uiZoom: number;
 
   // 操作
   toggleCommandPalette: (open?: boolean) => void;
@@ -176,7 +189,16 @@ interface UIState {
   setRightPanelWidth: (w: number) => void;
   setLeftPanelWidth: (w: number) => void;
   setLeftView: (v: UIState['leftView']) => void;
+  setAuditTab: (t: UIState['auditTab']) => void;
   setChatPaneRatio: (r: number) => void;
+  /** 直接设缩放（设置页三档按钮） */
+  setUiZoom: (zoom: number) => void;
+  /** 放大一档（View 菜单 Zoom In） */
+  zoomIn: () => void;
+  /** 缩小一档（View 菜单 Zoom Out） */
+  zoomOut: () => void;
+  /** 恢复默认档（View 菜单 Reset Zoom） */
+  resetZoom: () => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -208,7 +230,9 @@ export const useUIStore = create<UIState>()(
       rightPanelWidth: 320,
       leftPanelWidth: 260,
       leftView: 'explorer',
+      auditTab: 'approval',
       chatPaneRatio: 0.5,
+      uiZoom: UI_ZOOM_DEFAULT,
 
       toggleCommandPalette: (open) =>
         set((s) => ({ commandPaletteOpen: open ?? !s.commandPaletteOpen })),
@@ -252,8 +276,13 @@ export const useUIStore = create<UIState>()(
       setRightPanelWidth: (w) => set({ rightPanelWidth: Math.min(720, Math.max(240, w)) }),
       setLeftPanelWidth: (w) => set({ leftPanelWidth: Math.min(600, Math.max(200, w)) }),
       setLeftView: (v) => set({ leftView: v }),
+      setAuditTab: (t) => set({ auditTab: t }),
       setChatPaneRatio: (r) =>
         set({ chatPaneRatio: Math.min(0.85, Math.max(0.15, r)) }),
+      setUiZoom: (zoom) => set({ uiZoom: clampUiZoom(zoom) }),
+      zoomIn: () => set((s) => ({ uiZoom: zoomInFrom(s.uiZoom) })),
+      zoomOut: () => set((s) => ({ uiZoom: zoomOutFrom(s.uiZoom) })),
+      resetZoom: () => set({ uiZoom: UI_ZOOM_DEFAULT }),
     }),
     {
       name: 'eaide.ui',
@@ -272,7 +301,10 @@ export const useUIStore = create<UIState>()(
         rightPanelWidth: s.rightPanelWidth,
         leftPanelWidth: s.leftPanelWidth,
         leftView: s.leftView,
+        auditTab: s.auditTab,
         chatPaneRatio: s.chatPaneRatio,
+        // 界面缩放：用户选了 100/110/125 就沿用，不要每次启动回默认
+        uiZoom: s.uiZoom,
       }),
       onRehydrateStorage: () => (state) => {
         // 旧版 'audit' 占位模式 → 新版 'auditor'（Phase 5 改名）
@@ -284,10 +316,16 @@ export const useUIStore = create<UIState>()(
         const st = state as {
           leftPanelMode?: string;
           devPanelMode?: DevPanelMode;
+          auditTab?: string;
         } | null;
         if (st && !st.devPanelMode) {
           if (st.leftPanelMode === 'business') st.devPanelMode = 'features';
           else st.devPanelMode = 'assets';
+        }
+        // 审核页签仅接受三个合法值（旧版本 localStorage 无此字段时走初始值 'approval'）
+        const AUDIT_TABS = ['approval', 'doc', 'kb'];
+        if (state && !AUDIT_TABS.includes(state.auditTab)) {
+          state.auditTab = 'approval';
         }
       },
     },

@@ -194,6 +194,19 @@ describe('KbPanel', () => {
     expect(container.textContent).toContain('8 块');
   });
 
+  it('分类筛选：下拉选某分类→kbList 带 category，选「全部」不带', async () => {
+    const { container } = renderPanel();
+    await waitFor(() => expect(container.textContent).toContain('baoxiao.md'));
+    const filter = screen.getByTitle('按分类筛选文档');
+    expect((filter as HTMLSelectElement).value).toBe('__all__');
+    kbList.mockClear();
+    fireEvent.change(filter, { target: { value: 'legal' } });
+    await waitFor(() => expect(kbList).toHaveBeenCalledWith({ category: 'legal' }));
+    kbList.mockClear();
+    fireEvent.change(filter, { target: { value: '__all__' } });
+    await waitFor(() => expect(kbList).toHaveBeenCalledWith({}));
+  });
+
   it('上传：先出待导入清单，确认后才入库（未确认前不调用 kbUpload）', async () => {
     open.mockResolvedValue(['/tmp/a.md', '/tmp/b.pdf']);
     renderPanel();
@@ -240,8 +253,12 @@ describe('KbPanel', () => {
     await waitFor(() =>
       expect(kbClassifyPreview).toHaveBeenCalledWith(['/tmp/a.md', '/tmp/b.pdf']),
     );
-    // 分类已回填并标记为 AI 判定
-    await waitFor(() => expect(screen.getAllByText('AI 判定').length).toBe(2));
+    // 分类已回填到下拉框（不再显示「AI 判定」徽标）
+    await waitFor(() => {
+      const sel = screen.getAllByTitle('导入时打的分类标签（可在入库前手动调整）');
+      expect((sel[0] as HTMLSelectElement).value).toBe('finance');
+      expect((sel[1] as HTMLSelectElement).value).toBe('legal');
+    });
     fireEvent.click(screen.getByRole('button', { name: /确认导入/ }));
     await waitFor(() => expect(kbUpload).toHaveBeenCalledTimes(2));
     expect(kbUpload).toHaveBeenCalledWith('/tmp/a.md', 'finance', undefined);
@@ -256,7 +273,10 @@ describe('KbPanel', () => {
     open.mockResolvedValue(['/tmp/a.md']);
     renderPanel();
     fireEvent.click(await screen.findByText(/上传参考资料/));
-    await waitFor(() => expect(screen.getAllByText('AI 判定').length).toBe(1));
+    await waitFor(() => {
+      const sel = screen.getAllByTitle('导入时打的分类标签（可在入库前手动调整）');
+      expect((sel[0] as HTMLSelectElement).value).toBe('finance');
+    });
     const catSelects = screen.getAllByTitle('导入时打的分类标签（可在入库前手动调整）');
     fireEvent.change(catSelects[0], { target: { value: 'compliance' } });
     fireEvent.click(screen.getByRole('button', { name: /确认导入/ }));

@@ -355,6 +355,18 @@ pub fn run() {
             commands::ops::ops_case_draft_ocr_fill,
             commands::ops::ops_case_export,
             commands::ops::ops_case_crosscheck,
+            // 凭证预览（2026-11-09）：凭证节点 · 归类 · 影像识别
+            commands::ops::ops_case_credentials,
+            commands::ops::ops_case_classify_credentials,
+            commands::ops::ops_credential_asset_get,
+            commands::ops::ops_credential_asset_assign,
+            commands::ops::ops_credential_asset_recognize,
+            commands::ops::ops_credential_asset_delete,
+            // 业务办理台账（业务汇总，2026-11-09）
+            commands::ops::ops_task_list,
+            commands::ops::ops_task_get,
+            commands::ops::ops_task_status,
+            commands::ops::ops_task_start,
             commands::datadict::dict_list_items,
             commands::datadict::dict_search_items,
             commands::datadict::dict_list_categories,
