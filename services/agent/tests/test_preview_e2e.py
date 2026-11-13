@@ -45,9 +45,14 @@ def _node_major() -> int | None:
 
 
 _NODE_MAJOR = _node_major()
+# CI（GitHub Actions 等置 CI=true）整模块跳过：本模块是拉起真实 Vite/进程内静态服务
+# 子进程的端到端 smoke，依赖本机 Node/npm registry/端口环境；无头 CI 里多会话用例
+# 会挂起（test-py 卡 66% 根因）。按本模块 docstring“环境不满足整模块 skip、无网 CI
+# 不红”的设计意图，在 CI 环境跳过；本地开发仍可手动运行。
+_IN_CI = os.environ.get("CI", "").lower() in ("true", "1")
 pytestmark = pytest.mark.skipif(
-    _NODE_MAJOR is None or _NODE_MAJOR < 18,
-    reason="Phase 15 V1 e2e 需要本机 Node.js ≥ 18",
+    _NODE_MAJOR is None or _NODE_MAJOR < 18 or _IN_CI,
+    reason="Phase 15 V1 e2e 需要本机 Node.js ≥ 18；CI 环境跳过真实进程 e2e（防挂起，无网 CI 不红）",
 )
 
 VUE_MARKER = "Hello EAIDE"
