@@ -45,7 +45,7 @@ fn is_process_alive(pid: u32) -> bool {
     {
         match std::process::Command::new("kill")
             .arg("-0")
-            .arg(&pid.to_string())
+            .arg(pid.to_string())
             .output()
         {
             Ok(out) => out.status.success(),
