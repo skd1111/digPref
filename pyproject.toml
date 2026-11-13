@@ -57,7 +57,18 @@ shared-protocol = { workspace = true }
 line-length = 100
 target-version = "py310"
 # *.spec 是 PyInstaller DSL（Analysis/PYZ/EXE 为注入名），不纳入 lint
-extend-exclude = ["**/migrations/**", "**/.venv/**", "*.spec"]
+# 以下为非工程源码路径，不纳入 lint：vendored PyInstaller 构建产物（cv2 等第三方库副本）、
+# 个人/语料抓取脚本、测试假包、临时调试脚本
+extend-exclude = [
+    "**/migrations/**",
+    "**/.venv/**",
+    "*.spec",
+    "**/src-tauri/resources/**",
+    "**/.interview-prep/**",
+    "**/.law-download/**",
+    "**/fake_meipass/**",
+    "tmp_probe_*.py",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "ASYNC", "RUF"]

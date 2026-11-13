@@ -167,7 +167,9 @@ def test_backfill_credentials_adds_preset_without_touching_user_edits(tmp_path):
 
     assert "biz_process_team" in patched
     after = yaml.safe_load(target.read_text(encoding="utf-8"))
-    seeds = yaml.safe_load((resolve_seeds_dir() / "biz_process_team.yaml").read_text(encoding="utf-8"))
+    seeds = yaml.safe_load(
+        (resolve_seeds_dir() / "biz_process_team.yaml").read_text(encoding="utf-8")
+    )
     by_name = {m["name"]: m for m in seeds["members"]}
     for member in after["members"]:
         assert member.get("credentials", []) == by_name[member["name"]].get("credentials", [])

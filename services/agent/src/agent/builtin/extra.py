@@ -440,16 +440,34 @@ def builtin_text_split(
 
 # WMO Weather Interpretation Code → 中文描述
 _WMO_CN: dict[int, str] = {
-    0: "晴", 1: "大部晴", 2: "多云", 3: "阴",
-    45: "雾", 48: "雾凇",
-    51: "小毛毛雨", 53: "中毛毛雨", 55: "大毛毛雨",
-    56: "冻毛毛雨（小）", 57: "冻毛毛雨（大）",
-    61: "小雨", 63: "中雨", 65: "大雨",
-    66: "冻雨（小）", 67: "冻雨（大）",
-    71: "小雪", 73: "中雪", 75: "大雪", 77: "雪粒",
-    80: "小阵雨", 81: "中阵雨", 82: "大阵雨",
-    85: "小阵雪", 86: "大阵雪",
-    95: "雷暴", 96: "雷暴+小冰雹", 99: "雷暴+大冰雹",
+    0: "晴",
+    1: "大部晴",
+    2: "多云",
+    3: "阴",
+    45: "雾",
+    48: "雾凇",
+    51: "小毛毛雨",
+    53: "中毛毛雨",
+    55: "大毛毛雨",
+    56: "冻毛毛雨（小）",
+    57: "冻毛毛雨（大）",
+    61: "小雨",
+    63: "中雨",
+    65: "大雨",
+    66: "冻雨（小）",
+    67: "冻雨（大）",
+    71: "小雪",
+    73: "中雪",
+    75: "大雪",
+    77: "雪粒",
+    80: "小阵雨",
+    81: "中阵雨",
+    82: "大阵雨",
+    85: "小阵雪",
+    86: "大阵雪",
+    95: "雷暴",
+    96: "雷暴+小冰雹",
+    99: "雷暴+大冰雹",
 }
 
 
@@ -535,13 +553,13 @@ async def builtin_weather(
         for i, d in enumerate(dates):
             fc: dict[str, Any] = {
                 "date": d,
-                "max": f"{daily.get('temperature_2m_max', ['N/A']*len(dates))[i]}{unit_sym}",
-                "min": f"{daily.get('temperature_2m_min', ['N/A']*len(dates))[i]}{unit_sym}",
+                "max": f"{daily.get('temperature_2m_max', ['N/A'] * len(dates))[i]}{unit_sym}",
+                "min": f"{daily.get('temperature_2m_min', ['N/A'] * len(dates))[i]}{unit_sym}",
                 "weather": _WMO_CN.get(
-                    int(daily.get("weather_code", ["-1"]*len(dates))[i]), "未知"
+                    int(daily.get("weather_code", ["-1"] * len(dates))[i]), "未知"
                 ),
             }
-            precip = daily.get("precipitation_sum", [0]*len(dates))
+            precip = daily.get("precipitation_sum", [0] * len(dates))
             if i < len(precip) and precip[i]:
                 fc["precipitation_mm"] = precip[i]
             forecast.append(fc)

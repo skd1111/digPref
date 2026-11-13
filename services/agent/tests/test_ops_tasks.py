@@ -209,7 +209,9 @@ def test_suspend_and_resume(client):
     _upload(client)
     task = _task_of(client)
 
-    r = client.post(f"/ops/tasks/{task['id']}/status", json={"action": "suspend", "note": "等客户补件"})
+    r = client.post(
+        f"/ops/tasks/{task['id']}/status", json={"action": "suspend", "note": "等客户补件"}
+    )
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "suspended"
     assert r.json()["status_label"] == "挂起"
@@ -343,7 +345,9 @@ def test_list_tasks_multi_dimension_filters(client):
 
     # 按日期区间（发起时间在区间内 / 区间外）
     now = int(time.time())
-    rows = client.get("/ops/tasks", params={"date_from": now - 60, "date_to": now + 60}).json()["tasks"]
+    rows = client.get("/ops/tasks", params={"date_from": now - 60, "date_to": now + 60}).json()[
+        "tasks"
+    ]
     assert len(rows) == 3
     rows = client.get("/ops/tasks", params={"date_from": now + 3600}).json()["tasks"]
     assert rows == []

@@ -1250,6 +1250,7 @@ class LMRouter:
             # 知识库自动分类：mock 返回第一个可用分类 key（数据字典 → 兜底 finance）
             try:
                 from agent.knowledge.category import get_kb_categories
+
                 cats = get_kb_categories()
                 if cats:
                     return _async_text(cats[0]["key"])

@@ -428,7 +428,9 @@ class TaskStorage:
             )
         return self.get(task_id)
 
-    def set_closed(self, task_id: str, *, note: str = "", record_id: str = "") -> BusinessTask | None:
+    def set_closed(
+        self, task_id: str, *, note: str = "", record_id: str = ""
+    ) -> BusinessTask | None:
         ts = now()
         with self._connect() as conn:
             conn.execute(

@@ -14,7 +14,6 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from agent.datadict.storage import DictStorage
 
 
@@ -64,9 +63,7 @@ async def test_extract_entities_normal_path(dict_db):
 
     ing = KnowledgeIngestion(storage=MagicMock(), embedding=None)
     mock_llm = AsyncMock(
-        return_value=json.dumps(
-            {"person": ["张三"], "organization": ["中国人民银行"]}
-        )
+        return_value=json.dumps({"person": ["张三"], "organization": ["中国人民银行"]})
     )
     with patch("agent.paths.data_root") as mock_root:
         from pathlib import Path
@@ -91,9 +88,7 @@ async def test_extract_entities_invalid_type_dropped(dict_db):
 
     ing = KnowledgeIngestion(storage=MagicMock(), embedding=None)
     mock_llm = AsyncMock(
-        return_value=json.dumps(
-            {"person": ["李四"], "unknown_type": ["不应该出现"]}
-        )
+        return_value=json.dumps({"person": ["李四"], "unknown_type": ["不应该出现"]})
     )
     with patch("agent.paths.data_root") as mock_root:
         from pathlib import Path

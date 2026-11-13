@@ -101,7 +101,9 @@ def _b64(data: bytes | str) -> str:
     return base64.b64encode(raw).decode("ascii")
 
 
-def _upload(client: TestClient, name: str, member: str = MEMBER_A, text: str = "企业名称 某某公司") -> dict:
+def _upload(
+    client: TestClient, name: str, member: str = MEMBER_A, text: str = "企业名称 某某公司"
+) -> dict:
     r = client.post(
         "/ops/case/files",
         json={
@@ -155,7 +157,9 @@ def test_credentials_view_lists_all_preset_nodes(client):
 
 def test_keyword_classification_mounts_material_and_marks_satisfied(client):
     row = _upload(client, "营业执照_副本.jpg")
-    r = client.post("/ops/case/classify-credentials", json={"case_id": _CASE, "team_ids": [TEAM_ID]})
+    r = client.post(
+        "/ops/case/classify-credentials", json={"case_id": _CASE, "team_ids": [TEAM_ID]}
+    )
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["classify_stats"]["keyword"] == 1
@@ -190,12 +194,7 @@ def test_assets_from_unselected_team_stay_visible(client):
         for node in m["credentials"]
         for a in node["assets"]
     }
-    ids |= {
-        a["id"]
-        for team in view["teams"]
-        for m in team["members"]
-        for a in m["unassigned"]
-    }
+    ids |= {a["id"] for team in view["teams"] for m in team["members"] for a in m["unassigned"]}
     assert row["id"] in ids
 
 
@@ -420,7 +419,17 @@ def test_ocr_fill_without_preset_still_registers_unassigned(client, monkeypatch)
     monkeypatch.setattr(
         ocr_mod,
         "recognize_image_sync",
-        lambda _img: ("企业名称：某某公司", [{"text": "企业名称：某某公司", "bbox": [[0, 0], [9, 0], [9, 9], [0, 9]], "confidence": 0.8}], 0.8),
+        lambda _img: (
+            "企业名称：某某公司",
+            [
+                {
+                    "text": "企业名称：某某公司",
+                    "bbox": [[0, 0], [9, 0], [9, 9], [0, 9]],
+                    "confidence": 0.8,
+                }
+            ],
+            0.8,
+        ),
     )
 
     async def _llm(_messages):
@@ -457,7 +466,9 @@ def test_ocr_fill_failure_does_not_break_values(client, monkeypatch):
 
     monkeypatch.setattr(ops_api, "_make_summarize_llm", lambda: _llm)
     store = _case_storage()
-    monkeypatch.setattr(store, "save_named_upload", lambda *a, **k: (_ for _ in ()).throw(OSError("disk")))
+    monkeypatch.setattr(
+        store, "save_named_upload", lambda *a, **k: (_ for _ in ()).throw(OSError("disk"))
+    )
     draft = _make_draft(client)
     r = client.post(
         f"/ops/case/drafts/{draft['id']}/ocr-fill",
@@ -587,7 +598,6 @@ def test_ocr_image_meta_degrades_without_engine(tmp_path, monkeypatch):
 def test_ocr_image_meta_serializes_boxes(tmp_path, monkeypatch):
     """numpy 坐标必须能 json 落库（sqlite 存 JSON 文本）。"""
     import numpy as np
-
     from agent.image_processing import ocr as ocr_mod
 
     monkeypatch.setattr(
@@ -595,7 +605,13 @@ def test_ocr_image_meta_serializes_boxes(tmp_path, monkeypatch):
         "recognize_image_sync",
         lambda _p: (
             "某某公司",
-            [{"text": "某某公司", "bbox": np.array([[1, 2], [30, 2], [30, 9], [1, 9]], dtype="float32"), "confidence": np.float32(0.87)}],
+            [
+                {
+                    "text": "某某公司",
+                    "bbox": np.array([[1, 2], [30, 2], [30, 9], [1, 9]], dtype="float32"),
+                    "confidence": np.float32(0.87),
+                }
+            ],
             np.float32(0.87),
         ),
     )

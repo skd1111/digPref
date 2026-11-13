@@ -289,9 +289,7 @@ class KnowledgeIngestion:
             return guess, "heuristic"
         return "", ""
 
-    async def classify_text(
-        self, full_text: str, title: str, file_name: str
-    ) -> tuple[str, str]:
+    async def classify_text(self, full_text: str, title: str, file_name: str) -> tuple[str, str]:
         """对外的分类判定入口（导入前预判用；LLM 优先 + 启发式兜底）。
 
         返回 ``(category, source)``；无法判定 → ("", "")。
@@ -299,9 +297,7 @@ class KnowledgeIngestion:
         result, source = await self.classify_with_fallback(full_text, title, file_name, None)
         return result, source
 
-    async def _extract_entities(
-        self, parent_text: str, llm: Any | None
-    ) -> list[dict[str, str]]:
+    async def _extract_entities(self, parent_text: str, llm: Any | None) -> list[dict[str, str]]:
         """LLM 从父块文本中抽取实体（从数据字典读实体类型列表）。
 
         返回 ``[{"entity_name": "张三", "entity_type": "person"}, ...]``。
@@ -336,6 +332,7 @@ class KnowledgeIngestion:
             text = raw.strip()
             if "```" in text:
                 import re
+
                 m = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
                 if m:
                     text = m.group(1).strip()
@@ -351,9 +348,7 @@ class KnowledgeIngestion:
                 for name in names[:5]:
                     name_str = str(name).strip()
                     if name_str:
-                        result.append(
-                            {"entity_name": name_str, "entity_type": type_key}
-                        )
+                        result.append({"entity_name": name_str, "entity_type": type_key})
             return result
         except Exception as exc:
             logger.debug("extract_entities skipped: %s", exc)
@@ -483,9 +478,7 @@ class KnowledgeIngestion:
                     if ents:
                         p_seq = parent_map.get(p.ord, 0)
                         ent_count += self.storage.upsert_entities(doc_id, ents, p_seq)
-            self.storage.set_doc_status(
-                doc_id, "ready", chunk_count=len(children)
-            )
+            self.storage.set_doc_status(doc_id, "ready", chunk_count=len(children))
             # 新版本安全切换：索引就绪后才把该版本设为生效（就绪前旧版本仍可检索，无空窗）；
             # 全新单版本上传时为幂等（自身即唯一生效版本）。
             try:

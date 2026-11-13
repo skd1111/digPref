@@ -103,7 +103,11 @@ async def responder_node(state: AgentState, llm: LMRouter) -> dict:
             return {
                 "final_answer": answer,
                 "sources": sources,
-                "trace": [record_trace("responder", "ok", mode="chitchat_mid_session", elapsed_ms=_infer_ms)],
+                "trace": [
+                    record_trace(
+                        "responder", "ok", mode="chitchat_mid_session", elapsed_ms=_infer_ms
+                    )
+                ],
             }
         # Phase 12 V2：多智能体模式 —— 汇总各子 Agent 回报
         if sub_agent_reports:
@@ -306,7 +310,11 @@ async def _rewrite_to_chinese(state: AgentState, llm: LMRouter, draft: str) -> d
     return {
         "final_answer": _fix_existing_clarify_block(str(answer)),
         "sources": sources,
-        "trace": [record_trace("responder", "ok", mode="tool_loop", lang_rewrite=True, elapsed_ms=_infer_ms)],
+        "trace": [
+            record_trace(
+                "responder", "ok", mode="tool_loop", lang_rewrite=True, elapsed_ms=_infer_ms
+            )
+        ],
     }
 
 
@@ -436,7 +444,7 @@ _CHOICE_CUE_RE = re.compile(
 _MULTI_CUE_RE = re.compile(r"多选|多项选择|选择多个|可选多个")
 # BUGFIX #165（2026-09-11）：模型常把多个选项塞进同一个 text 字段（如「①…；②…；③…」），
 # 导致前端 ClarifyCard 只显示一个大卡片。此处正则用于检测并拆分。
-_CIRCLED_NUM_RE = re.compile(r'[①②③④⑤⑥⑦⑧⑨⑩]')
+_CIRCLED_NUM_RE = re.compile(r"[①②③④⑤⑥⑦⑧⑨⑩]")
 
 # ---- 多维参数确认式追问（2026-08-27 用户反馈漏卡）----------------------
 #
@@ -556,7 +564,7 @@ def _attach_clarify_from_text(answer: str) -> str:
 # 此处在出口做确定性修复：检测到单个 option.text 含 ≥2 个圈号数字 → 拆成多个独立 option。
 # 解析失败一律返回原文（宁可不动不可破坏结构）。
 
-_CLARIFY_FENCE_RE = re.compile(r'```clarify\s*([\s\S]*?)```')
+_CLARIFY_FENCE_RE = re.compile(r"```clarify\s*([\s\S]*?)```")
 
 
 def _split_circled_options_in_block(block_json: str) -> str | None:
@@ -577,7 +585,6 @@ def _split_circled_options_in_block(block_json: str) -> str | None:
         if not isinstance(item, dict) or not isinstance(item.get("options"), list):
             new_items.append(item)
             continue
-        question = item.get("question", "")
         opts: list[dict] = item["options"]
         new_opts: list[dict] = []
         for opt in opts:
@@ -595,11 +602,13 @@ def _split_circled_options_in_block(block_json: str) -> str | None:
                 if len(split_opts) >= 2:
                     changed = True
                     for si, so in enumerate(split_opts[:5]):  # 最多保留 5 个
-                        new_opts.append({
-                            "text": so,
-                            "reason": opt.get("reason", ""),
-                            "recommended": opt.get("recommended", False) and si == 0,
-                        })
+                        new_opts.append(
+                            {
+                                "text": so,
+                                "reason": opt.get("reason", ""),
+                                "recommended": opt.get("recommended", False) and si == 0,
+                            }
+                        )
                 else:
                     new_opts.append(opt)
             else:
@@ -670,7 +679,9 @@ async def _synthesise_tool_results(
     return {
         "final_answer": _fix_existing_clarify_block(_attach_clarify_from_text(answer)),
         "sources": sources,
-        "trace": [record_trace("responder", "ok", mode="tool_loop", tools=len(rows), elapsed_ms=_infer_ms)],
+        "trace": [
+            record_trace("responder", "ok", mode="tool_loop", tools=len(rows), elapsed_ms=_infer_ms)
+        ],
     }
 
 

@@ -944,9 +944,7 @@ class KnowledgeStorage:
         except sqlite3.Error:
             return False
 
-    def upsert_entities(
-        self, doc_id: str, entities: list[dict[str, Any]], parent_seq: int
-    ) -> int:
+    def upsert_entities(self, doc_id: str, entities: list[dict[str, Any]], parent_seq: int) -> int:
         """写入一个父块抽取到的实体列表；返回写入条数。
 
         每个 dict 需含 entity_name；可选 entity_type（缺省空串）。
@@ -1020,9 +1018,7 @@ class KnowledgeStorage:
                             + (f" AND {' AND '.join(clauses)}" if clauses else "")
                             + " LIMIT ?"
                         )
-                        rows = conn.execute(
-                            fts_sql, (match_q, *params, int(limit))
-                        ).fetchall()
+                        rows = conn.execute(fts_sql, (match_q, *params, int(limit))).fetchall()
                         if rows:
                             return [
                                 {
@@ -1040,9 +1036,7 @@ class KnowledgeStorage:
                 "SELECT entity_name, entity_type, doc_id, parent_seq FROM entities e"
                 f" WHERE e.entity_name LIKE ?{filter_sql} LIMIT ?"
             )
-            rows = conn.execute(
-                like_sql, (f"%{text}%", *params, int(limit))
-            ).fetchall()
+            rows = conn.execute(like_sql, (f"%{text}%", *params, int(limit))).fetchall()
             return [
                 {
                     "entity_name": str(r["entity_name"]),

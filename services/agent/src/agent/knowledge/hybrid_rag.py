@@ -256,9 +256,7 @@ class HybridRetriever:
                 ent_hits = self.storage.search_entities(query, limit=cand_n)
                 if ent_hits:
                     # 收集 (doc_id, parent_seq) → 批量查对应子块 seq
-                    parent_pairs = {
-                        (str(h["doc_id"]), int(h["parent_seq"])) for h in ent_hits
-                    }
+                    parent_pairs = {(str(h["doc_id"]), int(h["parent_seq"])) for h in ent_hits}
                     p2c = self._resolve_parent_to_children(parent_pairs)
                     ent_seqs: list[int] = []
                     for h in ent_hits:

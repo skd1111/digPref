@@ -3379,7 +3379,11 @@ async def case_classify_credentials(req: CaseClassifyRequest) -> dict:
         "ops_case_classify_credentials", {"case_id": req.case_id, **stats, "force": req.force}
     )
     # classify_stats 单独命名：不跟聚合视图里的 stats（齐备度）撞名
-    return {"ok": True, "classify_stats": stats, **_build_credential_view(store, req.case_id, req.team_ids)}
+    return {
+        "ok": True,
+        "classify_stats": stats,
+        **_build_credential_view(store, req.case_id, req.team_ids),
+    }
 
 
 @router.put("/case/credential-asset/{asset_id}")

@@ -112,9 +112,7 @@ async def _attach_kb_refs(
             # 无 risk_type / 未映射 / 开关关闭 → 不传 filter，调用与既有行为完全一致。
             extra: dict[str, Any] = {}
             if settings.doc_review_kb_category_filter_enabled:
-                cat = _resolve_risk_type_to_kb_category(
-                    str(item.get("risk_type", "") or "")
-                )
+                cat = _resolve_risk_type_to_kb_category(str(item.get("risk_type", "") or ""))
                 if cat:
                     extra["filter"] = {"category": [cat, ""]}
                     extra["filter_relax_below"] = 3

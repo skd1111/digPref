@@ -561,9 +561,7 @@ async def v1_classify_preview(body: V1ClassifyPreviewRequest) -> V1ClassifyPrevi
             attempts = 0
             while True:
                 try:
-                    category, source = await ingestion.classify_text(
-                        text, path.stem, path.name
-                    )
+                    category, source = await ingestion.classify_text(text, path.stem, path.name)
                     break
                 except Exception as exc:
                     # 限流：退避后重试（并发已下调，这里再加退避避免持续打限流）
@@ -778,9 +776,7 @@ async def v1_entity_search(body: V1EntitySearchRequest) -> V1EntitySearchRespons
                 doc_title=doc_cache[did],
             )
         )
-    return V1EntitySearchResponse(
-        query=body.query, results=results, total=len(results)
-    )
+    return V1EntitySearchResponse(query=body.query, results=results, total=len(results))
 
 
 @router.post("/v1/search", response_model=V1SearchResponse)
